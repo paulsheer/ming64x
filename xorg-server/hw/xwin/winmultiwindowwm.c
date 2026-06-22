@@ -587,6 +587,31 @@ IsOverrideRedirect(xcb_connection_t *conn, xcb_window_t iWin)
 }
 
 /*
+ * Helper function to check whether a window is InputOnly.
+ * InputOnly windows have no border, so configuring their border-width
+ * generates a BadMatch error.
+ */
+static Bool
+IsInputOnly(xcb_connection_t *conn, xcb_window_t iWin)
+{
+    Bool result = FALSE;
+    xcb_get_window_attributes_reply_t *reply;
+    xcb_get_window_attributes_cookie_t cookie;
+
+    cookie = xcb_get_window_attributes(conn, iWin);
+    reply = xcb_get_window_attributes_reply(conn, cookie, NULL);
+    if (reply) {
+        result = (reply->_class == XCB_WINDOW_CLASS_INPUT_ONLY);
+        free(reply);
+    }
+    else {
+        ErrorF("IsInputOnly: Failed to get window attributes\n");
+    }
+
+    return result;
+}
+
+/*
  * Helper function to get class and window names
 */
 static void
@@ -1398,7 +1423,8 @@ winMultiWindowXMsgProc(void *pArg)
                                           XCB_CW_EVENT_MASK, mask_value);
 
             /* If it's not override-redirect, set the border-width to 0 */
-            if (!IsOverrideRedirect(pProcArg->conn, notify->window)) {
+            if (!IsOverrideRedirect(pProcArg->conn, notify->window)
+                && !IsInputOnly(pProcArg->conn, notify->window)) {
                 const static uint32_t width_value[] = { 0 };
                 xcb_configure_window(pProcArg->conn, notify->window,
                                      XCB_CONFIG_WINDOW_BORDER_WIDTH, width_value);
