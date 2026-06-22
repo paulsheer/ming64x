@@ -1,6 +1,7 @@
 srcs_windows_clipboard = [
     'winclipboard.h',
     'textconv.c',
+    'imageconv.c',
     'thread.c',
     'wndproc.c',
     'xevents.c',
@@ -30,7 +31,8 @@ executable(
     srcs_xwinclip,
     dependencies: dependency('xcb'),
     link_with: xwin_clipboard,
-    link_args: ['-lgdi32', '-lpthread'],
+    # gdiplus + ole32: image clipboard conversion (CF_DIB -> png/jpeg via GDI+)
+    link_args: ['-lgdi32', '-lgdiplus', '-lole32', '-lpthread'],
     install: true,
 )
 

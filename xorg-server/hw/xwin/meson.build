@@ -44,7 +44,7 @@ srcs_windows += [
      'propertystore.h',
      'winSetAppUserModelID.c',
 ]
-xwin_sys_libs += ['-lshlwapi', '-lole32', '-ldwmapi']
+xwin_sys_libs += ['-lshlwapi', '-lole32', '-ldwmapi', '-lgdiplus']
 
 srcs_windows += [
      'winrandr.c',

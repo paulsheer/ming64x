@@ -27,3 +27,6 @@ cscope*
 *~
 .makefile.dep
 .vscode
+build-output/
+env_after.txt
+env_before.txt

@@ -191,6 +191,13 @@ winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
     atoms.atomCompoundText = intern_atom(conn, "COMPOUND_TEXT");
     atoms.atomTargets = intern_atom(conn, "TARGETS");
     atoms.atomIncr = intern_atom(conn, "INCR");
+    atoms.atomImagePng = intern_atom(conn, "image/png");
+    atoms.atomImageBmp = intern_atom(conn, "image/bmp");
+    atoms.atomImageJpeg = intern_atom(conn, "image/jpeg");
+
+    /* Start GDI+ so we can re-encode clipboard images to png/jpeg.  Non-fatal
+       on failure: text and image/bmp still work without it. */
+    winClipboardImageInit();
 
     xcb_screen_t *root_screen = xcb_aux_get_screen(conn, screen);
     xcb_window_t root_window_id = root_screen->root;
@@ -388,6 +395,9 @@ thread_errorexit:
     winDebug ("Clipboard thread died.\n");
 
 commonexit:
+    /* Stop GDI+ if it was started (safe no-op otherwise). */
+    winClipboardImageShutdown();
+
     g_iClipboardWindow = None;
     g_pClipboardDisplay = NULL;
     g_fClipboardLaunched = FALSE;
