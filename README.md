@@ -2,7 +2,7 @@
 
 Low latency X11 server for Windows that builds an .EXE use x86_64-linux-gnu-gcc 
 
-Base off https://github.com/marchaesen/vcxsrv/
+Based off https://github.com/marchaesen/vcxsrv/
 
 ```
 Usage...
