@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <string.h>
 #include <X11/Xos.h>
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
@@ -284,7 +285,9 @@ static int
 scanchar(void)
 {
     if (readBufPos >= readBufLen) {
+
         readBufLen = fread(readBuf, 1, BUFSIZE, yyin);
+
         readBufPos = 0;
         if (!readBufLen)
             return EOF;
@@ -663,6 +666,7 @@ yylex(void)
 {
     int ch;
     int rtrn;
+
 
     do
     {

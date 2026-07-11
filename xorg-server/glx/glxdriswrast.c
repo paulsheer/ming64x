@@ -32,7 +32,9 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/time.h>
+#if !defined(_MSC_VER) && !defined(__MINGW32__)
 #include <dlfcn.h>
+#endif
 
 #include <GL/gl.h>
 #include <GL/internal/dri_interface.h>
@@ -428,7 +430,7 @@ __glXDRIscreenDestroy(__GLXscreen * baseScreen)
 
     (*screen->core->destroyScreen) (screen->driScreen);
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
     FreeLibrary(screen->driver);
 #else
     dlclose(screen->driver);
@@ -510,7 +512,7 @@ __glXDRIscreenProbe(ScreenPtr pScreen)
 
  handle_error:
     if (screen->driver)
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
         FreeLibrary(screen->driver);
 #else
         dlclose(screen->driver);

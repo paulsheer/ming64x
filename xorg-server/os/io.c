@@ -64,7 +64,7 @@ SOFTWARE.
 #define XSERV_t
 #define TRANS_SERVER
 #define TRANS_REOPEN
-#include <X11/Xtrans/Xtrans.h>
+#include <X11/xtrans/Xtrans.h>
 #include <X11/Xmd.h>
 #include <errno.h>
 #if !defined(WIN32)
@@ -122,7 +122,7 @@ static OsCommPtr AvailableInput = (OsCommPtr) NULL;
 				  ((xBigReq *)(req))->length)
 
 #define BUFSIZE 16384
-#define BUFWATERMARK 32768
+#define BUFWATERMARK 131072
 
 /*
  *   A lot of the code in this file manipulates a ConnectionInputPtr:

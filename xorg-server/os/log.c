@@ -89,6 +89,10 @@ OR PERFORMANCE OF THIS SOFTWARE.
 #include <X11/Xos.h>
 
 #include "dix/dix_priv.h"
+
+#ifdef WIN32
+extern int getpid(void);
+#endif
 #include "dix/input_priv.h"
 #include "os/audit.h"
 #include "os/bug_priv.h"

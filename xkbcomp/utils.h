@@ -135,6 +135,8 @@ uInformation(const char * /* s */ , ...
 
      extern void uFinishUp(void);
 
+     extern int basic_strcasecmp(const char *s1, const char *s2);
+     extern int basic_strncasecmp(const char *s1, const char *s2, size_t n);
 
 /***====================================================================***/
 
@@ -156,8 +158,8 @@ uInformation(const char * /* s */ , ...
 #define	uStringCompare(s1,s2)	(((s1)==NullString||(s2)==NullString)?\
                                  (s1)!=(s2):strcmp(s1,s2))
 #define	uStrCaseEqual(s1,s2)	(uStrCaseCmp(s1,s2)==0)
-#define	uStrCaseCmp(s1,s2)	(strcasecmp(s1,s2))
-#define	uStrCasePrefix(p,s)	(strncasecmp(p,s,strlen(p))==0)
+#define	uStrCaseCmp(s1,s2)	(basic_strcasecmp(s1,s2))
+#define	uStrCasePrefix(p,s)	(basic_strncasecmp(p,s,strlen(p))==0)
 #define	uStringDup(s1)		((s1) ? strdup(s1) : NULL)
 
 /***====================================================================***/

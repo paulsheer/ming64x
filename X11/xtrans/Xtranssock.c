@@ -2557,13 +2557,53 @@ TRANS(SocketRead) (XtransConnInfo ciptr, char *buf, int size)
     prmsg (2,"SocketRead(%d,%p,%d)\n", ciptr->fd, (void *) buf, size);
 
 #if defined(WIN32)
-    {
-	int ret = recv ((SOCKET)ciptr->fd, buf, size, 0);
-#ifdef WIN32
-	if (ret == SOCKET_ERROR) errno = WSAGetLastError();
-#endif
-	return ret;
+    /* Lazy-allocate read-ahead buffer sized to the OS socket receive buffer */
+    if (!ciptr->buf.data) {
+        int optval;
+        int optlen = sizeof(optval);
+        if (getsockopt((SOCKET)ciptr->fd, SOL_SOCKET, SO_RCVBUF,
+                       (char *)&optval, &optlen) != 0 || optval <= 0)
+            optval = 8192;
+        ciptr->buf.alloced = optval;
+        ciptr->buf.data = malloc(optval);
+        if (!ciptr->buf.data) {
+            ciptr->buf.alloced = 0;
+            errno = ENOMEM;
+            return -1;
+        }
+        ciptr->buf.written = 0;
+        ciptr->buf.avail = 0;
     }
+
+    /* Look ahead in windows to work around select() not waking up after partially read data: */
+    if (ciptr->buf.avail < ciptr->buf.alloced) {
+        int ret;
+        ret = recv((SOCKET)ciptr->fd, (void *) (ciptr->buf.data + ciptr->buf.avail), ciptr->buf.alloced - ciptr->buf.avail, 0);
+        if (ret == SOCKET_ERROR) {
+            int last_error;
+            last_error = WSAGetLastError();
+            if (last_error == WSAEWOULDBLOCK && ciptr->buf.avail > ciptr->buf.written)
+                goto here;
+            errno = last_error;
+            return ret;
+        }
+        if (ret <= 0)
+            return ret;
+
+        ciptr->buf.avail += ret;
+    }
+
+  here:
+    assert (ciptr->buf.avail > ciptr->buf.written);
+
+    int n = ciptr->buf.avail - ciptr->buf.written;
+    if (n > size)
+        n = size;
+    memcpy(buf, ciptr->buf.data + ciptr->buf.written, n);
+    ciptr->buf.written += n;
+    if (ciptr->buf.avail == ciptr->buf.written)
+        ciptr->buf.avail = ciptr->buf.written = 0;
+    return n;
 #else
 #if XTRANS_SEND_FDS
     {
@@ -2639,6 +2679,38 @@ TRANS(SocketReadv) (XtransConnInfo ciptr, struct iovec *buf, int size)
         }
         return size;
     }
+#elif defined(WIN32)
+    {
+#define IN_PLACE_WSABUFS        5
+        DWORD nbytes, flags = 0;
+        WSABUF stackbufs[IN_PLACE_WSABUFS];
+        WSABUF *wsabuf = stackbufs;
+        int i, ret;
+
+        if (size > IN_PLACE_WSABUFS) {
+            wsabuf = malloc(size * sizeof(WSABUF));
+            if (!wsabuf) {
+                errno = ENOMEM;
+                return -1;
+            }
+        }
+
+        for (i = 0; i < size; i++) {
+            wsabuf[i].len = (u_long) buf[i].iov_len;
+            wsabuf[i].buf = buf[i].iov_base;
+        }
+
+        ret = WSARecv(ciptr->fd, wsabuf, size, &nbytes, &flags, NULL, NULL);
+
+        if (size > IN_PLACE_WSABUFS)
+            free(wsabuf);
+
+        if (ret == 0)
+            return nbytes;
+
+        errno = WSAGetLastError();
+        return -1;
+    }
 #else
     return READV (ciptr, buf, size);
 #endif
@@ -2686,7 +2758,40 @@ TRANS(SocketWritev) (XtransConnInfo ciptr, struct iovec *buf, int size)
         return i;
     }
 #endif
+#if defined(WIN32)
+    {
+        DWORD nbytes;
+        WSABUF stackbufs[IN_PLACE_WSABUFS];
+        WSABUF *wsabuf = stackbufs;
+        int i, ret;
+
+        if (size > IN_PLACE_WSABUFS) {
+            wsabuf = malloc(size * sizeof(WSABUF));
+            if (!wsabuf) {
+                errno = ENOMEM;
+                return -1;
+            }
+        }
+
+        for (i = 0; i < size; i++) {
+            wsabuf[i].len = (u_long) buf[i].iov_len;
+            wsabuf[i].buf = buf[i].iov_base;
+        }
+
+        ret = WSASend(ciptr->fd, wsabuf, size, &nbytes, 0, NULL, NULL);
+
+        if (size > IN_PLACE_WSABUFS)
+            free(wsabuf);
+
+        if (ret == 0)
+            return nbytes;
+
+        errno = WSAGetLastError();
+        return -1;
+    }
+#else
     return WRITEV (ciptr, buf, size);
+#endif
 }
 
 
@@ -2746,7 +2851,11 @@ TRANS(SocketINETClose) (XtransConnInfo ciptr)
 
 #ifdef WIN32
     {
-	int ret = close (ciptr->fd);
+	int ret;
+	free(ciptr->buf.data);
+	ciptr->buf.data = NULL;
+	ciptr->buf.alloced = 0;
+	ret = close (ciptr->fd);
 	if (ret == SOCKET_ERROR) errno = WSAGetLastError();
 	return ret;
     }

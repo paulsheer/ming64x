@@ -37,6 +37,7 @@
 #endif
 
 #include "win.h"
+#include "composite/compint.h"
 #include "dixevents.h"
 #include "winmultiwindowclass.h"
 #include "winmultiwindowicons.h"

@@ -239,7 +239,9 @@ InterpCreate(const char *sym_str, ExprDef * match)
 {
     InterpDef *def;
 
+
     def = malloc(sizeof(InterpDef));
+
     if (def)
     {
         *def = (InterpDef) {
@@ -247,6 +249,7 @@ InterpCreate(const char *sym_str, ExprDef * match)
             .common.next = NULL,
             .match = match
         };
+
         if (LookupKeysym(sym_str, &def->sym) == 0)
         {
             def->ignore = True;

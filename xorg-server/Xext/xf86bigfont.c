@@ -278,7 +278,7 @@ ProcXF86BigfontQueryVersion(ClientPtr client)
 #ifdef WIN32
         .uid = 0,
         .gid = 0,
-#else,
+#else
         .uid = geteuid(),
         .gid = getegid(),
 #endif

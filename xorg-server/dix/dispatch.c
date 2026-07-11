@@ -250,8 +250,8 @@ UpdateCurrentTimeIf(void)
 #undef SMART_DEBUG
 
 /* in milliseconds */
-#define SMART_SCHEDULE_DEFAULT_INTERVAL	5
-#define SMART_SCHEDULE_MAX_SLICE	15
+#define SMART_SCHEDULE_DEFAULT_INTERVAL	2
+#define SMART_SCHEDULE_MAX_SLICE	10
 
 #ifdef HAVE_SETITIMER
 Bool SmartScheduleSignalEnable = TRUE;

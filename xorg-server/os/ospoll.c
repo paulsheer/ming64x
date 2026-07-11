@@ -27,11 +27,29 @@
 #include <X11/X.h>
 #include <X11/Xproto.h>
 
+#ifdef WIN32
+#define WIN32POLL       1
+#define HAVE_OSPOLL     1
+#endif
+
 #include "os/xserver_poll.h"
+
+#ifdef WIN32POLL
+#include <stdio.h>
+#include <X11/Xwinsock.h>
+#include <X11/xtrans/Xtrans.h>
+#include <X11/xtrans/Xtransint.h>
+#include "dixstruct_priv.h"
+#include "os/osdep.h"
+#endif
 
 #include "misc.h"               /* for typedef of pointer */
 #include "ospoll.h"
 #include "list.h"
+
+#ifdef WIN32POLL
+extern void ClientReady(int fd, int xevents, void *data);
+#endif
 
 #if !HAVE_OSPOLL && defined(HAVE_POLLSET_CREATE)
 #include <sys/pollset.h>
@@ -121,6 +139,31 @@ struct ospoll {
 
 #endif
 
+#if WIN32POLL
+#ifdef POLL
+#error only WIN32POLL or POLL may be defined
+#endif
+
+/* poll-based implementation using MsgWaitForMultipleObjects */
+struct ospollfd {
+    short               revents;
+    short               look_ahead_events;
+    enum ospoll_trigger trigger;
+    void                (*callback)(int fd, int revents, void *data);
+    void                *data;
+    WSAEVENT            event;
+};
+
+struct ospoll {
+    struct pollfd       *fds;
+    struct ospollfd     *osfds;
+    int                 num;
+    int                 size;
+    int                 iterator;
+};
+
+#endif
+
 /* Binary search for the specified file descriptor
  *
  * Returns position if found
@@ -138,7 +181,7 @@ ospoll_find(struct ospoll *ospoll, int fd)
 #if EPOLL || PORT
         int t = ospoll->fds[m]->fd;
 #endif
-#if POLL || POLLSET
+#if POLL || POLLSET || WIN32POLL
         int t = ospoll->fds[m].fd;
 #endif
 
@@ -234,7 +277,7 @@ ospoll_create(void)
     xorg_list_init(&ospoll->deleted);
     return ospoll;
 #endif
-#if POLL
+#if POLL || WIN32POLL
     return calloc(1, sizeof (struct ospoll));
 #endif
 }
@@ -259,7 +302,7 @@ ospoll_destroy(struct ospoll *ospoll)
         free(ospoll);
     }
 #endif
-#if POLL
+#if POLL || WIN32POLL
     if (ospoll) {
         assert (ospoll->num == 0);
         free (ospoll->fds);
@@ -381,7 +424,7 @@ ospoll_add(struct ospoll *ospoll, int fd,
     osfd->callback = callback;
     osfd->trigger = trigger;
 #endif
-#if POLL
+#if POLL || WIN32POLL
     if (pos < 0) {
         if (ospoll->num == ospoll->size) {
             struct pollfd   *new_fds;
@@ -402,12 +445,20 @@ ospoll_add(struct ospoll *ospoll, int fd,
         array_insert(ospoll->fds, ospoll->num, sizeof (ospoll->fds[0]), pos);
         array_insert(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
         ospoll->num++;
+#ifdef WIN32POLL
+        if (pos <= ospoll->iterator)
+            ospoll->iterator++;
+#else
         ospoll->changed = TRUE;
+#endif
 
         ospoll->fds[pos].fd = fd;
         ospoll->fds[pos].events = 0;
         ospoll->fds[pos].revents = 0;
         ospoll->osfds[pos].revents = 0;
+        ospoll->osfds[pos].event = WSACreateEvent();
+        WSAEventSelect(fd, ospoll->osfds[pos].event,
+                       FD_READ | FD_ACCEPT | FD_CLOSE | FD_WRITE | FD_CONNECT);
     }
     ospoll->osfds[pos].trigger = trigger;
     ospoll->osfds[pos].callback = callback;
@@ -454,11 +505,18 @@ ospoll_remove(struct ospoll *ospoll, int fd)
         osfd->data = NULL;
         xorg_list_add(&osfd->deleted, &ospoll->deleted);
 #endif
-#if POLL
+#if POLL || WIN32POLL
+        WSAEventSelect(ospoll->fds[pos].fd, NULL, 0);
+        WSACloseEvent(ospoll->osfds[pos].event);
         array_delete(ospoll->fds, ospoll->num, sizeof (ospoll->fds[0]), pos);
         array_delete(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
         ospoll->num--;
+#ifdef WIN32POLL
+        if (pos <= ospoll->iterator)
+            ospoll->iterator--;
+#else
         ospoll->changed = TRUE;
+#endif
 #endif
     }
 }
@@ -517,7 +575,7 @@ ospoll_listen(struct ospoll *ospoll, int fd, int xevents)
         osfd->xevents |= xevents;
         epoll_mod(ospoll, osfd);
 #endif
-#if POLL
+#if POLL || WIN32POLL
         if (xevents & X_NOTIFY_READ) {
             ospoll->fds[pos].events |= POLLIN;
             ospoll->osfds[pos].revents &= ~POLLIN;
@@ -557,7 +615,7 @@ ospoll_mute(struct ospoll *ospoll, int fd, int xevents)
         osfd->xevents &= ~xevents;
         epoll_mod(ospoll, osfd);
 #endif
-#if POLL
+#if POLL || WIN32POLL
         if (xevents & X_NOTIFY_READ)
             ospoll->fds[pos].events &= ~POLLIN;
         if (xevents & X_NOTIFY_WRITE)
@@ -659,6 +717,107 @@ ospoll_wait(struct ospoll *ospoll, int timeout)
     }
     ospoll_clean_deleted(ospoll);
 #endif
+#if WIN32POLL
+    int nready_look_ahead_events = 0;
+    int     waiting_fds = 0;
+    int     f;
+    WSAEVENT handles[1024];
+    int     handle_count = 0;
+
+    for (f = 0; f < ospoll->num; f++) {
+        ospoll->osfds[f].look_ahead_events = 0;
+        if (ospoll->fds[f].fd == INVALID_SOCKET)
+            continue;
+        if (ospoll->osfds[f].callback == ClientReady) {
+            ClientPtr c = ospoll->osfds[f].data;
+            OsCommPtr oc = (OsCommPtr) c->osPrivate;
+            XtransConnInfo ciptr = oc->trans_conn;
+            assert(ciptr->fd == ospoll->fds[f].fd);
+            if ((ospoll->fds[f].events & POLLIN)) {
+                if (ciptr->buf.avail > ciptr->buf.written) {
+                    ospoll->osfds[f].look_ahead_events |= POLLIN;
+                    timeout = 0;
+                    nready_look_ahead_events++;
+                }
+            }
+        }
+        if (!(ospoll->fds[f].events & (POLLIN | POLLOUT | POLLPRI)))
+            continue;
+        assert(handle_count < 1024);
+        handles[handle_count++] = ospoll->osfds[f].event;
+        waiting_fds++;
+    }
+
+    DWORD wait_result = WAIT_FAILED;
+    nready = 0;
+    if (!waiting_fds && timeout > 0) {
+        MsgWaitForMultipleObjects(0, NULL, FALSE, timeout, QS_ALLINPUT);
+    } else if (!waiting_fds) {
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 0, QS_ALLINPUT);
+    } else {
+        DWORD ms_timeout = (timeout < 0) ? INFINITE : (DWORD)timeout;
+        wait_result = MsgWaitForMultipleObjects(handle_count, handles, FALSE,
+                                                ms_timeout, QS_ALLINPUT);
+        if (wait_result == WAIT_FAILED)
+            nready = -1;
+    }
+
+    /* Discover ready fds via WSAEnumNetworkEvents */
+    if (wait_result != WAIT_FAILED) {
+        nready = 0;
+        for (f = 0; f < ospoll->num; f++) {
+            ospoll->fds[f].revents = 0;
+            if (ospoll->fds[f].fd == INVALID_SOCKET)
+                continue;
+            if (!(ospoll->fds[f].events & (POLLIN | POLLOUT | POLLPRI)))
+                continue;
+
+            WSANETWORKEVENTS net_events;
+            if (WSAEnumNetworkEvents(ospoll->fds[f].fd,
+                                        ospoll->osfds[f].event,
+                                        &net_events) == 0) {
+                short ev = ospoll->fds[f].events;
+                if ((ev & POLLPRI) && (net_events.lNetworkEvents & FD_CLOSE))
+                    ospoll->fds[f].revents |= POLLPRI;
+                else if ((ev & POLLIN) && (net_events.lNetworkEvents & (FD_READ | FD_ACCEPT | FD_CLOSE)))
+                    ospoll->fds[f].revents |= POLLIN;
+                if ((ev & POLLOUT) && (net_events.lNetworkEvents & (FD_WRITE | FD_CONNECT)))
+                    ospoll->fds[f].revents |= POLLOUT;
+                if (ospoll->fds[f].revents)
+                    nready++;
+            }
+        }
+    } else if (nready_look_ahead_events) {
+        for (f = 0; f < ospoll->num; f++)
+            ospoll->fds[f].revents = 0;
+    }
+    if (nready > 0 || nready_look_ahead_events) {
+        for (ospoll->iterator = 0; ospoll->iterator < ospoll->num; ospoll->iterator++) {
+            int f;
+            f = ospoll->iterator;
+            short look_ahead_events = ospoll->osfds[f].look_ahead_events;
+            short revents = ospoll->fds[f].revents;
+            short oldevents = ospoll->osfds[f].revents;
+
+            ospoll->osfds[f].revents = (revents & (POLLIN|POLLOUT));
+            if (ospoll->osfds[f].trigger == ospoll_trigger_edge)
+                revents &= ~oldevents;
+            revents |= look_ahead_events;
+            if (revents) {
+                int    xevents = 0;
+                if (revents & POLLIN)
+                    xevents |= X_NOTIFY_READ;
+                if (revents & POLLOUT)
+                    xevents |= X_NOTIFY_WRITE;
+                if (revents & (~(POLLIN|POLLOUT)))
+                    xevents |= X_NOTIFY_ERROR;
+                ospoll->osfds[f].callback(ospoll->fds[f].fd, xevents,
+                                          ospoll->osfds[f].data);
+                f = -1;  /* guard: invalidate after callback */
+            }
+        }
+    }
+#endif
 #if POLL
     nready = xserver_poll(ospoll->fds, ospoll->num, timeout);
     ospoll->changed = FALSE;
@@ -691,7 +850,13 @@ ospoll_wait(struct ospoll *ospoll, int timeout)
         }
     }
 #endif
+#if WIN32POLL
+    if (nready < 0)
+        return nready;
+    return nready + nready_look_ahead_events;
+#else
     return nready;
+#endif
 }
 
 void
@@ -713,7 +878,7 @@ ospoll_reset_events(struct ospoll *ospoll, int fd)
 
     epoll_mod(ospoll, ospoll->fds[pos]);
 #endif
-#if POLL
+#if POLL || WIN32POLL
     int pos = ospoll_find(ospoll, fd);
 
     if (pos < 0)
@@ -736,7 +901,7 @@ ospoll_data(struct ospoll *ospoll, int fd)
 #if EPOLL || PORT
     return ospoll->fds[pos]->data;
 #endif
-#if POLL
+#if POLL || WIN32POLL
     return ospoll->osfds[pos].data;
 #endif
 }

@@ -35,10 +35,12 @@
  * Silicon Graphics, Inc.
  */
 
+#ifndef SERVEXTERN
 #ifdef INSERVER
-#define SERVEXTERN _declspec(dllimport)
+#define SERVEXTERN __declspec(dllimport)
 #else
-#define SERVEXTERN _declspec(dllexport)
+#define SERVEXTERN __declspec(dllexport)
+#endif
 #endif
 
 /* doing #include <GL/glx.h> & #include <GL/glxext.h> could cause problems

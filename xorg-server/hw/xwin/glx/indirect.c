@@ -633,7 +633,7 @@ glxWinScreenProbe(ScreenPtr pScreen)
     hglrc = wglCreateContext(hdc);
     if (!wglMakeCurrent(hdc, hglrc)) {
         DWORD ErrorCode=GetLastError();
-        ErrorF("wglMakeCurrent error: %x dc %p ctx %p\n", ErrorCode,hdc,hglrc);
+        ErrorF("wglMakeCurrent error: %x dc %p ctx %p\n", (unsigned)ErrorCode,hdc,hglrc);
     }
 
     // initialize wgl extension proc pointers (don't call them before here...)
@@ -1299,7 +1299,7 @@ glxWinSetPixelFormat(__GLXWinContext * gc, HDC hdc, int bppOverride,
         winWindowPriv(pWin);
         if (pWinPriv->OpenGlWindow)
         {
-            ErrorF("Not Setting pixel format to  %d on hdc %x for window %x (not allowed on windows)\n",winConfig->pixelFormatIndex,hdc,pWinPriv->hWnd);
+            ErrorF("Not Setting pixel format to  %d on hdc %llx for window %llx (not allowed on windows)\n",winConfig->pixelFormatIndex,(unsigned long long)hdc,(unsigned long long)pWinPriv->hWnd);
             return TRUE; /* Pixel format is already set on this window so it cannot be changed anymore */
         }
     }
@@ -1432,7 +1432,7 @@ glxWinMakeDC(__GLXWinContext *gc, __GLXWinDrawable *draw, HWND *hwnd)
             hdc = GetDC(*hwnd);
 
             if (hdc == NULL)
-                ErrorF("GetDC error: %s: hwnd %x, gc %p, gc->ctx %p ,gc->hwnd %p\n", glxWinErrorMessage(), *hwnd, gc, gc->ctx, gc->hwnd);
+                ErrorF("GetDC error: %s: hwnd %llx, gc %p, gc->ctx %p ,gc->hwnd %p\n", glxWinErrorMessage(), (unsigned long long)*hwnd, gc, gc->ctx, gc->hwnd);
 
             glxWinSetPixelFormat(gc, hdc, 0, GLX_WINDOW_BIT);
             pWinPriv->OpenGlWindow=TRUE; /* Identify it as an opengl window, also used to check if the pixel format is already set */
@@ -1448,7 +1448,7 @@ glxWinMakeDC(__GLXWinContext *gc, __GLXWinDrawable *draw, HWND *hwnd)
              gc, gc->ctx, gc->hwnd, *hwnd);
 #endif
         if (gc->hwnd!=*hwnd)
-            ErrorF("Window changed handle from %x to %x\n", gc->hwnd, *hwnd);
+            ErrorF("Window changed handle from %llx to %llx\n", (unsigned long long)gc->hwnd, (unsigned long long)*hwnd);
 
         gc->hwnd = *hwnd;
     }
@@ -1634,7 +1634,7 @@ glxWinContextMakeCurrent(__GLXcontext * base)
         ret = wglMakeCurrent(gc->hDC, gc->ctx);
         if (!ret) {
             DWORD ErrorCode=GetLastError();
-            ErrorF("wglMakeCurrent error: %x dc %p ctx %p\n", ErrorCode,gc->hDC,gc->ctx);
+            ErrorF("wglMakeCurrent error: %x dc %p ctx %p\n", (unsigned)ErrorCode,gc->hDC,gc->ctx);
             if (!ErrorCode) {
                 ErrorF("Error code was 0, assuming no error.\n");
                 ret=TRUE;

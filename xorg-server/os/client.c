@@ -58,6 +58,10 @@
 
 #include "os/client_priv.h"
 
+#ifdef WIN32
+extern int getpid(void);
+#endif
+
 #include "os.h"
 #include "dixstruct.h"
 
@@ -353,7 +357,7 @@ DetermineClientCmd(pid_t pid, const char **cmdname, const char **cmdargs)
 
     /* Check if /proc/pid/cmdline exists. It's not supported on all
      * operating systems. */
-    if (snprintf(path, sizeof(path), "/proc/%d/cmdline", pid) < 0)
+    if (snprintf(path, sizeof(path), "/proc/%d/cmdline", (int)pid) < 0)
         return;
     fd = open(path, O_RDONLY);
     if (fd < 0)

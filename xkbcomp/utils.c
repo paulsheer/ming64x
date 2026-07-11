@@ -55,6 +55,56 @@ uRecalloc(void *old, size_t nOld, size_t nNew, size_t itemSize)
 
 
 /***====================================================================***/
+
+int
+basic_strcasecmp(const char *s1, const char *s2)
+{
+    int c1, c2;
+
+    if (s1 == s2)
+        return 0;
+    if (s1 == NULL)
+        return -1;
+    if (s2 == NULL)
+        return 1;
+
+    do {
+        c1 = *s1++;
+        c2 = *s2++;
+        if (c1 >= 'A' && c1 <= 'Z')
+            c1 += ('a' - 'A');
+        if (c2 >= 'A' && c2 <= 'Z')
+            c2 += ('a' - 'A');
+    } while (c1 && c1 == c2);
+
+    return c1 - c2;
+}
+
+int
+basic_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    int c1, c2;
+
+    if (s1 == s2 || n == 0)
+        return 0;
+    if (s1 == NULL)
+        return -1;
+    if (s2 == NULL)
+        return 1;
+
+    do {
+        c1 = *s1++;
+        c2 = *s2++;
+        if (c1 >= 'A' && c1 <= 'Z')
+            c1 += ('a' - 'A');
+        if (c2 >= 'A' && c2 <= 'Z')
+            c2 += ('a' - 'A');
+    } while (--n && c1 && c1 == c2);
+
+    return c1 - c2;
+}
+
+/***====================================================================***/
 /***			DEBUG FUNCTIONS					***/
 /***====================================================================***/
 

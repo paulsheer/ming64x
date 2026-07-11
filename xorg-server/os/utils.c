@@ -78,7 +78,7 @@ __stdcall unsigned long GetTickCount(void);
 #define XSERV_t
 #define TRANS_SERVER
 #define TRANS_REOPEN
-#include <X11/Xtrans/Xtrans.h>
+#include <X11/xtrans/Xtrans.h>
 
 #include "os/audit.h"
 #include "os/client_priv.h"
@@ -120,6 +120,7 @@ __stdcall unsigned long GetTickCount(void);
 #include "xkbsrv.h"
 #include "picture.h"
 #include "miinitext.h"
+#include "xf86bigfontsrv.h"
 #include "present.h"
 #include "dixstruct_priv.h"
 #include "dpmsproc.h"

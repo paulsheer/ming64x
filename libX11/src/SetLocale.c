@@ -68,7 +68,7 @@ from The Open Group.
 #define MAXLOCALE	64	/* buffer size of locale name */
 
 
-#if defined(__APPLE__) || defined(__CYGWIN__) || defined(_MSC_VER)
+#if defined(__APPLE__) || defined(__CYGWIN__) || defined(_MSC_VER) || defined(__MINGW64__)
 char *
 _Xsetlocale(
     int           category,

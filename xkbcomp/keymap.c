@@ -150,11 +150,17 @@ CompileKeymap(XkbFile * file, XkbFileInfo * result, unsigned merge)
             ok = CompileGeometry(sections[GEOMETRY], result, MergeOverride);
         if (ok && (sections[TYPES] != NULL))
             ok = CompileKeyTypes(sections[TYPES], result, MergeOverride);
-        if (ok && (sections[COMPAT] != NULL))
+        if (ok && (sections[COMPAT] != NULL)) {
+
             ok = CompileCompatMap(sections[COMPAT], result, MergeOverride,
                                   &unbound);
-        if (ok && (sections[SYMBOLS] != NULL))
+
+        }
+        if (ok && (sections[SYMBOLS] != NULL)) {
+
             ok = CompileSymbols(sections[SYMBOLS], result, MergeOverride);
+
+        }
     }
     if (!ok)
         return False;
@@ -178,6 +184,8 @@ CompileKeymap(XkbFile * file, XkbFileInfo * result, unsigned merge)
                 XkbConfigText(mainType, XkbMessage));
         ok = False;
     }
+
     ok = BindIndicators(result, True, unbound, NULL);
+
     return ok;
 }

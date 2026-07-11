@@ -33,7 +33,7 @@ from The Open Group.
 
 #ifdef WIN32
 #define _XLIBINT_
-#include <X11\Xw32defs.h>
+#include <X11/Xw32defs.h>
 #endif
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -191,7 +191,7 @@ void _XPollfdCacheDel(
 #endif
 }
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)
 #undef min
 #define min __min
 #endif

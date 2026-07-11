@@ -162,6 +162,8 @@ typedef void (*OsSigHandlerPtr) (int sig);
 OsSigHandlerPtr OsSignal(int sig, OsSigHandlerPtr handler);
 
 extern void (*OsVendorVErrorFProc) (const char *, va_list args);
+
+int InitWSA(void);
 #else /* WIN32 */
 
 void *Popen(const char *, const char *);
@@ -183,10 +185,14 @@ typedef void (*OsSigHandlerPtr) (int sig);
 /* install signal handler */
 OsSigHandlerPtr OsSignal(int sig, OsSigHandlerPtr handler);
 
+#endif /* WIN32 */
+
+/* Common OS functions for all platforms */
 void OsInit(void);
 void OsCleanup(Bool);
 void OsVendorFatalError(const char *f, va_list args) _X_ATTRIBUTE_PRINTF(1, 0);
 void OsVendorInit(void);
+void OsVendorPreInit(int argc, char *argv[]);
 void OsBlockSignals(void);
 void OsReleaseSignals(void);
 void OsResetSignals(void);
@@ -203,7 +209,9 @@ void ListenToAllClients(void);
 /* allow DDX to force using another clock */
 void ForceClockId(clockid_t forced_clockid);
 
-#endif /* WIN32 */
+void CheckServerConnections(struct ospoll *server_poll);
+void CheckConnections(struct pollfd *fds, int num);
+
 Bool WaitForSomething(Bool clients_are_ready);
 void CloseDownConnection(ClientPtr client);
 

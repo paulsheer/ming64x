@@ -846,7 +846,7 @@ winBltExposedWindowRegionShadowGDI(ScreenPtr pScreen, WindowPtr pWin)
                     ps.rcPaint.top + pWin->borderWidth,
                     SRCCOPY))
             ErrorF("winBltExposedWindowRegionShadowGDI - BitBlt failed: 0x%08x\n",
-                   GetLastError());
+                   (unsigned)GetLastError());
 
         /* Release DC */
         DeleteDC(hdcPixmap);

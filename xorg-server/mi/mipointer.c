@@ -68,6 +68,8 @@ in this Software without prior written authorization from The Open Group.
 #include   "inputstr.h"
 #include   "inpututils.h"
 #include   "eventstr.h"
+#include <math.h>
+
 
 typedef struct {
     ScreenPtr pScreen;          /* current screen */

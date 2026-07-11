@@ -28,7 +28,9 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <errno.h>
+#if !defined(_MSC_VER) && !defined(__MINGW32__)
 #include <dlfcn.h>
+#endif
 #include <sys/time.h>
 #include <GL/gl.h>
 #include <GL/glxtokens.h>
@@ -41,7 +43,7 @@
 #include "glxscreens.h"
 #include "glxdricommon.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define dlerror() "Getting loadlibrary error string not implemented"
 #endif
 
@@ -324,7 +326,7 @@ glxProbeDriver(const char *driverName,
             next = NULL;
         }
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define DLLNAME "%.*s%s_dri.dll"
         snprintf(filename, sizeof filename, DLLNAME, path_len, path,
                  driverName);
@@ -364,7 +366,7 @@ glxProbeDriver(const char *driverName,
                 get_extensions_name[i] = '_';
         }
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
         get_extensions = (const __DRIextension **(*)(void))GetProcAddress(driver, get_extensions_name);
 #else
         get_extensions = dlsym(driver, get_extensions_name);
@@ -375,7 +377,7 @@ glxProbeDriver(const char *driverName,
     }
 
     if (!extensions)
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
         extensions = (const __DRIextension **)GetProcAddress(driver, __DRI_DRIVER_EXTENSIONS);
 #else
         extensions = dlsym(driver, __DRI_DRIVER_EXTENSIONS);
@@ -408,7 +410,7 @@ glxProbeDriver(const char *driverName,
 
  cleanup_failure:
     if (driver)
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
         FreeLibrary(driver);
 #else
         dlclose(driver);

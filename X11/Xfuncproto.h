@@ -163,9 +163,17 @@ in this Software without prior written authorization from The Open Group.
 # define _X_ATTRIBUTE_PRINTF(x,y)
 #endif
 
+/* MinGW's __printf__ maps to ms_printf which lacks C99 %ll / %z support.
+   Use __gnu_printf__ so GCC checks match vpnprintf's actual semantics. */
+#if defined(__MINGW32__) && defined(__GNUC__)
+# undef _X_ATTRIBUTE_PRINTF
+# define _X_ATTRIBUTE_PRINTF(x,y) __attribute__((__format__(__gnu_printf__,x,y)))
+#endif
+
 /* requires xproto >= 7.0.22 */
 #if __has_attribute(__unused__) \
     || defined(__GNUC__) &&  ((__GNUC__ * 100 + __GNUC_MINOR__) >= 205)
+#undef _X_UNUSED
 #define _X_UNUSED  __attribute__((__unused__))
 #else
 #define _X_UNUSED  /* */

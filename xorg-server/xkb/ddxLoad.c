@@ -185,6 +185,7 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
 #ifndef WIN32
         if (Pclose(out) == 0)
 #else
+        LogMessage(X_INFO, "Running xkbcomp: %s\n", buf);
         if (fclose(out) == 0 && system(buf) >= 0)
 #endif
         {
@@ -200,10 +201,6 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
             LogMessage(X_ERROR, "Error compiling keymap (%s) executing '%s'\n",
                        keymap, buf);
         }
-#ifdef WIN32
-        /* remove the temporary file */
-        unlink(tmpname);
-#endif
     }
     else {
 #ifndef WIN32
@@ -212,6 +209,9 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
         LogMessage(X_ERROR, "Could not open file %s\n", tmpname);
 #endif
     }
+#ifdef WIN32
+        LogMessage(X_INFO, "Temp file kept for debugging: %s\n", tmpname);
+#endif
     free(buf);
     return NULL;
 }

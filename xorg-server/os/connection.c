@@ -73,8 +73,8 @@ SOFTWARE.
 #define XSERV_t
 #define TRANS_SERVER
 #define TRANS_REOPEN
-#include <X11/Xtrans/Xtrans.h>
-#include <X11/Xtrans/Xtransint.h>
+#include <X11/xtrans/Xtrans.h>
+#include <X11/xtrans/Xtransint.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -628,7 +628,7 @@ ClientAuthorized(ClientPtr client,
     return ((char *) NULL);
 }
 
-static void
+void
 ClientReady(int fd, int xevents, void *data)
 {
     ClientPtr client = data;

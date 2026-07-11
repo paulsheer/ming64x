@@ -134,7 +134,7 @@ static HRESULT myIDirectDrawSurface4_Blt( ScreenPtr pScreen, RECT *pRect, RECT *
         else if (ddrval == DDERR_INVALIDOBJECT)
           ErrorF ("DDERR_INVALIDOBJECT\n");
         else
-          ErrorF ("unknown error: %08x\n", ddrval);
+          ErrorF ("unknown error: %08x\n", (unsigned)ddrval);
       }
       /* Loop around to try the blit one more time */
       continue;
@@ -142,7 +142,7 @@ static HRESULT myIDirectDrawSurface4_Blt( ScreenPtr pScreen, RECT *pRect, RECT *
     else if (FAILED (ddrval))
     {
       ErrorF ("IDirectDrawSurface4_Blt failed, but surface not "
-              "lost: %08x %d\n", ddrval, ddrval);
+              "lost: %08x %d\n", (unsigned)ddrval, (int)ddrval);
     }
     break;
   }
@@ -399,7 +399,7 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
             }
             else {
                 /* Grab the current refresh rate */
-                dwRefreshRateCurrent = ddsdCurrent.u2.dwRefreshRate;
+                dwRefreshRateCurrent = ddsdCurrent.dwRefreshRate;
             }
         }
 
@@ -490,10 +490,10 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
 
     winDebug("winAllocateFBShadowDDNL - Primary masks: %08x %08x %08x "
              "dwRGBBitCount: %u\n",
-             (unsigned int)ddpfPrimary.u2.dwRBitMask,
-             (unsigned int)ddpfPrimary.u3.dwGBitMask,
-             (unsigned int)ddpfPrimary.u4.dwBBitMask,
-             (unsigned int)ddpfPrimary.u1.dwRGBBitCount);
+             (unsigned int)ddpfPrimary.dwRBitMask,
+             (unsigned int)ddpfPrimary.dwGBitMask,
+             (unsigned int)ddpfPrimary.dwBBitMask,
+             (unsigned int)ddpfPrimary.dwRGBBitCount);
 
     /* Describe the shadow surface to be created */
     /*
@@ -511,9 +511,9 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
         .ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY,
         .dwHeight = pScreenInfo->dwHeight,
         .dwWidth = pScreenInfo->dwWidth,
-        .u1.lPitch = pScreenInfo->dwPaddedWidth,
+        .lPitch = pScreenInfo->dwPaddedWidth,
         .lpSurface = lpSurface,
-        .u4.ddpfPixelFormat = ddpfPrimary
+        .ddpfPixelFormat = ddpfPrimary
     };
 
     winDebug("winAllocateFBShadowDDNL - lPitch: %d\n",
@@ -530,10 +530,10 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
     }
 
     winDebug("winAllocateFBShadowDDNL - Created shadow pitch: %d\n",
-             (int) ddsdShadow.u1.lPitch);
+             (int) ddsdShadow.lPitch);
 
     /* Grab the pitch from the surface desc */
-    pScreenInfo->dwStride = (ddsdShadow.u1.lPitch * 8)
+    pScreenInfo->dwStride = (ddsdShadow.lPitch * 8)
         / pScreenInfo->dwBPP;
 
     winDebug("winAllocateFBShadowDDNL - Created shadow stride: %d\n",
@@ -543,9 +543,9 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
     pScreenInfo->pfb = lpSurface;
 
     /* Grab the masks from the surface description */
-    pScreenPriv->dwRedMask = ddsdShadow.u4.ddpfPixelFormat.u2.dwRBitMask;
-    pScreenPriv->dwGreenMask = ddsdShadow.u4.ddpfPixelFormat.u3.dwGBitMask;
-    pScreenPriv->dwBlueMask = ddsdShadow.u4.ddpfPixelFormat.u4.dwBBitMask;
+    pScreenPriv->dwRedMask = ddsdShadow.ddpfPixelFormat.dwRBitMask;
+    pScreenPriv->dwGreenMask = ddsdShadow.ddpfPixelFormat.dwGBitMask;
+    pScreenPriv->dwBlueMask = ddsdShadow.ddpfPixelFormat.dwBBitMask;
 
     winDebug("winAllocateFBShadowDDNL - Returning\n");
 

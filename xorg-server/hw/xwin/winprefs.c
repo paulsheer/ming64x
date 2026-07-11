@@ -35,6 +35,7 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#define putenv _putenv
 #ifdef __CYGWIN__
 #include <sys/resource.h>
 #include <sys/cygwin.h>
@@ -687,7 +688,7 @@ winPrefsLoadPreferences(const char *path)
 #endif
 
     if (!prefFile) {
-        ErrorF("LoadPreferences: %s not found\n", path);
+        ErrorF("LoadPreferences: %s not found\n", path ? path : "(null)");
         return FALSE;
     }
 

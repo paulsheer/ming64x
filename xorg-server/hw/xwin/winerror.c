@@ -75,7 +75,7 @@ OsVendorFatalError(const char *f, va_list args)
     winMessageBoxF("A fatal error has occurred and " PROJECT_NAME " will now exit.\n\n"
                    "%s\n\n"
                    "Please open %s for more information.\n",
-                   MB_ICONERROR,
+                   0 /* no icon = no sound */,
                    g_FatalErrorMessage,
                    (g_pszLogFile ? g_pszLogFile : "the logfile"));
 }
@@ -121,8 +121,11 @@ winMessageBoxF(const char *pszError, UINT uType, ...)
         goto winMessageBoxF_Cleanup;
     }
 
-    /* Display the message box string */
-    MessageBox(NULL, pszMsgBox, PROJECT_NAME, MB_OK | uType);
+    /* Display the message box string — strip icon flags to avoid beeping */
+    MessageBox(NULL, pszMsgBox, PROJECT_NAME,
+               MB_OK | (uType & ~(MB_ICONERROR | MB_ICONQUESTION |
+                                  MB_ICONWARNING | MB_ICONINFORMATION)) |
+                   MB_SERVICE_NOTIFICATION);
 
  winMessageBoxF_Cleanup:
     free(pszErrorF);

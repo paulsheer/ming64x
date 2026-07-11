@@ -1,0 +1,730 @@
+# Makefile.mingw64 — Build the X.org X Server (ming64x.exe) for Windows
+# using MinGW-w64. With OpenGL/Mesa support.
+#
+# Prerequisites:
+#   MinGW-w64 toolchain (x86_64-w64-mingw32-gcc, ar, windres)
+#   flex, bison (for winprefs lex/yacc)
+#   Dependencies pre-built and installed under $(DEP_PREFIX):
+#     zlib, pixman-1, freetype2, openssl, libX11, libxcb, libXau,
+#     libXdmcp, libXfixes, libXfont2, libfontenc, libXinerama, pthreads
+
+.DEFAULT_GOAL := help
+
+# ---------------------------------------------------------------------------
+# Toolchain
+# ---------------------------------------------------------------------------
+CROSS      ?= x86_64-w64-mingw32-
+CC         := $(CROSS)gcc
+AR         := $(CROSS)ar
+WINDRES    := $(CROSS)windres
+FLEX       ?= flex
+BISON      ?= bison
+SED        := sed
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+TOPSRCDIR  := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
+PROJECTROOT := $(realpath $(TOPSRCDIR)/..)
+BUILDDIR   ?= build-mingw64
+OBJDIR     := $(BUILDDIR)
+DEP_PREFIX  ?= $(realpath $(TOPSRCDIR)/../../dep-ming64x/prefix)
+DEP_ROOT    := $(realpath $(TOPSRCDIR)/../../dep-ming64x)
+
+# Verify the five dependency sub-repos exist (they provide headers linked via -I$(DEP_PREFIX)/include)
+DEP_REPOS   := libxcb-util libxcb-wm libxtrans xcb-proto xorgproto
+MISSING      = $(strip $(foreach r,$(DEP_REPOS),$(if $(wildcard $(DEP_ROOT)/$(r)/.git),,$(r))))
+ifneq ($(MISSING),)
+$(info )
+$(info ========================================)
+$(info Missing dependency repositories in:)
+$(info   $(DEP_ROOT))
+$(info )
+$(foreach r,$(MISSING),$(info   Missing: $(r)/))
+$(info )
+$(info To fix, run the following commands:)
+$(info )
+$(info   mkdir -p $(DEP_ROOT) && cd $(DEP_ROOT))
+$(info   cd $(DEP_ROOT))
+$(info   git clone https://gitlab.freedesktop.org/xorg/lib/libxcb-util.git)
+$(info   git clone https://gitlab.freedesktop.org/xorg/lib/libxcb-wm.git)
+$(info   git clone https://gitlab.freedesktop.org/xorg/lib/libxtrans.git)
+$(info   git clone https://gitlab.freedesktop.org/xorg/proto/xcbproto.git xcb-proto)
+$(info   git clone https://gitlab.freedesktop.org/xorg/proto/xorgproto.git)
+$(info ========================================)
+$(info )
+$(info )
+$(error Dependency check failed — see above for instructions)
+$(info )
+endif
+
+# ---------------------------------------------------------------------------
+# Compiler & linker flags
+# ---------------------------------------------------------------------------
+OPT_FLAG := -O2 -ggdb -Wall
+ifdef NOOPT
+OPT_FLAG := -O0 -ggdb -Wall
+endif
+
+CFLAGS  += $(OPT_FLAG) -std=gnu99 -ffunction-sections
+CFLAGS  += -D_WIN32_WINNT=0x0601   # Win7 minimum (avoids NTDDI issues)
+CFLAGS  += -fno-strict-aliasing
+CFLAGS  += -Wno-unused-but-set-variable -Wno-unused-function -Wno-unused-variable
+LDFLAGS += -Wl,--gc-sections -Wl,--enable-auto-import -mwindows
+
+# ---------------------------------------------------------------------------
+# Defines
+# ---------------------------------------------------------------------------
+DEFINES := \
+	-DWIN32 \
+	-D_WIN32 \
+	-D_WINDOWS \
+	-DWINDOWS \
+	-D__MINGW32__ \
+	-D_POSIX_ \
+	-DX_NOT_POSIX \
+	-DHAVE_CONFIG_H \
+	-D_BSD_SOURCE \
+	-DHAVE_DIX_CONFIG_H \
+	-DXFree86Server \
+	-DXKB_IN_SERVER \
+	-DHAVE_XWIN_CONFIG_H \
+	-DRELOCATE_PROJECTROOT \
+	-DXWIN_GLX_WINDOWS \
+	-DREAD_FONTDIRS \
+	-DHAVE_XKB_CONFIG_H \
+	-DPIXMAN_API=
+
+# ---------------------------------------------------------------------------
+# Include paths
+# ---------------------------------------------------------------------------
+INCLUDES := \
+	-I$(PROJECTROOT)/pthreadlight \
+	-I$(OBJDIR)/include \
+	-I. \
+	-I$(TOPSRCDIR) \
+	-I$(PROJECTROOT) \
+	-I$(TOPSRCDIR)/include \
+	-I$(TOPSRCDIR)/mi \
+	-I$(TOPSRCDIR)/miext/damage \
+	-I$(TOPSRCDIR)/miext/shadow \
+	-I$(TOPSRCDIR)/miext/sync \
+	-I$(TOPSRCDIR)/miext/rootless \
+	-I$(TOPSRCDIR)/render \
+	-I$(TOPSRCDIR)/damageext \
+	-I$(TOPSRCDIR)/randr \
+	-I$(TOPSRCDIR)/xfixes \
+	-I$(TOPSRCDIR)/Xi \
+	-I$(TOPSRCDIR)/fb \
+	-I$(TOPSRCDIR)/Xext \
+	-I$(TOPSRCDIR)/composite \
+	-I$(TOPSRCDIR)/dri3 \
+	-I$(TOPSRCDIR)/present \
+	-I$(TOPSRCDIR)/record \
+	-I$(TOPSRCDIR)/dbe \
+	-I$(TOPSRCDIR)/config \
+	-I$(TOPSRCDIR)/hw/xfree86/common \
+	-I$(TOPSRCDIR)/dix \
+	-I$(TOPSRCDIR)/os \
+	-I$(TOPSRCDIR)/xkb \
+	-I$(TOPSRCDIR)/hw/xwin \
+	-I$(TOPSRCDIR)/hw/xwin/winclipboard \
+	-I$(TOPSRCDIR)/glx \
+	-I$(TOPSRCDIR)/hw/xwin/glx \
+	-I$(TOPSRCDIR)/$(OBJDIR) \
+	-idirafter /usr/include \
+	-idirafter /usr/include/pixman-1 \
+	-idirafter /usr/include/freetype2 \
+	-I$(DEP_PREFIX)/include \
+	-I$(DEP_PREFIX)/include/pixman-1 \
+	-I$(DEP_PREFIX)/include/freetype2
+
+# ---------------------------------------------------------------------------
+# Libraries to link against
+# ---------------------------------------------------------------------------
+LIBS := \
+	-Wl,--start-group \
+	-L$(DEP_PREFIX)/lib \
+	-lX11 -lxcb -lxcb-errors -lXau -lXdmcp -lXfixes -lXfont2 -lfontenc \
+	-lXinerama -lfontconfig -lexpat -lpixman-1 -lfreetype -lz \
+	-ldxguid \
+	-lopengl32 \
+	-lws2_32 -lgdi32 -lcomdlg32 -lole32 -lshlwapi -lshell32 \
+	-ladvapi32 -luser32 -lkernel32 -lwinmm -lsetupapi -lcomctl32 \
+	-luuid -loleaut32 -lodbc32 -lodbccp32 -ldwmapi \
+	-Wl,--end-group
+
+# ---------------------------------------------------------------------------
+# xkbcomp — libraries, linker flags, sources, objects
+# ---------------------------------------------------------------------------
+XKBCOMP_LDFLAGS := -Wl,--gc-sections -Wl,--enable-auto-import
+XKBCOMP_LIBS := \
+	-Wl,--start-group \
+	-L$(DEP_PREFIX)/lib \
+	-lxkbfile -lX11 -lxcb -lXau -lXdmcp \
+	-lws2_32 \
+	-Wl,--end-group
+
+XKBCOMP_WRAPS := \
+	-Wl,--wrap=CompileCompatMap \
+	-Wl,--wrap=CompileSymbols \
+	-Wl,--wrap=BindIndicators \
+	-Wl,--wrap=XkbAllocCompatMap \
+	-Wl,--wrap=yylex \
+	-Wl,--wrap=InterpCreate
+
+XKBCOMP_SRCDIR := $(PROJECTROOT)/xkbcomp
+XKBCOMP_SRCS := action.c alias.c compat.c expr.c geometry.c indicators.c \
+	keycodes.c keymap.c keytypes.c listing.c misc.c parseutils.c symbols.c \
+	utils.c vmod.c xkbcomp.c xkbpath.c xkbscan.c
+XKBCOMP_OBJS := $(XKBCOMP_SRCS:%.c=$(OBJDIR)/xkbcomp/%.o)
+XKBCOMP_OBJS += $(OBJDIR)/xkbcomp/xkbparse.o
+XKBCOMP_OBJS += $(OBJDIR)/debug_wraps.o
+XKBCOMP_OBJS += $(OBJDIR)/StrKeysym.o
+XKBCOMP_OBJS += $(OBJDIR)/lcUTF8Load.o
+XKBCOMP_OBJS += $(OBJDIR)/lcDefConv.o
+XKBCOMP_OBJS += $(OBJDIR)/lcGenConv.o
+XKBCOMP_OBJS += $(OBJDIR)/XlibInt.o
+XKBCOMP_OBJS += $(OBJDIR)/xlibint_imp_aliases.o
+
+XKBCOMP_DEFINES := \
+	-DDFLT_XKB_CONFIG_ROOT='"."' \
+	-DPACKAGE_VERSION='"1.2.3"' \
+	-DPACKAGE_NAME='"xkbcomp"'
+
+XKBCOMP_TARGET := $(OBJDIR)/xkbcomp.exe
+
+# ---------------------------------------------------------------------------
+# Patched headers (fix MSVC-isms for MinGW)
+# ---------------------------------------------------------------------------
+$(OBJDIR)/include/dix-config.h: $(PROJECTROOT)/include/dix-config.h
+	@mkdir -p $(dir $@)
+	@echo "  FIXUP   $< -> $@"
+	@$(SED) \
+		-e 's/#define IPv6 1/#undef IPv6/' \
+		-e 's/#define HAVE_GETADDRINFO 1/#undef HAVE_GETADDRINFO/' \
+		-e 's/#define HAVE_DLFCN_H 1/#undef HAVE_DLFCN_H/' \
+		-e 's/#define HAVE_SETITIMER 1/#undef HAVE_SETITIMER/' \
+		-e 's/#define HYPERV 1/#undef HYPERV/' \
+		-e '/^#define strcasecmp _stricmp$$/d' \
+		-e '/^#define strncasecmp _strnicmp$$/d' \
+		-e '/^const char \*inet_ntop.*socklen_t cnt);$$/d' \
+		-e '/^int inet_pton.*const char \*src.*void \*dst);$$/d' \
+		$< > $@
+	@echo '' >> $@
+	@echo '/* MinGW: _sigset_t for os.h sigset_t typedef */' >> $@
+	@echo 'typedef unsigned long long _sigset_t;' >> $@
+
+$(OBJDIR)/include/stdint.h: $(PROJECTROOT)/include/stdint.h
+	@mkdir -p $(dir $@)
+	@echo "  FIXUP   $< -> $@"
+	@echo '/* MinGW: redirect to system <stdint.h> */' > $@
+	@echo '#include_next <stdint.h>' >> $@
+
+$(OBJDIR)/include/unistd.h: $(PROJECTROOT)/include/unistd.h
+	@mkdir -p $(dir $@)
+	@echo "  FIXUP   $< -> $@"
+	@tr '\\' '/' < $< | $(SED) \
+		-e '/^#define strcasecmp _stricmp$$/d' \
+		-e '/^#define strdup _strdup$$/d' > $@.tmp
+	@echo '#define Pid_t pid_t' >> $@.tmp
+	@mv $@.tmp $@
+
+$(OBJDIR)/include/xcb: $(PROJECTROOT)/include/xcb
+	@mkdir -p $@
+	@echo "  COPY    $< -> $@"
+	@cp -r $</* $@/
+	@# Fix xcb_windefs.h: remove MSVC typedef that conflicts with MinGW sys/types.h
+	@$(SED) -i '/^typedef int pid_t;$$/d' $@/xcb_windefs.h
+	@# Fix XCB_EXTERN for static linking (not DLL)
+	@$(SED) -i 's/__declspec(dllimport) extern/extern/g' $@/xcb_windefs.h
+	@$(SED) -i 's/__declspec(dllexport) extern/extern/g' $@/xcb_windefs.h
+
+$(OBJDIR)/include/KHR: $(PROJECTROOT)/include/KHR
+	@mkdir -p $@
+	@echo "  COPY    $< -> $@"
+	@cp -r $</* $@/
+
+$(OBJDIR)/include/GL/internal: $(PROJECTROOT)/mesalib/include/GL/internal
+	@mkdir -p $@
+	@echo "  COPY    $< -> $@"
+	@cp -r $</* $@/
+
+# Fix X11/Xlibint.h: patch X11_EXTERN from dllimport/dllexport to plain extern for static linking
+$(OBJDIR)/include/X11/Xlibint.h: $(PROJECTROOT)/X11/Xlibint.h
+	@mkdir -p $(dir $@)
+	@echo "  FIXUP   $< -> $@"
+	@cp $< $@
+	@$(SED) -i 's/__declspec(dllimport) extern/extern/g' $@
+	@$(SED) -i 's/__declspec(dllexport) extern/extern/g' $@
+
+FIXUP_HEADERS := $(OBJDIR)/include/dix-config.h \
+	$(OBJDIR)/include/stdint.h \
+	$(OBJDIR)/include/unistd.h \
+	$(OBJDIR)/include/xcb \
+	$(OBJDIR)/include/KHR \
+	$(OBJDIR)/include/GL/internal \
+	$(OBJDIR)/include/X11/Xlibint.h
+
+# ---------------------------------------------------------------------------
+# Source files — dix
+# ---------------------------------------------------------------------------
+DIX_SRCS := display.c atom.c colormap.c color.c cursor.c devices.c \
+	dispatch.c dixfonts.c main.c dixutils.c enterleave.c events.c \
+	eventconvert.c extension.c gc.c getevents.c gestures.c globals.c \
+	glyphcurs.c grabs.c initatoms.c inpututils.c pixmap.c privates.c \
+	property.c ptrveloc.c region.c registry.c resource.c selection.c \
+	swaprep.c swapreq.c tables.c touch.c window.c
+DIX_OBJS := $(DIX_SRCS:%.c=$(OBJDIR)/dix/%.o)
+
+# --- os ---
+OS_SRCS := WaitFor.c access.c auth.c backtrace.c client.c connection.c \
+	inputthread.c io.c mitauth.c osinit.c ospoll.c utils.c strcasecmp.c \
+	timingsafe_memcmp.c strcasestr.c xdmauth.c xsha1.c opensslsha1.c xstrans.c xprintf.c \
+	reallocarray.c alloc.c fmt.c string.c serverlock.c log.c xdmcp.c \
+	xserver_poll.c strlcat.c strlcpy.c strndup.c
+OS_OBJS := $(OS_SRCS:%.c=$(OBJDIR)/os/%.o)
+
+# --- fb ---
+FB_SRCS := fballpriv.c fbarc.c fbbits.c fbblt.c fbbltone.c fbcmap_mi.c \
+	fbcopy.c fbfill.c fbfillrect.c fbfillsp.c fbgc.c fbgetsp.c fbglyph.c \
+	fbimage.c fbline.c fboverlay.c fbpict.c fbpixmap.c fbpoint.c fbpush.c \
+	fbscreen.c fbseg.c fbsetsp.c fbsolid.c fbtile.c fbtrap.c fbutil.c \
+	fbwindow.c
+FB_OBJS := $(FB_SRCS:%.c=$(OBJDIR)/fb/%.o)
+
+# --- mi ---
+MI_SRCS := miarc.c micmap.c micopy.c midash.c midispcur.c mieq.c miexpose.c \
+	mifillarc.c migc.c miglblt.c mioverlay.c mipointer.c mipoly.c \
+	mipolypnt.c mipolyrect.c mipolyseg.c mipolytext.c mipushpxl.c \
+	miscrinit.c misprite.c mivaltree.c miwideline.c miwindow.c \
+	mizerarc.c mizerclip.c mizerline.c miinitext.c
+MI_OBJS := $(MI_SRCS:%.c=$(OBJDIR)/mi/%.o)
+
+# --- Xext ---
+XEXT_SRCS := bigreq.c dpms.c saver.c security.c shape.c sleepuntil.c sync.c \
+	xace.c xcmisc.c hashtable.c xres.c xtest.c geext.c panoramiX.c \
+	panoramiXprocs.c xf86bigfont.c panoramiXSwap.c
+XEXT_OBJS := $(XEXT_SRCS:%.c=$(OBJDIR)/Xext/%.o)
+
+# --- xkb ---
+XKB_SRCS := ddxBeep.c ddxCtrls.c ddxLEDs.c ddxLoad.c xkb.c xkbUtils.c \
+	xkbEvents.c xkbAccessX.c xkbSwap.c xkbLEDs.c xkbInit.c xkbActions.c \
+	xkbPrKeyEv.c maprules.c xkmread.c xkbtext.c xkbfmisc.c xkbout.c \
+	XKBMisc.c XKBAlloc.c XKBGAlloc.c XKBMAlloc.c ddxVT.c ddxPrivate.c \
+	ddxKillSrv.c
+XKB_OBJS := $(XKB_SRCS:%.c=$(OBJDIR)/xkb/%.o)
+
+# --- Xi ---
+XI_SRCS := allowev.c chgdctl.c chgfctl.c chgkbd.c chgkmap.c chgprop.c \
+	chgptr.c closedev.c devbell.c exevents.c extinit.c getbmap.c getdctl.c \
+	getfctl.c getfocus.c getkmap.c getmmap.c getprop.c getselev.c getvers.c \
+	grabdev.c grabdevb.c grabdevk.c gtmotion.c listdev.c opendev.c queryst.c \
+	selectev.c sendexev.c setbmap.c setdval.c setfocus.c setmmap.c setmode.c \
+	ungrdev.c ungrdevb.c ungrdevk.c xiallowev.c xibarriers.c \
+	xichangecursor.c xichangehierarchy.c xigetclientpointer.c xigrabdev.c \
+	xipassivegrab.c xiproperty.c xiquerydevice.c xiquerypointer.c \
+	xiqueryversion.c xiselectev.c xisetclientpointer.c xisetdevfocus.c \
+	xiwarppointer.c stubs.c
+XI_OBJS := $(XI_SRCS:%.c=$(OBJDIR)/Xi/%.o)
+
+# --- render ---
+RENDER_SRCS := animcur.c filter.c glyph.c matrix.c miindex.c mipict.c \
+	mirect.c mitrap.c mitri.c picture.c render.c
+RENDER_OBJS := $(RENDER_SRCS:%.c=$(OBJDIR)/render/%.o)
+
+# --- randr ---
+RANDR_SRCS := randr.c rrcrtc.c rrdispatch.c rrinfo.c rrlease.c rrmode.c \
+	rrmonitor.c rroutput.c rrpointer.c rrproperty.c rrprovider.c \
+	rrproviderproperty.c rrscreen.c rrsdispatch.c rrtransform.c rrxinerama.c
+RANDR_OBJS := $(RANDR_SRCS:%.c=$(OBJDIR)/randr/%.o)
+
+# --- record ---
+RECORD_SRCS := record.c set.c
+RECORD_OBJS := $(RECORD_SRCS:%.c=$(OBJDIR)/record/%.o)
+
+# --- dbe ---
+DBE_SRCS := dbe.c midbe.c
+DBE_OBJS := $(DBE_SRCS:%.c=$(OBJDIR)/dbe/%.o)
+
+# --- damageext ---
+DAMAGEEXT_SRCS := damageext.c
+DAMAGEEXT_OBJS := $(DAMAGEEXT_SRCS:%.c=$(OBJDIR)/damageext/%.o)
+
+# --- composite ---
+COMPOSITE_SRCS := compalloc.c compext.c compinit.c compoverlay.c compwindow.c
+COMPOSITE_OBJS := $(COMPOSITE_SRCS:%.c=$(OBJDIR)/composite/%.o)
+
+# --- present ---
+PRESENT_SRCS := present.c present_event.c present_execute.c present_fake.c \
+	present_fence.c present_notify.c present_request.c present_scmd.c \
+	present_screen.c present_vblank.c
+PRESENT_OBJS := $(PRESENT_SRCS:%.c=$(OBJDIR)/present/%.o)
+
+# --- config ---
+CONFIG_SRCS := config.c
+CONFIG_OBJS := $(CONFIG_SRCS:%.c=$(OBJDIR)/config/%.o)
+
+# --- pseudoramiX ---
+PSEUDORAMIX_SRCS := pseudoramiX.c
+PSEUDORAMIX_OBJS := $(PSEUDORAMIX_SRCS:%.c=$(OBJDIR)/pseudoramiX/%.o)
+
+# --- xfixes ---
+XFIXES_SRCS := cursor.c disconnect.c region.c saveset.c select.c xfixes.c
+XFIXES_OBJS := $(XFIXES_SRCS:%.c=$(OBJDIR)/xfixes/%.o)
+
+# --- glx (GLX extension) ---
+GLX_SRCS := clientinfo.c createcontext.c extension_string.c glapi.c \
+	glxcmds.c glxcmdsswap.c glxdricommon.c glxdriswrast.c glxext.c glxscreens.c \
+	indirect_dispatch.c indirect_dispatch_swap.c indirect_program.c \
+	indirect_reqsize.c indirect_size_get.c indirect_table.c \
+	indirect_texture_compression.c indirect_util.c \
+	render2.c render2swap.c renderpix.c renderpixswap.c rensize.c \
+	single2.c single2swap.c singlepix.c singlepixswap.c singlesize.c \
+	swap_interval.c vndcmds.c vndext.c \
+	vndservermapping.c vndservervendor.c xfont.c
+GLX_OBJS := $(GLX_SRCS:%.c=$(OBJDIR)/glx/%.o)
+
+# --- hw/xwin/glx (WGL provider) ---
+GLX_WIN_SRCS := glwrap.c indirect.c wgl_ext_api.c winpriv.c
+GLX_WIN_OBJS := $(GLX_WIN_SRCS:%.c=$(OBJDIR)/hw/xwin/glx/%.o)
+
+# --- hw/xwin (Windows DDX, with GLX) ---
+XWIN_SRCS := InitInput.c InitOutput.c winallpriv.c winauth.c winblock.c \
+	wincmap.c winconfig.c wincreatewnd.c wincursor.c windialogs.c \
+	winengine.c winerror.c winglobals.c winkeybd.c winkeyhook.c winmisc.c \
+	winmonitors.c winmouse.c winmsg.c winmsgwindow.c winmultiwindowclass.c \
+	winmultiwindowicons.c winos.c winprefs.c winprocarg.c winscrinit.c \
+	winshadddnl.c winshadgdi.c wintaskbar.c wintrayicon.c winvalargs.c \
+	winwakeup.c winwindow.c winwndproc.c windisplay.c winclipboardinit.c \
+	winclipboardwrappers.c winmultiwindowshape.c winmultiwindowwindow.c \
+	winmultiwindowwm.c winmultiwindowwndproc.c winSetAppUserModelID.c \
+	winrandr.c xdmcphostselect.c
+XWIN_OBJS := $(XWIN_SRCS:%.c=$(OBJDIR)/hw/xwin/%.o)
+
+# Windows resource file
+XWIN_RES := $(OBJDIR)/hw/xwin/XWin.o
+XWIN_RC  := hw/xwin/XWin.rc
+
+# Generated flex/bison files append to XWIN_OBJS
+XWIN_OBJS += $(OBJDIR)/hw/xwin/winprefslex.o $(OBJDIR)/hw/xwin/winprefsyacc.o
+
+# --- hw/xwin/winclipboard ---
+WINCLIP_SRCS := textconv.c thread.c wndproc.c xevents.c
+WINCLIP_OBJS := $(WINCLIP_SRCS:%.c=$(OBJDIR)/hw/xwin/winclipboard/%.o)
+
+# --- miext/damage ---
+MIEXT_DAMAGE_SRCS := damage.c
+MIEXT_DAMAGE_OBJS := $(MIEXT_DAMAGE_SRCS:%.c=$(OBJDIR)/miext/damage/%.o)
+
+# --- miext/shadow ---
+MIEXT_SHADOW_SRCS := shadow.c sh3224.c shafb4.c shafb8.c shiplan2p4.c \
+	shiplan2p8.c shpacked.c shplanar8.c shplanar.c shrot16pack_180.c \
+	shrot16pack_270.c shrot16pack_270YX.c shrot16pack_90.c \
+	shrot16pack_90YX.c shrot16pack.c shrot32pack_180.c shrot32pack_270.c \
+	shrot32pack_90.c shrot32pack.c shrot8pack_180.c shrot8pack_270.c \
+	shrot8pack_90.c shrot8pack.c shrotate.c
+MIEXT_SHADOW_OBJS := $(MIEXT_SHADOW_SRCS:%.c=$(OBJDIR)/miext/shadow/%.o)
+
+# --- miext/sync ---
+MIEXT_SYNC_SRCS := misync.c misyncfd.c
+MIEXT_SYNC_OBJS := $(MIEXT_SYNC_SRCS:%.c=$(OBJDIR)/miext/sync/%.o)
+
+# --- miext/rootless ---
+MIEXT_ROOTLESS_SRCS := rootlessCommon.c rootlessGC.c rootlessScreen.c \
+	rootlessValTree.c rootlessWindow.c
+MIEXT_ROOTLESS_OBJS := $(MIEXT_ROOTLESS_SRCS:%.c=$(OBJDIR)/miext/rootless/%.o)
+
+# ---------------------------------------------------------------------------
+# All objects
+# ---------------------------------------------------------------------------
+ALL_OBJS := $(PROJECTROOT)/pthreadlight/pthreadlight.o \
+	$(DIX_OBJS) $(OS_OBJS) $(FB_OBJS) $(MI_OBJS) $(XEXT_OBJS) \
+	$(XKB_OBJS) $(XI_OBJS) $(RENDER_OBJS) $(RANDR_OBJS) $(RECORD_OBJS) \
+	$(DBE_OBJS) $(DAMAGEEXT_OBJS) $(COMPOSITE_OBJS) $(PRESENT_OBJS) \
+	$(CONFIG_OBJS) $(PSEUDORAMIX_OBJS) $(XFIXES_OBJS) $(GLX_OBJS) \
+	$(GLX_WIN_OBJS) $(XWIN_OBJS) $(XWIN_RES) $(WINCLIP_OBJS) \
+	$(MIEXT_DAMAGE_OBJS) $(MIEXT_SHADOW_OBJS) \
+	$(MIEXT_SYNC_OBJS) $(MIEXT_ROOTLESS_OBJS)
+
+ALL_OBJS += $(OBJDIR)/dix/initatoms.o
+
+# Object directory list
+OBJ_SUBDIRS := $(sort $(dir $(ALL_OBJS)))
+
+# ---------------------------------------------------------------------------
+# Extra per-directory includes
+# ---------------------------------------------------------------------------
+$(DIX_OBJS):            CFLAGS += -I$(TOPSRCDIR)/composite -I$(TOPSRCDIR)/miext/sync
+$(OS_OBJS):             CFLAGS += -I$(TOPSRCDIR)/dix
+$(XEXT_OBJS):           CFLAGS += -I$(TOPSRCDIR)/composite -I$(TOPSRCDIR)/miext/sync -I$(TOPSRCDIR)/hw/xfree86/dixmods/extmod
+$(DAMAGEEXT_OBJS):      CFLAGS += -I$(TOPSRCDIR)/dix
+$(MIEXT_ROOTLESS_OBJS): CFLAGS += -I$(TOPSRCDIR)/dix
+$(XWIN_OBJS):           CFLAGS += -I$(TOPSRCDIR)/miext/rootless -I$(TOPSRCDIR)/dix
+$(XWIN_OBJS):           CFLAGS += -I$(OBJDIR)/hw/xwin -I$(TOPSRCDIR)/glx -I$(TOPSRCDIR)/hw/xwin/glx
+$(GLX_OBJS):            CFLAGS += -I$(TOPSRCDIR)/glx
+$(GLX_WIN_OBJS):        CFLAGS += -I$(TOPSRCDIR)/glx -I$(OBJDIR)/hw/xwin/glx -I$(TOPSRCDIR)/hw/xwin/glx
+$(XKB_OBJS):            CFLAGS += -I$(TOPSRCDIR)
+
+$(XKBCOMP_OBJS):        CFLAGS += -I$(XKBCOMP_SRCDIR) \
+		-I$(PROJECTROOT)/libX11/include -I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(PROJECTROOT) -I$(DEP_PREFIX)/include
+$(OBJDIR)/lcUTF8Load.o:  CFLAGS += -I$(PROJECTROOT)/libX11/modules/lc/Utf8
+$(OBJDIR)/lcDefConv.o:   CFLAGS += -I$(PROJECTROOT)/libX11/modules/lc/def
+$(OBJDIR)/lcGenConv.o:   CFLAGS += -I$(PROJECTROOT)/libX11/modules/lc/gen
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+TARGET := $(OBJDIR)/ming64x.exe
+
+.PHONY: help all clean
+
+help:
+	@echo "================================================================================"
+	@echo "  ming64x X11 Server — MinGW-w64 build"
+	@echo "================================================================================"
+	@echo ""
+	@echo "  Build targets:"
+	@echo "    make -f Makefile.mingw64 all       Build the server (ming64x.exe + xkbcomp.exe)"
+	@echo "    make -f Makefile.mingw64 clean     Remove build artifacts"
+	@echo ""
+	@echo "  Output:"
+	@echo "    $(OBJDIR)/ming64x.exe     X11 Server"
+	@echo "    $(OBJDIR)/xkbcomp.exe     XKB keymap compiler"
+	@echo ""
+	@echo "  Install:"
+	@echo "    cp $(OBJDIR)/ming64x.exe $(OBJDIR)/xkbcomp.exe ../install/ming64x/"
+	@echo ""
+	@echo "  Package for deployment:"
+	@echo "    cd ../install/ ; zip -r ming64x.zip ming64x"
+	@echo ""
+	@echo "  Deploy on Windows (run from the install directory):"
+	@echo "    cd ming64x && ming64x :0 -listen tcp -ac"
+	@echo ""
+	@echo "================================================================================"
+
+all: $(TARGET) $(XKBCOMP_TARGET)
+
+$(ALL_OBJS): | $(FIXUP_HEADERS)
+
+$(TARGET): $(ALL_OBJS) $(OBJDIR)/xdmcp_stub.o $(OBJDIR)/all_stubs.o $(OBJDIR)/extensions.o
+	@echo "  LINK    $@"
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+
+XKBCOMP_SUPPORT := $(TOPSRCDIR)/xkbcomp-support
+XCB_ERRORS_SRCDIR := $(PROJECTROOT)/xcb-util-errors/src
+
+$(OBJDIR)/xdmcp_stub.o: $(XKBCOMP_SUPPORT)/xdmcp_stub.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      xdmcp stub"
+	@$(CC) -c $(OPT_FLAG) $< -o $@
+
+$(OBJDIR)/all_stubs.o: $(XKBCOMP_SUPPORT)/all_stubs.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      all stubs"
+	@$(CC) -c $(OPT_FLAG) $< -o $@
+
+# Generated xcb-errors extension registration (replaces stubs in all_stubs.c)
+$(OBJDIR)/extensions.c: $(XCB_ERRORS_SRCDIR)/extensions.py
+	@mkdir -p $(OBJDIR)
+	@echo "  GEN     $@"
+	@python3 $< $@.tmp $(DEP_PREFIX)/share/xcb/*.xml && mv $@.tmp $@
+
+$(OBJDIR)/extensions.o: $(OBJDIR)/extensions.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      $<"
+	@$(CC) -c $(OPT_FLAG) -I$(XCB_ERRORS_SRCDIR) -I$(DEP_PREFIX)/include $< -o $@
+
+# ---------------------------------------------------------------------------
+# xkbcomp.exe — XKB keymap compiler (console application)
+# ---------------------------------------------------------------------------
+$(XKBCOMP_TARGET): $(XKBCOMP_OBJS) $(PROJECTROOT)/pthreadlight/pthreadlight.o
+	@echo "  LINK    $@"
+	@$(CC) $(CFLAGS) $(XKBCOMP_LDFLAGS) -o $@ $^ $(XKBCOMP_WRAPS) $(XKBCOMP_LIBS)
+
+$(OBJDIR)/xlibint_imp_aliases.o: $(XKBCOMP_SUPPORT)/xlibint_imp_aliases.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      xlibint imp aliases"
+	@$(CC) -c $(CFLAGS) -I$(DEP_PREFIX)/include -o $@ $<
+
+$(OBJDIR)/debug_wraps.o: $(XKBCOMP_SUPPORT)/debug_wraps.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      debug wraps"
+	@$(CC) -c $(CFLAGS) -I$(DEP_PREFIX)/include -o $@ $<
+
+$(OBJDIR)/StrKeysym.o: $(XKBCOMP_SUPPORT)/StrKeysym.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      StrKeysym"
+	@$(CC) -c $(CFLAGS) \
+		-I$(PROJECTROOT)/libX11/include/X11 \
+		-I$(PROJECTROOT)/libX11/include \
+		-I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(DEP_PREFIX)/include \
+		-o $@ $<
+
+$(OBJDIR)/lcUTF8Load.o: $(PROJECTROOT)/libX11/modules/lc/Utf8/lcUTF8Load.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      lcUTF8Load"
+	@$(CC) -c $(CFLAGS) \
+		-I$(PROJECTROOT)/libX11/include/X11 \
+		-I$(PROJECTROOT)/libX11/include \
+		-I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(PROJECTROOT)/libX11/modules/lc/Utf8 \
+		-I$(DEP_PREFIX)/include \
+		-o $@ $<
+
+$(OBJDIR)/lcDefConv.o: $(PROJECTROOT)/libX11/modules/lc/def/lcDefConv.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      lcDefConv"
+	@$(CC) -c $(CFLAGS) \
+		-I$(PROJECTROOT)/libX11/include/X11 \
+		-I$(PROJECTROOT)/libX11/include \
+		-I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(PROJECTROOT)/libX11/modules/lc/def \
+		-I$(DEP_PREFIX)/include \
+		-o $@ $<
+
+$(OBJDIR)/lcGenConv.o: $(PROJECTROOT)/libX11/modules/lc/gen/lcGenConv.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      lcGenConv"
+	@$(CC) -c $(CFLAGS) \
+		-I$(PROJECTROOT)/libX11/include/X11 \
+		-I$(PROJECTROOT)/libX11/include \
+		-I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(PROJECTROOT)/libX11/modules/lc/gen \
+		-I$(DEP_PREFIX)/include \
+		-o $@ $<
+
+$(OBJDIR)/XlibInt.o: $(PROJECTROOT)/libX11/src/XlibInt.c
+	@mkdir -p $(OBJDIR)
+	@echo "  CC      XlibInt"
+	@$(CC) -c $(CFLAGS) \
+		-I$(PROJECTROOT)/libX11/include/X11 \
+		-I$(PROJECTROOT)/libX11/include \
+		-I$(PROJECTROOT)/libX11/src \
+		-I$(PROJECTROOT)/libX11/src/xlibi18n \
+		-I$(DEP_PREFIX)/include \
+		-o $@ $<
+
+# xkbcomp source files compiled from $(XKBCOMP_SRCDIR)
+# NOTE: $(DEFINES) is intentionally NOT passed — it contains server-side
+# defines (-DXFree86Server, -DXKB_IN_SERVER) that alter client-library behavior.
+$(OBJDIR)/xkbcomp/%.o: $(XKBCOMP_SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(XKBCOMP_DEFINES) $(INCLUDES) -I$(XKBCOMP_SRCDIR) -c -o $@ $<
+
+# xkbparse — bison-generated parser
+$(OBJDIR)/xkbcomp/xkbparse.c $(OBJDIR)/xkbcomp/xkbparse.h: $(XKBCOMP_SRCDIR)/xkbparse.y
+	@mkdir -p $(dir $@)
+	@echo "  BISON   $<"
+	@$(BISON) -d -o $(OBJDIR)/xkbcomp/xkbparse.c $<
+
+$(OBJDIR)/xkbcomp/xkbparse.o: $(OBJDIR)/xkbcomp/xkbparse.c $(OBJDIR)/xkbcomp/xkbparse.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(XKBCOMP_DEFINES) $(INCLUDES) -I$(XKBCOMP_SRCDIR) -c -o $@ $<
+
+clean:
+	rm -rf $(OBJDIR)
+
+# ---------------------------------------------------------------------------
+# pthreadlight — minimal pthreads-on-Windows replacement
+# ---------------------------------------------------------------------------
+$(PROJECTROOT)/pthreadlight/pthreadlight.o: $(PROJECTROOT)/pthreadlight/pthreadlight.c
+	@echo "  CC      pthreadlight"
+	@$(CC) -c $(OPT_FLAG) -std=gnu99 -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Create build directories
+# ---------------------------------------------------------------------------
+$(OBJ_SUBDIRS):
+	mkdir -p $@
+
+# ---------------------------------------------------------------------------
+# Implicit rule: source tree .c -> build tree .o
+# ---------------------------------------------------------------------------
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Implicit rule: build tree .c -> build tree .o (for generated sources)
+# ---------------------------------------------------------------------------
+$(OBJDIR)/%.o: $(OBJDIR)/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Windows resource: .rc -> .o (via windres)
+# ---------------------------------------------------------------------------
+$(XWIN_RES): $(XWIN_RC) | $(FIXUP_HEADERS)
+	@mkdir -p $(dir $@)
+	@echo "  WINDRES $<"
+	@$(WINDRES) $(DEFINES) --include-dir $(OBJDIR)/include --include-dir . --include-dir $(TOPSRCDIR)/include --include-dir $(PROJECTROOT) --include-dir $(TOPSRCDIR)/hw/xwin -i $< -o $@
+
+# ---------------------------------------------------------------------------
+# Explicit rules for generated sources (override pattern rule priority)
+# ---------------------------------------------------------------------------
+$(OBJDIR)/hw/xwin/winprefslex.o: $(OBJDIR)/hw/xwin/winprefslex.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(OBJDIR)/hw/xwin/winprefsyacc.o: $(OBJDIR)/hw/xwin/winprefsyacc.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(OBJDIR)/dix/initatoms.o: $(OBJDIR)/dix/initatoms.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Flex/Bison: winprefs lexer and parser
+# ---------------------------------------------------------------------------
+$(OBJDIR)/hw/xwin/winprefslex.c: hw/xwin/winprefslex.l $(OBJDIR)/hw/xwin/winprefsyacc.h
+	@mkdir -p $(dir $@)
+	@echo "  FLEX    $<"
+	@$(FLEX) -o $@ $<
+
+$(OBJDIR)/hw/xwin/winprefsyacc.c $(OBJDIR)/hw/xwin/winprefsyacc.h: hw/xwin/winprefsyacc.y
+	@mkdir -p $(dir $@)
+	@echo "  BISON   $<"
+	@$(BISON) -d -o $(OBJDIR)/hw/xwin/winprefsyacc.c $<
+
+# ---------------------------------------------------------------------------
+# Generated source: initatoms.c (needs bash)
+# ---------------------------------------------------------------------------
+$(OBJDIR)/dix/initatoms.c: dix/generate-atoms dix/BuiltInAtoms
+	@mkdir -p $(dir $@)
+	@echo "  GEN     $@"
+	@bash dix/generate-atoms dix/BuiltInAtoms $@
+
+# ---------------------------------------------------------------------------
+# Generated GL/WGL wrappers (needs python3 + lxml)
+# ---------------------------------------------------------------------------
+GLX_GEN_SCRIPT := hw/xwin/glx/gen_gl_wrappers.py hw/xwin/glx/reg.py
+
+$(OBJDIR)/hw/xwin/glx/generated_gl_wrappers.c: $(GLX_GEN_SCRIPT) hw/xwin/glx/gl.xml glx/dispatch.h
+	@mkdir -p $(dir $@)
+	@echo "  GEN     $@"
+	@cd hw/xwin/glx && python3 gen_gl_wrappers.py -outfile $(abspath $@) -dispatchheader $(abspath glx/dispatch.h) -staticwrappers
+
+$(OBJDIR)/hw/xwin/glx/generated_wgl_wrappers.c: $(GLX_GEN_SCRIPT) hw/xwin/glx/wgl.xml
+	@mkdir -p $(dir $@)
+	@echo "  GEN     $@"
+	@cd hw/xwin/glx && python3 gen_gl_wrappers.py -registry wgl.xml -prefix wgl -outfile $(abspath $@) -preresolve -nodbgcount
+
+$(OBJDIR)/hw/xwin/glx/glwrap.o:     $(OBJDIR)/hw/xwin/glx/generated_gl_wrappers.c
+$(OBJDIR)/hw/xwin/glx/wgl_ext_api.o: $(OBJDIR)/hw/xwin/glx/generated_wgl_wrappers.c

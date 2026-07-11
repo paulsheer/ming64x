@@ -91,7 +91,7 @@ SOFTWARE.
 #define XSERV_t
 #define TRANS_SERVER
 #define TRANS_REOPEN
-#include <X11/Xtrans/Xtrans.h>
+#include <X11/xtrans/Xtrans.h>
 #include <X11/Xauth.h>
 #include <X11/X.h>
 #include <X11/Xproto.h>
@@ -1098,6 +1098,7 @@ ResetHosts(const char *display)
                 if ((family == FamilyInternet &&
                      ((hp = _XGethostbyname(hostname, hparams)) != 0)) ||
                     ((hp = _XGethostbyname(hostname, hparams)) != 0)) {
+                    memset(&saddr, 0, sizeof(saddr));
                     saddr.sa.sa_family = hp->h_addrtype;
                     len = sizeof(saddr.sa);
                     if ((family =
@@ -1916,7 +1917,7 @@ siHostnameAddrMatch(int family, void *addr, int len,
         char hostname[SI_HOSTNAME_MAXLEN];
         int f, hostaddrlen;
         void *hostaddr;
-        char **addrlist;
+        const char **addrlist;
 
         if (siAddrLen >= sizeof(hostname))
             return FALSE;

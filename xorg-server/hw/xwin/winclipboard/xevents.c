@@ -213,7 +213,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 
     BOOL fSetClipboardData = TRUE;
     char *pszReturnData = NULL;
-    UINT codepage;
+    UINT codepage = 0;
     wchar_t *pwszUnicodeStr = NULL;
     HGLOBAL hGlobal = NULL;
     char *pszGlobalData = NULL;
@@ -425,7 +425,7 @@ winClipboardFlushXEvents(HWND hwnd,
         {
             char *xtpText_value = NULL;
             int xtpText_nitems;
-            UINT codepage;
+            UINT codepage = 0;
 
             xcb_selection_request_event_t *selection_request =  (xcb_selection_request_event_t *)event;
 #ifdef _DEBUG

@@ -26,6 +26,8 @@
 #ifndef SYSTEMD_LOGIND_H
 #define SYSTEMD_LOGIND_H
 
+#include <unistd.h>
+
 #ifdef SYSTEMD_LOGIND
 int systemd_logind_init(void);
 void systemd_logind_fini(void);

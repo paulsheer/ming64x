@@ -236,14 +236,15 @@ XkbFreeGeomShapes(XkbGeometryPtr geom, int first, int count, Bool freeAll)
 
 /***====================================================================***/
 
-void
-XkbFreeGeomOverlayKeys(XkbOverlayRowPtr row, int first, int count, Bool freeAll)
-{
-    _XkbFreeGeomLeafElems(freeAll, first, count,
-                          &row->num_keys, &row->sz_keys,
-                          (char **) &row->keys, sizeof(XkbOverlayKeyRec));
-    return;
-}
+// not used in the server  paulsheer@gmail.com
+// void
+// XkbFreeGeomOverlayKeys(XkbOverlayRowPtr row, int first, int count, Bool freeAll)
+// {
+//     _XkbFreeGeomLeafElems(freeAll, first, count,
+//                           &row->num_keys, &row->sz_keys,
+//                           (char **) &row->keys, sizeof(XkbOverlayKeyRec));
+//     return;
+// }
 
 /***====================================================================***/
 

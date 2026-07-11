@@ -64,7 +64,7 @@ X Window System is a trademark of The Open Group.
 #endif
 #include "Xlibint.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)
 #define inline __inline
 #endif
 

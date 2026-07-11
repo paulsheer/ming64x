@@ -180,7 +180,7 @@ winCheckScreenAiglxIsSupported(ScreenPtr pScreen)
 
   if (g_fXdmcpEnabled)
     return TRUE;
-    return FALSE;
+  return FALSE;
 }
 
 void

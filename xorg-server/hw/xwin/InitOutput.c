@@ -34,6 +34,8 @@ from The Open Group.
 
 #include "win.h"
 
+#include <stdlib.h>
+#define putenv _putenv
 #include "dix/dix_priv.h"
 #include "dix/screenint_priv.h"
 #include "os/ddx_priv.h"

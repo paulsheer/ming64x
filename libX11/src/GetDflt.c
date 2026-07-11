@@ -140,7 +140,7 @@ InitDefaults(
      */
      
     if (dpy->xdefaults == NULL) {
-	#ifdef _MSC_VER
+	#if defined(_MSC_VER) || defined(__MINGW64__)
 	const char *slashDotXdefaults = ".Xdefaults";
 	#else
 	const char *slashDotXdefaults = "/.Xdefaults";
@@ -154,7 +154,7 @@ InitDefaults(
     }
 
     if (!(xenv = getenv ("XENVIRONMENT"))) {
-	#ifdef _MSC_VER
+	#if defined(_MSC_VER) || defined(__MINGW64__)
 	const char *slashDotXdefaultsDash = ".Xdefaults-";
 	#else
 	const char *slashDotXdefaultsDash = "/.Xdefaults-";

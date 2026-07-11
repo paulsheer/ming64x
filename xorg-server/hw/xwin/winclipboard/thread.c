@@ -41,6 +41,7 @@
 #include <pthread.h>
 #include "windisplay.h"
 #include "misc.h"
+#include "os/ddx_priv.h"
 #include "winmsg.h"
 
 #include <xcb/xcb.h>

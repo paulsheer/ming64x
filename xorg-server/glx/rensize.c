@@ -30,11 +30,13 @@
 
 #include <dix-config.h>
 
+#include "glheader.h"
 #include <GL/gl.h>
 #include "glxserver.h"
 #include "GL/glxproto.h"
 #include "unpack.h"
 #include "indirect_size.h"
+#include "indirect_size_get.h"
 #include "indirect_reqsize.h"
 
 #define SWAPL(a) \

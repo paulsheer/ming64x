@@ -38,6 +38,7 @@
 #include "win.h"
 #include <commctrl.h>
 
+#include "mi/mi_priv.h"
 #include "mi/mipointer_priv.h"
 
 #include "winprefs.h"

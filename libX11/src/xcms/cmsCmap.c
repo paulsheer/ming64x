@@ -42,7 +42,7 @@
 #include "Cmap.h"
 #include "Cv.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)
 #undef CreateWindow
 #endif
 

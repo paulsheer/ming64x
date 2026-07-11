@@ -41,21 +41,21 @@ winBlockHandler(ScreenPtr pScreen, void *pTimeout)
     winScreenPriv(pScreen);
 
 #ifndef HAS_DEVWINDOWS
-    struct timeval **tvp = pTimeout;
+    int *timeoutp = pTimeout;
 
-    if (*tvp != NULL) {
+    if (timeoutp != NULL) {
       if (GetQueueStatus(QS_ALLINPUT | QS_ALLPOSTMESSAGE) != 0) {
         /* If there are still messages to process on the Windows message
            queue, make sure select() just polls rather than blocking.
         */
-        *(int*)pTimeout = 0;
+        *timeoutp = 0;
       }
       else {
         /* Otherwise, lacking /dev/windows, we must wake up again in
            a reasonable time to check the Windows message queue. without
            noticeable delay.
          */
-        *(int*)pTimeout = 1;
+        *timeoutp = 1;
       }
     }
 #endif

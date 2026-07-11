@@ -80,6 +80,9 @@ Equipment Corporation.
 #include <X11/X.h>
 #include <X11/Xos.h>            /* for unistd.h  */
 #include <X11/Xproto.h>
+#ifdef WIN32
+#include <mmsystem.h>
+#endif
 #include <X11/fonts/font.h>
 #include <X11/fonts/fontstruct.h>
 #include <X11/fonts/libxfont2.h>
@@ -157,6 +160,8 @@ dix_main(int argc, char *argv[], char *envp[])
 
     #ifdef WIN32
 
+    extern Status XInitThreads(void);
+
     if (InitWSA()<0)
     {
       printf("Error initialising WSA\n");
@@ -167,6 +172,7 @@ dix_main(int argc, char *argv[], char *envp[])
        XInitThreads has to be called before
        any xlib function is called (aoccording to the man page) */
     XInitThreads();
+    timeBeginPeriod(1);
     /* change the current directory to the directory where the vcxsrv.exe executable is installed.
        This is needed because the font directories are relative to the current directory.
      */

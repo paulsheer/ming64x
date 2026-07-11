@@ -133,12 +133,24 @@ struct _XtransConnFd {
 
 #endif
 
+#ifdef WIN32
+struct readahead_buf {
+    unsigned char *data;
+    int alloced;
+    int written;
+    int avail;
+};
+#endif
+
 struct _XtransConnInfo {
     struct _Xtransport     *transptr;
     int		index;
     char	*priv;
     int		flags;
     int		fd;
+#ifdef WIN32
+    struct readahead_buf buf;
+#endif
     char	*port;
     int		family;
     char	*addr;

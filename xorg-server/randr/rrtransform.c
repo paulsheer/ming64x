@@ -22,6 +22,7 @@
 
 #include "randrstr.h"
 #include "rrtransform.h"
+#include <math.h>
 
 void
 RRTransformInit(RRTransformPtr transform)

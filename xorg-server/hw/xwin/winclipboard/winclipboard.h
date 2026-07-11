@@ -27,7 +27,7 @@
 #ifndef WINCLIPBOARD_H
 #define WINCLIPBOARD_H
 
-#include <x11/Xdefs.h>
+#include <X11/Xdefs.h>
 #include <xcb/xcb.h>
 #include <X11/Xmd.h> // for BOOL type
 

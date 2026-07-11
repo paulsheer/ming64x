@@ -42,6 +42,7 @@
  */
 
 #include <dix-config.h>
+#include <math.h>
 
 #include "dix/cursor_priv.h"
 #include "dix/dix_priv.h"

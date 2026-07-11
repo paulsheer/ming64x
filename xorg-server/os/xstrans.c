@@ -13,4 +13,4 @@
 #define SO_BINDRETRYCOUNT 0  // do not try to bind again when it fails, this will speed up searching for a free listening port
 #endif
 
-#include <X11/Xtrans/transport.c>
+#include <X11/xtrans/transport.c>

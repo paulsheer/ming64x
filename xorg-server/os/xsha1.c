@@ -252,10 +252,10 @@ x_sha1_final(void *ctx, unsigned char result[20])
     return 1;
 }
 
-#else                           /* Use OpenSSL's libcrypto */
+#else                           /* Use built-in SHA1 */
 
-#include <stddef.h>             /* buggy openssl/sha.h wants size_t */
-#include <openssl/sha.h>
+#include <stddef.h>
+#include "os/opensslsha1.h"
 
 void *
 x_sha1_init(void)

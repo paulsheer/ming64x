@@ -145,7 +145,11 @@ typedef CRITICAL_SECTION _glthread_Mutex;
 
 #endif                          /* WIN32_THREADS */
 
+#ifdef __MINGW32__
+#define __THREAD_INITIAL_EXEC
+#else
 #define __THREAD_INITIAL_EXEC __declspec( thread )
+#endif
 
 /*
  * BeOS threads. R5.x required.

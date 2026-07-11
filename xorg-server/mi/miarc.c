@@ -63,8 +63,12 @@ SOFTWARE.
 #include "mifpoly.h"
 #include "mifillarc.h"
 
+#if 0
 #ifdef _MSC_VER
 #define hypot _hypot
+#define HAVE_CBRT
+#endif
+#else
 #define HAVE_CBRT
 #endif
 

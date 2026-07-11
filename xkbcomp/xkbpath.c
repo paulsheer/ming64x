@@ -399,8 +399,10 @@ XkbFindFileInPath(const char *name, unsigned type, char **pathRtrn)
         }
         snprintf(buf, sizeof(buf), "%s/%s/%s", includePath[i], typeDir, name);
         file = fopen(buf, "r");
-        if (file != NULL)
+        if (file != NULL) {
+
             break;
+        }
     }
 
     if ((file != NULL) && (pathRtrn != NULL))

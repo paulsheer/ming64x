@@ -1,150 +1,104 @@
-/* config.h  */
+/* config.h.  Generated from config.h.in by configure.  */
+/* config.h.in.  Generated from configure.ac by autoheader.  */
 
-#ifndef  __PTW32_CONFIG_H
-#define  __PTW32_CONFIG_H
+#ifndef __PTW32_CONFIG_H
+#define __PTW32_CONFIG_H
 
-/*********************************************************************
- * Defaults: see target specific redefinitions below.
- *********************************************************************/
+/* Define to 1 if you have the `calloc' function. */
+#define HAVE_CALLOC 1
 
-/* We're building the pthreads-win32 library */
-#define  __PTW32_BUILD
+/* Define if CPU_AFFINITY is supported */
+#define HAVE_CPU_AFFINITY 1
 
-/* CPU affinity */
-#define HAVE_CPU_AFFINITY
+/* Define to 1 if you have the <errno.h> header file. */
+#define HAVE_ERRNO_H 1
 
-/* Do we know about the C type sigset_t? */
-#undef HAVE_SIGSET_T
+/* Define to 1 if you have the <inttypes.h> header file. */
+#define HAVE_INTTYPES_H 1
 
-/* Define if you have the <signal.h> header file.  */
-#undef HAVE_SIGNAL_H
+/* Define if your compiler knows about mode_t */
+#define HAVE_MODE_T 1
 
-/* Define if you have the Borland TASM32 or compatible assembler.  */
-#undef HAVE_TASM32
+/* Define to 1 if you have the <signal.h> header file. */
+#define HAVE_SIGNAL_H 1
 
-/* Define if you don't have Win32 DuplicateHandle. (eg. WinCE) */
-#undef NEED_DUPLICATEHANDLE
+/* Define if your compiler knows about sigset_t */
+/* #undef HAVE_SIGSET_T */
 
-/* Define if you don't have Win32 _beginthreadex. (eg. WinCE) */
-#undef NEED_CREATETHREAD
+/* Define to 1 if you have the <stdint.h> header file. */
+#define HAVE_STDINT_H 1
 
-/* Define if you don't have Win32 errno. (eg. WinCE) */
-#undef NEED_ERRNO
+/* Define to 1 if you have the <stdio.h> header file. */
+#define HAVE_STDIO_H 1
 
-/* Define if you don't have Win32 calloc. (eg. WinCE)  */
-#undef NEED_CALLOC
+/* Define to 1 if you have the <stdlib.h> header file. */
+#define HAVE_STDLIB_H 1
 
-/* Define if you don't have Win32 semaphores. (eg. WinCE 2.1 or earlier)  */
-#undef NEED_SEM
+/* Define to 1 if you have the <strings.h> header file. */
+#define HAVE_STRINGS_H 1
 
-/* Define if you need to convert string parameters to unicode. (eg. WinCE)  */
-#undef NEED_UNICODE_CONSTS
+/* Define to 1 if you have the <string.h> header file. */
+#define HAVE_STRING_H 1
 
-/* Define if your C (not C++) compiler supports "inline" functions. */
-#undef HAVE_C_INLINE
+/* Define if your compiler knows about struct timespec */
+#define HAVE_STRUCT_TIMESPEC 1
 
-/* Do we know about type mode_t? */
-#undef HAVE_MODE_T
+/* Define to 1 if you have the <sys/stat.h> header file. */
+#define HAVE_SYS_STAT_H 1
 
-/*
- * Define if GCC has atomic builtins, i.e. __sync_* intrinsics
- * __sync_lock_* is implemented in mingw32 gcc 4.5.2 at least
- * so this define does not turn those on or off. If you get an
- * error from __sync_lock* then consider upgrading your gcc.
- */
-#undef HAVE_GCC_ATOMIC_BUILTINS
+/* Define to 1 if you have the <sys/types.h> header file. */
+#define HAVE_SYS_TYPES_H 1
 
-/* Define if you have the timespec struct */
-#define HAVE_STRUCT_TIMESPEC
+/* Define to 1 if you have the <time.h> header file. */
+#define HAVE_TIME_H 1
 
-/* Define if you don't have the GetProcessAffinityMask() */
-#undef NEED_PROCESS_AFFINITY_MASK
+/* Define to 1 if you have the <unistd.h> header file. */
+#define HAVE_UNISTD_H 1
 
-/* Define if your version of Windows TLSGetValue() clears WSALastError
- * and calling SetLastError() isn't enough restore it. You'll also need to
- * link against wsock32.lib (or libwsock32.a for MinGW).
- */
-#undef RETAIN_WSALASTERROR
+/* Define to 1 if you have the `_beginthreadex' function. */
+#define HAVE__BEGINTHREADEX 1
 
-/*
-# ----------------------------------------------------------------------
-# The library can be built with some alternative behaviour to better
-# facilitate development of applications on Win32 that will be ported
-# to other POSIX systems.
-#
-# Nothing described here will make the library non-compliant and strictly
-# compliant applications will not be affected in any way, but
-# applications that make assumptions that POSIX does not guarantee are
-# not strictly compliant and may fail or misbehave with some settings.
-#
-#  __PTW32_THREAD_ID_REUSE_INCREMENT
-# Purpose:
-# POSIX says that applications should assume that thread IDs can be
-# recycled. However, Solaris (and some other systems) use a [very large]
-# sequence number as the thread ID, which provides virtual uniqueness.
-# This provides a very high but finite level of safety for applications
-# that are not meticulous in tracking thread lifecycles e.g. applications
-# that call functions which target detached threads without some form of
-# thread exit synchronisation.
-#
-# Usage:
-# Set to any value in the range: 0 <= value < 2^wordsize.
-# Set to 0 to emulate reusable thread ID behaviour like Linux or *BSD.
-# Set to 1 for unique thread IDs like Solaris (this is the default).
-# Set to some factor of 2^wordsize to emulate smaller word size types
-# (i.e. will wrap sooner). This might be useful to emulate some embedded
-# systems.
-#
-# define  __PTW32_THREAD_ID_REUSE_INCREMENT 0
-#
-# ----------------------------------------------------------------------
- */
-#undef  __PTW32_THREAD_ID_REUSE_INCREMENT
+/* Define if you do not have calloc */
+/* #undef NEED_CALLOC */
 
+/* Define if you do not have _beginthreadex */
+/* #undef NEED_CREATETHREAD */
 
-/*********************************************************************
- * Target specific groups
- *
- * If you find that these are incorrect or incomplete please report it
- * to the pthreads-win32 maintainer. Thanks.
- *********************************************************************/
-#if defined(WINCE)
-#  undef  HAVE_CPU_AFFINITY
-#  define NEED_DUPLICATEHANDLE
-#  define NEED_CREATETHREAD
-#  define NEED_ERRNO
-#  define NEED_CALLOC
-#  define NEED_FTIME
-/* #  define NEED_SEM */
-#  define NEED_UNICODE_CONSTS
-#  define NEED_PROCESS_AFFINITY_MASK
-/* This may not be needed */
-#  define RETAIN_WSALASTERROR
+/* Define if DuplicateHandle is unsupported */
+/* #undef NEED_DUPLICATEHANDLE */
+
+/* Define if you do not have errno */
+/* #undef NEED_ERRNO */
+
+/* Define to the address where bug reports for this package should be sent. */
+#define PACKAGE_BUGREPORT ""
+
+/* Define to the full name of this package. */
+#define PACKAGE_NAME "pthreads4w"
+
+/* Define to the full name and version of this package. */
+#define PACKAGE_STRING "pthreads4w git"
+
+/* Define to the one symbol short name of this package. */
+#define PACKAGE_TARNAME "pthreads4w"
+
+/* Define to the home page for this package. */
+#define PACKAGE_URL ""
+
+/* Define to the version of this package. */
+#define PACKAGE_VERSION "git"
+
+/* Define to 1 if all of the C90 standard headers exist (not just the ones
+   required in a freestanding environment). This macro is provided for
+   backward compatibility; new code need not use it. */
+#define STDC_HEADERS 1
+
+/* Define to `__inline__' or `__inline' if that's what the C compiler
+   calls it, or to nothing if 'inline' is not supported under any name.  */
+#ifndef __cplusplus
+/* #undef inline */
 #endif
 
-#if defined(_UWIN)
-#  define HAVE_MODE_T
-#  define HAVE_STRUCT_TIMESPEC
-#  define HAVE_SIGNAL_H
-#endif
-
-#if defined(__GNUC__)
-#  define HAVE_C_INLINE
-#endif
-
-#if defined(__BORLANDC__)
-#endif
-
-#if defined(__WATCOMC__)
-#endif
-
-#if defined(__DMC__)
-#define HAVE_SIGNAL_H
 #define HAVE_C_INLINE
-#endif
 
-#if defined(_MSC_VER) && _MSC_VER >= 1900
-#define HAVE_STRUCT_TIMESPEC
 #endif
-
-#endif /*  __PTW32_CONFIG_H */

@@ -147,6 +147,7 @@ ProcessIncludeFile(IncludeStmt * stmt,
     mapToUse->compiled = True;
     *file_rtrn = mapToUse;
     *merge_rtrn = stmt->merge;
+
     return True;
 }
 

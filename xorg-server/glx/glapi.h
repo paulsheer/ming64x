@@ -104,14 +104,16 @@ _GLAPI_EXPORT extern __THREAD_INITIAL_EXEC void * _mesa_glapi_tls_Context;
 # define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) _mesa_glapi_tls_Context
 #endif
 
+#ifndef SERVEXTERN
 #ifdef INSERVER
-#define SERVEXTERN _declspec(dllimport)
+#define SERVEXTERN __declspec(dllimport)
 #else
-#define SERVEXTERN _declspec(dllexport)
+#define SERVEXTERN __declspec(dllexport)
+#endif
 #endif
 
-SERVEXTERN struct _glapi_table *_mesa_glapi_Dispatch;
-SERVEXTERN void *_glapi_Context;
+extern SERVEXTERN struct _glapi_table *_mesa_glapi_Dispatch;
+extern SERVEXTERN void *_glapi_Context;
 SERVEXTERN void
 _glapi_destroy_multithread(void);
 

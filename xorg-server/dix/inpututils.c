@@ -39,6 +39,8 @@
 #include "eventstr.h"
 #include "scrnintstr.h"
 #include "optionstr.h"
+#include <math.h>
+
 
 /* Check if a button map change is okay with the device.
  * Returns -1 for BadValue, as it collides with MappingBusy. */
@@ -718,7 +720,7 @@ verify_internal_event(const InternalEvent *ev)
         ErrorF("dix: invalid event type %d\n", ev->any.header);
 
         for (i = 0; i < sizeof(xEvent); i++, data++) {
-            ErrorF("%02hhx ", *data);
+            ErrorF("%02x ", (unsigned char)*data);
 
             if ((i % 8) == 7)
                 ErrorF("\n");

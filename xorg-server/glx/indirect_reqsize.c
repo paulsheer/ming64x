@@ -30,6 +30,7 @@
 
 #include "glxserver.h"
 #include "indirect_size.h"
+#include "indirect_size_get.h"
 #include "indirect_reqsize.h"
 
 #ifdef HAVE_FUNC_ATTRIBUTE_ALIAS

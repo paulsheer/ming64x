@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
 #ifdef __CYGWIN__
 #include <sys/select.h>
 #endif
@@ -58,6 +59,7 @@ typedef int pid_t;
 #include <X11/Xwindows.h>
 
 /* Local headers */
+#include "os/ddx_priv.h"
 #include "winwindow.h"
 #include "winprefs.h"
 #include "window.h"
@@ -2255,7 +2257,7 @@ winApplyHints(WMInfoPtr pWMInfo, xcb_window_t iWindow, HWND hWnd, HWND * zstyle,
 
     if (!IsWindow (hWnd))
     {
-        ErrorF("Windows window 0x%x has become invalid, so returning without applying hints\n",hWnd);
+        ErrorF("Windows window 0x%llx has become invalid, so returning without applying hints\n",(unsigned long long)hWnd);
         return;
     }
 

@@ -275,7 +275,7 @@
 #undef MITSHM
 
 /* Disable some debugging code */
-#define NDEBUG 1
+#undef NDEBUG
 
 /* Enable some debugging code */
 #undef DEBUG

@@ -20,9 +20,9 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <dix-config.h>
 #define FUNC	shadowUpdateRotate16
 #define Data	CARD16
 
-#include <dix-config.h>
 
 #include "shrotpack.h"

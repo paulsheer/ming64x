@@ -40,7 +40,7 @@ in this Software without prior written authorization from The Open Group.
 #define LIBXCURSOR "cygXcursor-1.dll"
 #endif
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)
 #include <X11/XWindows.h>
 typedef HANDLE XModuleType;
 #define dlsym GetProcAddress
@@ -62,7 +62,7 @@ open_library (void)
     XModuleType	module;
     for (;;)
     {
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW64__)
 	module =  LoadLibrary(library);
 #else
 	module =  dlopen(library, RTLD_LAZY);

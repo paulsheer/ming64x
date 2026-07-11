@@ -34,6 +34,7 @@
 #include "glxserver.h"
 #include "unpack.h"
 #include "indirect_size.h"
+#include "indirect_size_get.h"
 #include "indirect_dispatch.h"
 
 #include "glfunctions.h"

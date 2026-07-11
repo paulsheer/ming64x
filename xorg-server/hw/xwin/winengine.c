@@ -173,7 +173,7 @@ winSetEngine(ScreenPtr pScreen)
             winSetEngineFunctionsShadowDDNL(pScreen);
             break;
         default:
-            FatalError ("winSetEngine - Invalid engine type %d\n",pScreenInfo->dwEngine);
+            FatalError ("winSetEngine - Invalid engine type %d\n",(int)pScreenInfo->dwEngine);
         }
         return TRUE;
     }
