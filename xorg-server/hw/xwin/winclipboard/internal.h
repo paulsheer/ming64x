@@ -91,6 +91,19 @@ void
  winClipboardUNIXtoDOS(char **ppszData, int iLength);
 
 /*
+ * imageconv.c
+ */
+
+void
+ winClipboardImageInit(void);
+
+void
+ winClipboardImageShutdown(void);
+
+BOOL
+ winClipboardImageCodecsAvailable(void);
+
+/*
  * winclipboardthread.c
  */
 
@@ -102,7 +115,18 @@ typedef struct
     xcb_atom_t atomCompoundText;
     xcb_atom_t atomTargets;
     xcb_atom_t atomIncr;
+    /* Image clipboard target atoms (Win32 clipboard -> X11 selection) */
+    xcb_atom_t atomImagePng;
+    xcb_atom_t atomImageBmp;
+    xcb_atom_t atomImageJpeg;
 } ClipboardAtoms;
+
+/* Encode the Win32 clipboard image (CF_DIB) into the requested image target
+   (image/bmp, image/png or image/jpeg).  Caller must hold the clipboard open;
+   on success *ppvData is a malloc()'d buffer the caller frees. */
+BOOL
+ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
+                         void **ppvData, unsigned long *pcbData);
 
 /*
  * winclipboardwndproc.c

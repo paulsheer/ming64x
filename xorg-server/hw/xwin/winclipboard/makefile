@@ -2,6 +2,7 @@ LIBRARY = libXWinclipboard
 
 CSRCS = \
 	textconv.c \
+	imageconv.c \
 	thread.c \
 	wndproc.c \
 	xevents.c

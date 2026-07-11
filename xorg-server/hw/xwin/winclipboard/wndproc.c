@@ -213,19 +213,20 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
 
         /*
-         * Do not take ownership of the X11 selections when something
-         * other than CF_TEXT or CF_UNICODETEXT has been copied
-         * into the Win32 clipboard.
+         * Do not take ownership of the X11 selections when the Win32
+         * clipboard holds neither text (CF_TEXT/CF_UNICODETEXT) nor an image
+         * (CF_DIB; Windows synthesises CF_DIB from CF_BITMAP/CF_DIBV5).
          */
         if (!IsClipboardFormatAvailable(CF_TEXT)
-            && !IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+            && !IsClipboardFormatAvailable(CF_UNICODETEXT)
+            && !IsClipboardFormatAvailable(CF_DIB)) {
 
             xcb_get_selection_owner_cookie_t cookie_get;
             xcb_get_selection_owner_reply_t *reply;
 
             winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                     "Clipboard does not contain CF_TEXT nor "
-                     "CF_UNICODETEXT.\n");
+                     "Clipboard does not contain CF_TEXT, CF_UNICODETEXT "
+                     "nor CF_DIB.\n");
 
             /*
              * We need to make sure that the X Server has processed
