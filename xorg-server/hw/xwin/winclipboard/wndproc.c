@@ -56,6 +56,7 @@
  */
 
 #define WIN_POLL_TIMEOUT	1
+#define WIN_POLL_TIMEOUT_DATA	30
 
 /*
  * References to external symbols
@@ -77,7 +78,6 @@ winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn
     int iConnNumber;
     struct timeval tv;
     int iReturn;
-    long endTime;
 
     winDebug("winProcessXEventsTimeout () - pumping X events, timeout %d seconds\n",
              iTimeoutSec);
@@ -85,10 +85,8 @@ winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn
     /* Get our connection number */
     iConnNumber = xcb_get_file_descriptor(conn);
 
-    endTime = GetTimeInMillis() + iTimeoutSec * 1000;
     /* Loop for X events */
     while (1) {
-        long remainingTime;
         fd_set fdsRead;
 
         /* Process X events */
@@ -108,15 +106,10 @@ winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn
         FD_ZERO(&fdsRead);
         FD_SET(iConnNumber, &fdsRead);
 
-        /* Adjust timeout */
-        remainingTime = endTime - GetTimeInMillis();
-
-        /* Break out if no time left */
-        if (remainingTime <= 0)
-            break;
-
-        tv.tv_sec = remainingTime / 1000;
-        tv.tv_usec = (remainingTime % 1000) * 1000;
+        /* Reset timeout each iteration: we only bail when no events
+           arrive for iTimeoutSec, not when the total time expires */
+        tv.tv_sec = iTimeoutSec;
+        tv.tv_usec = 0;
         /* Wait for an X event */
         iReturn = select(iConnNumber + 1,       /* Highest fds number */
                          &fdsRead,      /* Read mask */
@@ -223,10 +216,6 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             xcb_get_selection_owner_cookie_t cookie_get;
             xcb_get_selection_owner_reply_t *reply;
-
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                     "Clipboard does not contain CF_TEXT, CF_UNICODETEXT "
-                     "nor CF_DIB.\n");
 
             /*
              * We need to make sure that the X Server has processed
@@ -377,6 +366,10 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     { atoms->atomUTF8String,   0 },
                     { atoms->atomCompoundText, 1 },
                     { XCB_ATOM_STRING,         2 },
+                    { atoms->atomImagePng,     3 },
+                    { atoms->atomImageBmp,     4 },
+                    { atoms->atomImageJpeg,    5 },
+                    { atoms->atomImageGif,     6 },
                 };
 
             int best_priority = INT_MAX;
@@ -417,7 +410,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                                            conn,
                                            &data,
                                            atoms,
-                                           WIN_POLL_TIMEOUT);
+                                           WIN_POLL_TIMEOUT_DATA);
 
         /*
          * winProcessXEventsTimeout had better have seen a notify event,
@@ -442,6 +435,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             /* Paste no data, to satisfy required call to SetClipboardData */
             SetClipboardData(CF_UNICODETEXT, NULL);
             SetClipboardData(CF_TEXT, NULL);
+            SetClipboardData(CF_DIB, NULL);
           }
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT - Returning.\n");

@@ -218,7 +218,9 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     HGLOBAL hGlobal = NULL;
     char *pszGlobalData = NULL;
 
-    /* Retrieve the selection data and delete the property */
+    /* Retrieve the selection data and delete the property.  The delete flag
+       is essential for INCR: it signals the sender (via PropertyNotify) that
+       we're ready for the next chunk. */
     xcb_get_property_cookie_t cookie = xcb_get_property(conn,
                                                         TRUE,
                                                         iWindow,
@@ -237,9 +239,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
         after = reply->bytes_after;
         encoding = reply->type;
         format = reply->format;
-        // We assume format == 8 (i.e. data is a sequence of bytes).  It's not
-        // clear how anything else should be handled.
-        if (format != 8)
+        if (format != 8 && encoding != atoms->atomIncr)
             ErrorF("SelectionNotify: format is %d, proceeding as if it was 8\n", format);
     }
 
@@ -253,16 +253,21 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 
     /* INCR reply indicates the start of a incremental transfer */
     if (encoding == atoms->atomIncr) {
-        winDebug("winClipboardSelectionNotifyData: starting INCR, anticipated size %d\n", *(int *)value);
         data->incrsize = 0;
         data->incr = malloc(*(int *)value);
-        // XXX: if malloc failed, we have an error
         return WIN_XEVENTS_SUCCESS;
     }
     else if (data->incr) {
         /* If an INCR transfer is in progress ... */
         if (nitems == 0) {
-            winDebug("winClipboardSelectionNotifyData: ending INCR, actual size %ld\n", data->incrsize);
+            /* When encoding is NONE the property was already consumed by a
+               prior event (PropertyNotify vs SelectionNotify race).  Ignore
+               the stale read and wait for the real zero-length terminator
+               whose encoding will be the actual image type. */
+            if (encoding == XCB_ATOM_NONE) {
+                free(reply);
+                return WIN_XEVENTS_SUCCESS;
+            }
             /* a zero-length property indicates the end of the data */
             xtpText_value = data->incr;
             xtpText_encoding = encoding;
@@ -273,11 +278,29 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
         }
         else {
             /* Otherwise, continue appending the INCR data */
-            winDebug("winClipboardSelectionNotifyData: INCR, %ld bytes\n", nitems);
             data->incr = realloc(data->incr, data->incrsize + nitems);
             memcpy(data->incr + data->incrsize, value, nitems);
             data->incrsize = data->incrsize + nitems;
-            return WIN_XEVENTS_SUCCESS;
+
+            /* BMP files have bfSize at offset 2: detect completion
+               without waiting for a zero-length INCR terminator */
+            if (data->incrsize >= 14
+                && ((unsigned char *)data->incr)[0] == 'B'
+                && ((unsigned char *)data->incr)[1] == 'M') {
+                DWORD bfSize = *(DWORD *)((unsigned char *)data->incr + 2);
+                if (data->incrsize >= bfSize) {
+                    /* Treat transfer as complete */
+                    xtpText_value = data->incr;
+                    xtpText_encoding = encoding;
+                    xtpText_nitems = data->incrsize;
+                    /* Fall through to image processing below */
+                }
+                else {
+                    return WIN_XEVENTS_SUCCESS;
+                }
+            }
+            else
+                return WIN_XEVENTS_SUCCESS;
         }
     }
     else {
@@ -286,6 +309,56 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
         xtpText_value = value;
         xtpText_encoding = encoding;
         xtpText_nitems = nitems;
+    }
+
+    /* Diagnostic: print the encoding atom we received */
+    {
+        char *pszEncName = get_atom_name(conn, xtpText_encoding);
+        free(pszEncName);
+    }
+
+    /* Image data: decode to DIB and hand to the Windows clipboard */
+    if (xtpText_encoding == atoms->atomImagePng
+        || xtpText_encoding == atoms->atomImageBmp
+        || xtpText_encoding == atoms->atomImageJpeg
+        || xtpText_encoding == atoms->atomImageGif) {
+
+        void *pvDib = NULL;
+        SIZE_T cbDib = 0;
+
+        if (winClipboardDecodeImageToDib(xtpText_encoding, atoms,
+                                          xtpText_value, xtpText_nitems,
+                                          &pvDib, &cbDib)
+            && pvDib && cbDib) {
+            HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, cbDib);
+            if (hDib) {
+                void *pDst = GlobalLock(hDib);
+                if (pDst) {
+                    memcpy(pDst, pvDib, cbDib);
+                    GlobalUnlock(hDib);
+                    SetClipboardData(CF_DIB, hDib);
+                    fSetClipboardData = FALSE;
+                }
+                else {
+                    GlobalFree(hDib);
+                }
+            }
+            free(pvDib);
+        }
+        else {
+        }
+
+        /* Free the data returned from xcb_get_property */
+        free(reply);
+
+        /* Free any INCR data */
+        if (data->incr) {
+            free(data->incr);
+            data->incr = NULL;
+            data->incrsize = 0;
+        }
+
+        goto winClipboardFlushXEvents_SelectionNotify_Done;
     }
 
     if (xtpText_encoding == atoms->atomUTF8String) {
@@ -397,6 +470,142 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 }
 
 /*
+ * Wait for the requestor to delete a property, using xcb_get_property polling.
+ * Avoids dependency on PropertyNotify event delivery which requires per-client
+ * event mask manipulation on foreign windows.
+ */
+static BOOL
+winWaitForPropertyDelete(xcb_connection_t *conn, xcb_window_t window,
+                         xcb_atom_t property, int timeoutSec)
+{
+    DWORD start = GetTickCount();
+    int loopCount = 0;
+
+    while (1) {
+        /* Read 0 bytes — just check the property type.  XCB_ATOM_NONE means
+           the property has been deleted. */
+        xcb_get_property_cookie_t cookie =
+            xcb_get_property(conn, 0, window, property, XCB_ATOM_ANY, 0, 0);
+        xcb_get_property_reply_t *reply =
+            xcb_get_property_reply(conn, cookie, NULL);
+
+        if (!reply) {
+            return FALSE;
+        }
+
+        if (reply->type == XCB_ATOM_NONE) {
+            free(reply);
+            return TRUE;
+        }
+
+        free(reply);
+
+        if (xcb_connection_has_error(conn)) {
+            return FALSE;
+        }
+
+        {
+            DWORD elapsed = GetTickCount() - start;
+            if (elapsed >= (DWORD) timeoutSec * 1000) {
+                return FALSE;
+            }
+        }
+
+        loopCount++;
+        Sleep(20);
+    }
+}
+
+/*
+ * Send image data to an X11 client via the INCR (incremental transfer)
+ * protocol.  Used when the encoded image exceeds xcb_get_maximum_request_length.
+ *
+ *   1. Write the INCR start property (type = INCR, data = lower-bound size)
+ *      and send SelectionNotify.
+ *   2. For each chunk: wait for the receiver to delete the property, then
+ *      write the next chunk and send SelectionNotify.
+ *   3. When all data is sent, write a zero-length final chunk.
+ *
+ * Note: the SelectionNotify target field always carries the actual
+ * conversion target (e.g. image/bmp), as required by the ICCCM.  Only
+ * the property type differentiates the INCR start from data chunks.
+ */
+static BOOL
+winSendImageIncr(xcb_connection_t *conn, xcb_window_t requestor,
+                 xcb_atom_t property, xcb_atom_t selection,
+                 xcb_atom_t target, const void *data, unsigned long len,
+                 ClipboardAtoms *atoms)
+{
+    uint32_t max_chunk = xcb_get_maximum_request_length(conn) * 4 - 24;
+    /* Cap at 256KB: even with BIG-REQUESTS the server can't store multi-MB
+       property data in a single atom.  Each INCR chunk must fit in a property. */
+    if (max_chunk > 262144)
+        max_chunk = 262144;
+    unsigned long offset = 0;
+    unsigned long total_chunks;
+    unsigned long chunk_num = 0;
+    const unsigned char *buf = (const unsigned char *) data;
+    uint32_t lower_bound = (uint32_t) len;
+
+    total_chunks = (len + max_chunk - 1) / max_chunk;
+
+    /* Step 1: INCR start notification.
+       ICCCM: SelectionNotify.target == actual conversion target (e.g. image/bmp).
+       Only the property type is INCR to signal incremental transfer. */
+    {
+        xcb_selection_notify_event_t notify = { 0 };
+
+        xcb_change_property(conn, XCB_PROP_MODE_REPLACE, requestor, property,
+                            atoms->atomIncr, 32, 1, &lower_bound);
+
+        notify.response_type = XCB_SELECTION_NOTIFY;
+        notify.requestor = requestor;
+        notify.selection = selection;
+        notify.target = target;          /* actual target, per ICCCM */
+        notify.property = property;
+        notify.time = XCB_CURRENT_TIME;
+        xcb_send_event(conn, FALSE, requestor, 0, (char *) &notify);
+        xcb_flush(conn);
+    }
+
+    /* Step 2: send data chunks */
+    while (offset < len) {
+        unsigned long chunk = len - offset;
+        xcb_selection_notify_event_t notify = { 0 };
+
+        if (!winWaitForPropertyDelete(conn, requestor, property, 30)) {
+            return FALSE;
+        }
+
+        if (chunk > max_chunk)
+            chunk = max_chunk;
+
+        /* xcb_change_property auto-generates PropertyNotify on the requestor
+           window — no need to also send SelectionNotify, which would cause
+           a double-read and premature end-of-transfer detection. */
+        xcb_change_property(conn, XCB_PROP_MODE_REPLACE, requestor, property,
+                            target, 8, chunk, buf + offset);
+        xcb_flush(conn);
+
+        offset += chunk;
+        chunk_num++;
+    }
+
+    /* Step 3: zero-length final chunk to signal end of transfer */
+    {
+        if (!winWaitForPropertyDelete(conn, requestor, property, 30)) {
+            return FALSE;
+        }
+
+        xcb_change_property(conn, XCB_PROP_MODE_REPLACE, requestor, property,
+                            target, 8, 0, NULL);
+        xcb_flush(conn);
+    }
+
+    return TRUE;
+}
+
+/*
  * Process any pending X events
  */
 
@@ -446,10 +655,10 @@ winClipboardFlushXEvents(HWND hwnd,
                 && selection_request->target != atomUTF8String
                 && selection_request->target != atomCompoundText
                 && selection_request->target != atomTargets
-                && selection_request->target != atoms->atomImagePng
                 && selection_request->target != atoms->atomImageBmp
-                && selection_request->target != atoms->atomImageJpeg) {
-                /* Abort */
+                && selection_request->target != atoms->atomImagePng
+                && selection_request->target != atoms->atomImageJpeg
+                && selection_request->target != atoms->atomImageGif) {
                 fAbort = TRUE;
                 goto winClipboardFlushXEvents_SelectionRequest_Done;
             }
@@ -472,12 +681,10 @@ winClipboardFlushXEvents(HWND hwnd,
                 }
 
                 if (IsClipboardFormatAvailable(CF_DIB)) {
-                    /* image/bmp needs no codec; png/jpeg need GDI+ */
+                    atomTargetArr[nTargets++] = atoms->atomImagePng;
                     atomTargetArr[nTargets++] = atoms->atomImageBmp;
-                    if (winClipboardImageCodecsAvailable()) {
-                        atomTargetArr[nTargets++] = atoms->atomImagePng;
-                        atomTargetArr[nTargets++] = atoms->atomImageJpeg;
-                    }
+                    atomTargetArr[nTargets++] = atoms->atomImageJpeg;
+                    atomTargetArr[nTargets++] = atoms->atomImageGif;
                 }
 
                 /* Try to change the property */
@@ -520,12 +727,11 @@ winClipboardFlushXEvents(HWND hwnd,
             }
 
             /* Handle image targets: serve the Win32 clipboard image (CF_DIB)
-               re-encoded as the requested MIME type.  This branch is
-               self-contained and exits via the shared cleanup label, so the
-               text path below is left untouched. */
-            if (selection_request->target == atoms->atomImagePng
-                || selection_request->target == atoms->atomImageBmp
-                || selection_request->target == atoms->atomImageJpeg) {
+               encoded as PNG, BMP, or JPEG depending on what was requested. */
+            if (selection_request->target == atoms->atomImageBmp
+                || selection_request->target == atoms->atomImagePng
+                || selection_request->target == atoms->atomImageJpeg
+                || selection_request->target == atoms->atomImageGif) {
                 void *pvImage = NULL;
                 unsigned long cbImage = 0;
                 uint32_t maxreqsize;
@@ -533,7 +739,6 @@ winClipboardFlushXEvents(HWND hwnd,
                 xcb_generic_error_t *img_error;
                 xcb_selection_notify_event_t imgSelection;
 
-                /* (Re)open the clipboard so GetClipboardData(CF_DIB) is valid */
                 CloseClipboard();
                 if (!OpenClipboard(hwnd)) {
                     ErrorF("winClipboardFlushXEvents - SelectionRequest - "
@@ -544,7 +749,6 @@ winClipboardFlushXEvents(HWND hwnd,
                 }
                 fCloseClipboard = TRUE;
 
-                /* No image on the clipboard: refuse this conversion cleanly */
                 if (!IsClipboardFormatAvailable(CF_DIB)) {
                     fAbort = TRUE;
                     goto winClipboardFlushXEvents_SelectionRequest_Done;
@@ -560,19 +764,18 @@ winClipboardFlushXEvents(HWND hwnd,
                     goto winClipboardFlushXEvents_SelectionRequest_Done;
                 }
 
-                /* Single X request only (INCR send is not implemented); refuse
-                   oversized images rather than truncating them. */
                 maxreqsize = xcb_get_maximum_request_length(conn) * 4 - 24;
                 if (cbImage > maxreqsize) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "image size %lu greater than maximum %u\n",
-                           cbImage, maxreqsize);
+                    if (!winSendImageIncr(conn, selection_request->requestor,
+                                          selection_request->property,
+                                          selection_request->selection,
+                                          selection_request->target,
+                                          pvImage, cbImage, atoms)) {
+                    }
                     free(pvImage);
-                    fAbort = TRUE;
                     goto winClipboardFlushXEvents_SelectionRequest_Done;
                 }
 
-                /* Hand the buffer to the shared cleanup label for freeing */
                 xtpText_value = pvImage;
 
                 img_cookie = xcb_change_property_checked(conn,
@@ -590,7 +793,6 @@ winClipboardFlushXEvents(HWND hwnd,
                     goto winClipboardFlushXEvents_SelectionRequest_Done;
                 }
 
-                /* Notify the requestor that the conversion is complete */
                 imgSelection.response_type = XCB_SELECTION_NOTIFY;
                 imgSelection.requestor = selection_request->requestor;
                 imgSelection.selection = selection_request->selection;
@@ -835,14 +1037,27 @@ winClipboardFlushXEvents(HWND hwnd,
                     ErrorF("winClipboardFlushXEvents - SelectionNotify - "
                            "Conversion to format %d refused.\n",
                            selection_notify->target);
+                    free(event);
                     return WIN_XEVENTS_FAILED;
                 }
 
             if (selection_notify->target == atomTargets) {
-              return winClipboardSelectionNotifyTargets(hwnd, iWindow, conn, data, atoms);
+              int result = winClipboardSelectionNotifyTargets(hwnd, iWindow, conn, data, atoms);
+              free(event);
+              return result;
             }
 
-            return winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
+            {
+                int result = winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
+                free(event);
+                if (result == WIN_XEVENTS_NOTIFY_DATA || result == WIN_XEVENTS_NOTIFY_TARGETS || result == WIN_XEVENTS_FAILED) {
+                    return result;
+                }
+                /* WIN_XEVENTS_SUCCESS: INCR in progress, continue loop to
+                   drain any events already buffered by xcb during the
+                   synchronous GetProperty reply read */
+                continue;
+            }
         }
 
         case XCB_SELECTION_CLEAR:
@@ -856,8 +1071,16 @@ winClipboardFlushXEvents(HWND hwnd,
             /* If INCR is in progress, collect the data */
             if (data->incr &&
                 (property_notify->atom == atoms->atomLocalProperty) &&
-                (property_notify->state == XCB_PROPERTY_NEW_VALUE))
-                return winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
+                (property_notify->state == XCB_PROPERTY_NEW_VALUE)) {
+                int result;
+                result = winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
+                free(event);
+                if (result == WIN_XEVENTS_NOTIFY_DATA || result == WIN_XEVENTS_NOTIFY_TARGETS || result == WIN_XEVENTS_FAILED) {
+                    return result;
+                }
+                /* WIN_XEVENTS_SUCCESS: continue loop to drain buffered events */
+                continue;
+            }
 
             break;
         }
@@ -897,15 +1120,13 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
-                /*
-                   XXX: there are all kinds of wacky edge cases we might need here:
-                   - we own windows clipboard, but neither PRIMARY nor CLIPBOARD have an owner, so we should disown it?
-                   - root window is taking ownership?
-                 */
-
-                /* If we are the owner of the most recently owned selection, don't go all recursive :) */
-                if ((lastOwnedSelectionIndex != CLIP_OWN_NONE) &&
-                    (s_iOwners[lastOwnedSelectionIndex] == iWindow)) {
+                /* If we are the new owner, do not take the Windows clipboard
+                   again — we already own it.  This prevents an infinite loop
+                   where WM_CLIPBOARDUPDATE reasserts X11 ownership, the X
+                   server echoes it back as an XFixes event, and we respond by
+                   emptying the Windows clipboard, which generates yet another
+                   WM_CLIPBOARDUPDATE. */
+                if (e->owner == iWindow) {
                     winDebug("winClipboardFlushXEvents - Ownership changed to us, aborting.\n");
                     break;
                 }
@@ -928,9 +1149,10 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
-                /* Advertise regular text and unicode */
+                /* Advertise regular text, unicode and image formats */
                 SetClipboardData(CF_UNICODETEXT, NULL);
                 SetClipboardData(CF_TEXT, NULL);
+                SetClipboardData(CF_DIB, NULL);
 
                 /* Release the clipboard */
                 if (!CloseClipboard()) {

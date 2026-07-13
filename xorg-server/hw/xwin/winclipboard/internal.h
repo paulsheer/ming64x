@@ -94,19 +94,6 @@ void
  * imageconv.c
  */
 
-void
- winClipboardImageInit(void);
-
-void
- winClipboardImageShutdown(void);
-
-BOOL
- winClipboardImageCodecsAvailable(void);
-
-/*
- * winclipboardthread.c
- */
-
 typedef struct
 {
     xcb_atom_t atomClipboard;
@@ -119,14 +106,25 @@ typedef struct
     xcb_atom_t atomImagePng;
     xcb_atom_t atomImageBmp;
     xcb_atom_t atomImageJpeg;
+    xcb_atom_t atomImageGif;
 } ClipboardAtoms;
 
 /* Encode the Win32 clipboard image (CF_DIB) into the requested image target
-   (image/bmp, image/png or image/jpeg).  Caller must hold the clipboard open;
+   (image/bmp only — no PNG/JPEG encoder is linked).
+   Caller must hold the clipboard open;
    on success *ppvData is a malloc()'d buffer the caller frees. */
 BOOL
  winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
                          void **ppvData, unsigned long *pcbData);
+
+/* Decode X11 image data (image/bmp, image/png, image/jpeg) back to a
+   packed DIB (BITMAPINFOHEADER + pixel data) for SetClipboardData(CF_DIB).
+   PNG and JPEG are decoded via stb_image.
+   On success *ppvDib is a malloc()'d buffer the caller frees. */
+BOOL
+ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
+                               const void *data, unsigned long len,
+                               void **ppvDib, SIZE_T *pcbDib);
 
 /*
  * winclipboardwndproc.c

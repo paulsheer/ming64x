@@ -410,8 +410,13 @@ XWIN_RC  := hw/xwin/XWin.rc
 XWIN_OBJS += $(OBJDIR)/hw/xwin/winprefslex.o $(OBJDIR)/hw/xwin/winprefsyacc.o
 
 # --- hw/xwin/winclipboard ---
-WINCLIP_SRCS := textconv.c thread.c wndproc.c xevents.c
+WINCLIP_SRCS := textconv.c thread.c wndproc.c xevents.c imageconv.c
 WINCLIP_OBJS := $(WINCLIP_SRCS:%.c=$(OBJDIR)/hw/xwin/winclipboard/%.o)
+
+# --- giflib ---
+GIFLIB_DIR := $(TOPSRCDIR)/giflib
+GIFLIB_SRCS := dgif_lib.c egif_lib.c gifalloc.c gif_err.c gif_hash.c quantize.c
+GIFLIB_OBJS := $(GIFLIB_SRCS:%.c=$(OBJDIR)/giflib/%.o)
 
 # --- miext/damage ---
 MIEXT_DAMAGE_SRCS := damage.c
@@ -445,7 +450,8 @@ ALL_OBJS := $(PROJECTROOT)/pthreadlight/pthreadlight.o \
 	$(CONFIG_OBJS) $(PSEUDORAMIX_OBJS) $(XFIXES_OBJS) $(GLX_OBJS) \
 	$(GLX_WIN_OBJS) $(XWIN_OBJS) $(XWIN_RES) $(WINCLIP_OBJS) \
 	$(MIEXT_DAMAGE_OBJS) $(MIEXT_SHADOW_OBJS) \
-	$(MIEXT_SYNC_OBJS) $(MIEXT_ROOTLESS_OBJS)
+	$(MIEXT_SYNC_OBJS) $(MIEXT_ROOTLESS_OBJS) \
+	$(GIFLIB_OBJS)
 
 ALL_OBJS += $(OBJDIR)/dix/initatoms.o
 
@@ -465,6 +471,8 @@ $(XWIN_OBJS):           CFLAGS += -I$(OBJDIR)/hw/xwin -I$(TOPSRCDIR)/glx -I$(TOP
 $(GLX_OBJS):            CFLAGS += -I$(TOPSRCDIR)/glx
 $(GLX_WIN_OBJS):        CFLAGS += -I$(TOPSRCDIR)/glx -I$(OBJDIR)/hw/xwin/glx -I$(TOPSRCDIR)/hw/xwin/glx
 $(XKB_OBJS):            CFLAGS += -I$(TOPSRCDIR)
+$(GIFLIB_OBJS):         CFLAGS += -I$(GIFLIB_DIR) -DHAVE_REALLOCARRAY=1
+$(WINCLIP_OBJS):        CFLAGS += -I$(GIFLIB_DIR)
 
 $(XKBCOMP_OBJS):        CFLAGS += -I$(XKBCOMP_SRCDIR) \
 		-I$(PROJECTROOT)/libX11/include -I$(PROJECTROOT)/libX11/src \
