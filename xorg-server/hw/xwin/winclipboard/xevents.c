@@ -221,17 +221,10 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     /* Retrieve the selection data and delete the property.  The delete flag
        is essential for INCR: it signals the sender (via PropertyNotify) that
        we're ready for the next chunk. */
-    xcb_get_property_cookie_t cookie = xcb_get_property(conn,
-                                                        TRUE,
-                                                        iWindow,
-                                                        atoms->atomLocalProperty,
-                                                        XCB_GET_PROPERTY_TYPE_ANY,
-                                                        0,
-                                                        INT_MAX);
+    xcb_get_property_cookie_t cookie = xcb_get_property(conn, TRUE, iWindow, atoms->atomLocalProperty, XCB_GET_PROPERTY_TYPE_ANY, 0, INT_MAX);
     xcb_get_property_reply_t *reply = xcb_get_property_reply(conn, cookie, NULL);
     if (!reply) {
-        ErrorF("winClipboardFlushXEvents - SelectionNotify - "
-               "XGetWindowProperty () failed\n");
+        ErrorF("winClipboardFlushXEvents - SelectionNotify - XGetWindowProperty () failed\n");
         goto winClipboardFlushXEvents_SelectionNotify_Done;
     } else {
         nitems = xcb_get_property_value_length(reply);
@@ -326,9 +319,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
         void *pvDib = NULL;
         SIZE_T cbDib = 0;
 
-        if (winClipboardDecodeImageToDib(xtpText_encoding, atoms,
-                                          xtpText_value, xtpText_nitems,
-                                          &pvDib, &cbDib)
+        if (winClipboardDecodeImageToDib(xtpText_encoding, atoms, xtpText_value, xtpText_nitems, &pvDib, &cbDib)
             && pvDib && cbDib) {
             HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, cbDib);
             if (hDib) {
@@ -402,8 +393,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     /* NOTE: iUnicodeLen includes space for null terminator */
     pwszUnicodeStr = malloc(sizeof(wchar_t) * iUnicodeLen);
     if (!pwszUnicodeStr) {
-        ErrorF("winClipboardFlushXEvents - SelectionNotify "
-               "malloc failed for pwszUnicodeStr, aborting.\n");
+        ErrorF("winClipboardFlushXEvents - SelectionNotify malloc failed for pwszUnicodeStr, aborting.\n");
 
         /* Abort */
         goto winClipboardFlushXEvents_SelectionNotify_Done;
@@ -420,8 +410,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 
     /* Check that global memory was allocated */
     if (!hGlobal) {
-        ErrorF("winClipboardFlushXEvents - SelectionNotify "
-               "GlobalAlloc failed, aborting: %08x\n", (unsigned int)GetLastError());
+        ErrorF("winClipboardFlushXEvents - SelectionNotify GlobalAlloc failed, aborting: %08x\n", (unsigned int)GetLastError());
 
         /* Abort */
         goto winClipboardFlushXEvents_SelectionNotify_Done;
@@ -430,8 +419,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     /* Obtain a pointer to the global memory */
     pszGlobalData = GlobalLock(hGlobal);
     if (pszGlobalData == NULL) {
-        ErrorF("winClipboardFlushXEvents - Could not lock global "
-               "memory for clipboard transfer\n");
+        ErrorF("winClipboardFlushXEvents - Could not lock global memory for clipboard transfer\n");
 
         /* Abort */
         goto winClipboardFlushXEvents_SelectionNotify_Done;
@@ -605,6 +593,604 @@ winSendImageIncr(xcb_connection_t *conn, xcb_window_t requestor,
     return TRUE;
 }
 
+
+static int
+handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
+                       ClipboardConversionData *data, ClipboardAtoms *atoms,
+                       xcb_atom_t atomClipboard, xcb_atom_t atomUTF8String,
+                       xcb_atom_t atomCompoundText, xcb_atom_t atomTargets,
+                       xcb_selection_request_event_t *selection_request)
+{
+    char *xtpText_value = NULL;
+    const char *pszGlobalData = NULL;
+    HGLOBAL hGlobal = NULL;
+    char *pszConvertData = NULL;
+    BOOL fAbort = FALSE;
+    BOOL fCloseClipboard = FALSE;
+    int xtpText_nitems;
+    UINT codepage = 0;
+ 
+    /* selection_request is now a parameter */
+ 
+    /* Abort if invalid target type */
+    if (selection_request->target != XCB_ATOM_STRING
+        && selection_request->target != atomUTF8String
+        && selection_request->target != atomCompoundText
+        && selection_request->target != atomTargets
+        && selection_request->target != atoms->atomImageBmp
+        && selection_request->target != atoms->atomImagePng
+        && selection_request->target != atoms->atomImageJpeg
+        && selection_request->target != atoms->atomImageGif) {
+        fAbort = TRUE;
+        goto done;
+    } 
+ 
+    /* Handle targets type of request */
+    if (selection_request->target == atomTargets) {
+        /* Advertise only the targets we can actually satisfy from the
+            current Win32 clipboard contents.  IsClipboardFormatAvailable
+            does not require the clipboard to be open. */
+#define SOME_BIG         64
+        xcb_atom_t atomTargetArr[SOME_BIG * 2];
+        int nTargets = 0;
+ 
+        atomTargetArr[nTargets++] = atomTargets;
+ 
+        BOOL fHasRegisteredPng = FALSE;
+        BOOL fHasRegisteredGif = FALSE;
+        BOOL fHasRegisteredJpeg = FALSE;
+        BOOL fHasRegisteredBmp = FALSE;
+        BOOL fHasRegisteredText = FALSE;
+        BOOL fHasRegisteredAnyImage = FALSE;
+        const UINT regPNG = 49352, regJFIF = 49351, regGIF = 49350;
+ 
+        /*
+            * Begin by putting the order the way the applicaiton wants it:
+            */
+        if (OpenClipboard(hwnd)) {
+            UINT fmt = 0;
+            while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                if (0) {
+                    /* pass */
+                } else if (fmt == CF_UNICODETEXT && !fHasRegisteredText) {
+                    atomTargetArr[nTargets++] = XCB_ATOM_STRING;
+                    atomTargetArr[nTargets++] = atomUTF8String;
+                    fHasRegisteredText = FALSE;
+                } else if (fmt == CF_TEXT && !fHasRegisteredText) {
+                    atomTargetArr[nTargets++] = XCB_ATOM_STRING;
+                    atomTargetArr[nTargets++] = atomUTF8String;
+                    fHasRegisteredText = FALSE;
+                } else if (fmt == CF_HDROP) {
+                    HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
+                    if (!hDrop)
+                        continue; 
+                    UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+                    UINT f;
+                    for (f = 0; f < nFiles; f++) {
+                        wchar_t wpath[MAX_PATH];
+                        wchar_t *ext;
+                        if (!DragQueryFileW(hDrop, f, wpath, MAX_PATH))
+                            continue; 
+                        ext = wcsrchr(wpath, L'.');
+                        if (!ext)
+                            continue; 
+                        if (!_wcsicmp(ext, L".gif") && !fHasRegisteredGif) {
+                            atomTargetArr[nTargets++] = atoms->atomImageGif;
+                            fHasRegisteredAnyImage = fHasRegisteredGif = TRUE;
+                        } else if ((!_wcsicmp(ext, L".png")) && !fHasRegisteredPng) {
+                            atomTargetArr[nTargets++] = atoms->atomImagePng;
+                            fHasRegisteredAnyImage = fHasRegisteredPng = TRUE;
+                        } else if ((!_wcsicmp(ext, L".jpg") || !_wcsicmp(ext, L".jpeg") || !_wcsicmp(ext, L".jfif")) && !fHasRegisteredJpeg) {
+                            atomTargetArr[nTargets++] = atoms->atomImageJpeg;
+                            fHasRegisteredAnyImage = fHasRegisteredJpeg = TRUE;
+                        } else if (!_wcsicmp(ext, L".bmp") && !fHasRegisteredBmp) {
+                            atomTargetArr[nTargets++] = atoms->atomImageBmp;
+                            fHasRegisteredAnyImage = fHasRegisteredBmp = TRUE;
+                        } 
+                    } 
+                } else if (fmt == regPNG && !fHasRegisteredPng) {
+                    atomTargetArr[nTargets++] = atoms->atomImagePng;
+                    fHasRegisteredAnyImage = fHasRegisteredPng = TRUE;
+                } else if (fmt == regJFIF && !fHasRegisteredJpeg ) {
+                    atomTargetArr[nTargets++] = atoms->atomImageJpeg;
+                    fHasRegisteredAnyImage = fHasRegisteredJpeg = TRUE;
+                } else if (fmt == regGIF && !fHasRegisteredGif) {
+                    atomTargetArr[nTargets++] = atoms->atomImageGif;
+                    fHasRegisteredAnyImage = fHasRegisteredGif = TRUE;
+                } 
+                if (nTargets > SOME_BIG)
+                    break; 
+            } 
+            CloseClipboard();
+        } 
+ 
+        if (fHasRegisteredAnyImage) {
+            /*
+                * Append any missing defaults in priority order.
+                * Lossless encoding first, except GIF which is crusty:
+                */
+            if (!fHasRegisteredPng)
+                atomTargetArr[nTargets++] = atoms->atomImagePng;
+            atomTargetArr[nTargets++] = atoms->atomImageBmp;
+            if (!fHasRegisteredJpeg)
+                atomTargetArr[nTargets++] = atoms->atomImageJpeg;
+            if (!fHasRegisteredGif)
+                atomTargetArr[nTargets++] = atoms->atomImageGif;
+        } 
+ 
+        /* Try to change the property */
+        xcb_void_cookie_t cookie = xcb_change_property_checked(conn,
+                                    XCB_PROP_MODE_REPLACE,
+                                    selection_request->requestor,
+                                    selection_request->property,
+                                    XCB_ATOM_ATOM,
+                                    32,
+                                    nTargets,
+                                    (unsigned char *) atomTargetArr);
+        xcb_generic_error_t *error;
+        if ((error = xcb_request_check(conn, cookie))) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                    "xcb_change_property failed");
+            free(error);
+        } 
+ 
+        /* Setup selection notify xevent */
+        xcb_selection_notify_event_t eventSelection;
+        eventSelection.response_type = XCB_SELECTION_NOTIFY;
+        eventSelection.requestor = selection_request->requestor;
+        eventSelection.selection = selection_request->selection;
+        eventSelection.target = selection_request->target;
+        eventSelection.property = selection_request->property;
+        eventSelection.time = selection_request->time;
+ 
+        /*
+            * Notify the requesting window that
+            * the operation has completed
+            */
+        cookie = xcb_send_event_checked(conn, FALSE,
+                                        eventSelection.requestor,
+                                        0, (char *) &eventSelection);
+        if ((error = xcb_request_check(conn, cookie))) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                    "xcb_send_event() failed\n");
+        } 
+        return WIN_XEVENTS_SUCCESS;
+    } 
+ 
+    /* Handle image targets: serve the Win32 clipboard image (CF_DIB)
+        encoded as PNG, BMP, or JPEG depending on what was requested. */
+    if (selection_request->target == atoms->atomImageBmp
+        || selection_request->target == atoms->atomImagePng
+        || selection_request->target == atoms->atomImageJpeg
+        || selection_request->target == atoms->atomImageGif) {
+        BOOL fHaveImageFile = FALSE;
+        void *pvImage = NULL;
+        unsigned long cbImage = 0;
+        xcb_void_cookie_t img_cookie;
+        xcb_generic_error_t *img_error;
+        xcb_selection_notify_event_t imgSelection;
+ 
+        if (!OpenClipboard(hwnd)) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - OpenClipboard () failed: %08x\n", (unsigned int) GetLastError());
+            fAbort = TRUE;
+            goto done;
+        } 
+        fCloseClipboard = TRUE;
+ 
+        if (IsClipboardFormatAvailable(CF_HDROP)) {
+            HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
+            if (hDrop) {
+                UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+                UINT f;
+                for (f = 0; f < nFiles && !fHaveImageFile; f++) {
+                    wchar_t wpath[MAX_PATH];
+                    wchar_t *ext;
+                    if (!DragQueryFileW(hDrop, f, wpath,
+                                        MAX_PATH))
+                        continue; 
+                    ext = wcsrchr(wpath, L'.');
+                    if (ext && (!_wcsicmp(ext, L".gif")
+                        || !_wcsicmp(ext, L".png")
+                        || !_wcsicmp(ext, L".jpg")
+                        || !_wcsicmp(ext, L".jpeg")
+                        || !_wcsicmp(ext, L".jfif")
+                        || !_wcsicmp(ext, L".bmp")))
+                        fHaveImageFile = TRUE;
+                } 
+            } 
+        } 
+ 
+        /*
+            * Try CF_HDROP: if a file with a matching extension is
+            * being copied from Explorer, serve its raw bytes directly.
+            */
+        if (fHaveImageFile && IsClipboardFormatAvailable(CF_HDROP)) {
+            HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
+            if (hDrop) {
+                UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+                UINT f;
+                for (f = 0; f < nFiles && pvImage == NULL; f++) {
+                    wchar_t wpath[MAX_PATH];
+                    wchar_t *ext;
+                    HANDLE hFile;
+                    DWORD cbFile, cbRead;
+                    if (!DragQueryFileW(hDrop, f, wpath, MAX_PATH))
+                        continue; 
+                    ext = wcsrchr(wpath, L'.');
+                    if (!ext)
+                        continue; 
+                    /* Map extension to requested target */
+                    if (selection_request->target == atoms->atomImageGif) {
+                        if (_wcsicmp(ext, L".gif"))
+                            continue; 
+                    } else if (selection_request->target == atoms->atomImagePng) {
+                        if (_wcsicmp(ext, L".png"))
+                            continue; 
+                    } else if (selection_request->target == atoms->atomImageJpeg) {
+                        if (_wcsicmp(ext, L".jpg") && _wcsicmp(ext, L".jpeg") && _wcsicmp(ext, L".jfif"))
+                            continue; 
+                    } else if (selection_request->target == atoms->atomImageBmp) {
+                        if (_wcsicmp(ext, L".bmp"))
+                            continue; 
+                    } else {
+                        continue; 
+                    } 
+ 
+                    hFile = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+                    if (hFile == INVALID_HANDLE_VALUE)
+                        continue; 
+ 
+                    cbFile = GetFileSize(hFile, NULL);
+                    if (cbFile > 0 && cbFile != INVALID_FILE_SIZE) {
+                        pvImage = malloc(cbFile);
+                        if (pvImage) {
+                            if (ReadFile(hFile, pvImage, cbFile, &cbRead, NULL) && cbRead == cbFile) {
+                                cbImage = cbFile;
+                                ErrorF("winClipboardFlushXEvents - raw copy from file: %lu bytes (no encode)\n", (unsigned long)cbFile);
+                            } else {
+                                free(pvImage);
+                                pvImage = NULL;
+                            } 
+                        } 
+                    } 
+                    CloseHandle(hFile);
+                } 
+            } 
+        } 
+ 
+        UINT regFmt = 0;
+        if (selection_request->target == atoms->atomImageGif)
+            regFmt = 49350;
+        else if (selection_request->target == atoms->atomImageJpeg)
+            regFmt = 49351;
+        else if (selection_request->target == atoms->atomImagePng)
+            regFmt = 49352;
+ 
+        if (pvImage == NULL) {
+            /*
+                * Try to serve raw bytes directly when the corresponding
+                * registered format is available.  This preserves the
+                * original file data (e.g. animated GIFs from MSWord).
+                */
+            if (regFmt != 0 && IsClipboardFormatAvailable(regFmt)) {
+                HANDLE h = GetClipboardData(regFmt);
+                if (h) {
+                    SIZE_T cb = GlobalSize(h);
+                    const void *p = GlobalLock(h);
+                    if (p && cb > 0) {
+                        pvImage = malloc(cb);
+                        if (pvImage) {
+                            memcpy(pvImage, p, cb);
+                            cbImage = (unsigned long)cb;
+                            ErrorF("winClipboardFlushXEvents - raw copy: fmt=%u, %lu bytes (no encode)\n", regFmt, (unsigned long)cb);
+                        } 
+                    } 
+                } 
+            } 
+        } 
+ 
+        if (pvImage == NULL) {
+            if ((!winClipboardEncodeImage(selection_request->target, atoms, &pvImage, &cbImage)
+                    || pvImage == NULL || cbImage == 0)) {
+                ErrorF("winClipboardFlushXEvents - SelectionRequest - image encode failed\n");
+                free(pvImage);
+                fAbort = TRUE;
+                goto done;
+            } 
+            ErrorF("winClipboardFlushXEvents - encoded copy: fmt=%u, %lu bytes\n", regFmt, cbImage);
+        } 
+ 
+        if (cbImage > 262144) {
+            if (!winSendImageIncr(conn, selection_request->requestor,
+                                    selection_request->property,
+                                    selection_request->selection,
+                                    selection_request->target,
+                                    pvImage, cbImage, atoms)) {
+                ErrorF("winClipboardFlushXEvents - INCR send failed for %lu bytes\n", cbImage);
+                fAbort = TRUE;
+            } 
+            free(pvImage);
+            goto done;
+        } 
+ 
+        xtpText_value = pvImage;
+ 
+        img_cookie = xcb_change_property_checked(conn,
+                                    XCB_PROP_MODE_REPLACE,
+                                    selection_request->requestor,
+                                    selection_request->property,
+                                    selection_request->target,
+                                    8,
+                                    cbImage, pvImage);
+        if ((img_error = xcb_request_check(conn, img_cookie))) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - xcb_change_property failed for image\n");
+            free(img_error);
+            fAbort = TRUE;
+            goto done;
+        } 
+ 
+        imgSelection.response_type = XCB_SELECTION_NOTIFY;
+        imgSelection.requestor = selection_request->requestor;
+        imgSelection.selection = selection_request->selection;
+        imgSelection.target = selection_request->target;
+        imgSelection.property = selection_request->property;
+        imgSelection.time = selection_request->time;
+        img_cookie = xcb_send_event_checked(conn, FALSE,
+                                            imgSelection.requestor,
+                                            0, (char *) &imgSelection);
+        if ((img_error = xcb_request_check(conn, img_cookie))) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                    "xcb_send_event() failed for image\n");
+            free(img_error);
+        } 
+ 
+        goto done;
+    } 
+ 
+    /* Access the clipboard */
+    if (!OpenClipboard(hwnd)) {
+        ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                "OpenClipboard () failed: %08x\n", (unsigned int)GetLastError());
+ 
+        /* Abort */
+        fAbort = TRUE;
+        goto done;
+    } 
+ 
+    /* Indicate that clipboard was opened */
+    fCloseClipboard = TRUE;
+ 
+    /* Check that clipboard format is available */
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        static int count;       /* Hack to stop acroread spamming the log */
+        static HWND lasthwnd;   /* I've not seen any other client get here repeatedly? */
+ 
+        if (hwnd != lasthwnd)
+            count = 0;
+        count++;
+        if (count < 6)
+            ErrorF("winClipboardFlushXEvents - CF_UNICODETEXT is not "
+                    "available from Win32 clipboard.  Aborting %d.\n",
+                    count);
+        lasthwnd = hwnd;
+ 
+        /* Abort */
+        fAbort = TRUE;
+        goto done;
+    } 
+ 
+    /* Get a pointer to the clipboard text, in desired format */
+    /* Retrieve clipboard data */
+    hGlobal = GetClipboardData(CF_UNICODETEXT);
+ 
+    if (!hGlobal) {
+        if (GetLastError()==ERROR_CLIPBOARD_NOT_OPEN && g_fClipboardStarted)
+        {
+            ErrorF("We should not have received a SelectionRequest????\n"
+                    "The owner is the clipboard, but in reality it was"
+                    "an X window\n");
+            /* Set the owner to None */
+            if (fPrimarySelection) xcb_set_selection_owner_checked(conn, None, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
+            xcb_set_selection_owner_checked(conn, None, atoms->atomClipboard, XCB_CURRENT_TIME);
+        } 
+        ErrorF ("winClipboardFlushXEvents - SelectionRequest - "
+                "GetClipboardData () failed: %08x\n", (unsigned int)GetLastError());
+ 
+        /* Abort */
+        fAbort = TRUE;
+        goto done;
+    } 
+    pszGlobalData = (char *) GlobalLock(hGlobal);
+ 
+    /* Convert to target string style */
+    if (selection_request->target == XCB_ATOM_STRING) {
+        codepage = CP_ISO_8559_1; // code page identifier for iso-8559-1
+    } else if (selection_request->target == atomUTF8String) {
+        codepage = CP_UTF8; // code page identifier for utf8
+    } else if (selection_request->target == atomCompoundText) {
+        // COMPOUND_TEXT is complex, not (yet) implemented
+        pszGlobalData = "COMPOUND_TEXT not implemented";
+        codepage = CP_UTF8; // code page identifier for utf8
+    } 
+ 
+    /* Convert the UTF16 string to required encoding */
+    int iConvertDataLen = WideCharToMultiByte(codepage, 0,
+                                                (LPCWSTR) pszGlobalData, -1,
+                                                NULL, 0, NULL, NULL);
+    /* NOTE: iConvertDataLen includes space for null terminator */
+    pszConvertData = malloc(iConvertDataLen);
+    WideCharToMultiByte(codepage, 0,
+                        (LPCWSTR) pszGlobalData, -1,
+                        pszConvertData, iConvertDataLen, NULL, NULL);
+ 
+    /* Convert DOS string to UNIX string */
+    winClipboardDOStoUNIX(pszConvertData, strlen(pszConvertData));
+ 
+    xtpText_value = strdup(pszConvertData);
+    xtpText_nitems = strlen(pszConvertData);
+ 
+    /* data will fit into a single X request? (INCR not yet supported) */
+    {
+        uint32_t maxreqsize = xcb_get_maximum_request_length(conn);
+ 
+        /* covert to bytes and allow for allow for X_ChangeProperty request */
+        maxreqsize = maxreqsize*4 - 24;
+ 
+        if (xtpText_nitems > maxreqsize) {
+            ErrorF("winClipboardFlushXEvents - clipboard data size %d greater than maximum %u\n", xtpText_nitems, maxreqsize);
+ 
+            /* Abort */
+            fAbort = TRUE;
+            goto done;
+        } 
+    } 
+ 
+    /* Copy the clipboard text to the requesting window */
+    xcb_void_cookie_t cookie = xcb_change_property_checked(conn,
+                                XCB_PROP_MODE_REPLACE,
+                                selection_request->requestor,
+                                selection_request->property,
+                                selection_request->target,
+                                8,
+                                xtpText_nitems, xtpText_value);
+    xcb_generic_error_t *error;
+    if ((error = xcb_request_check(conn, cookie))) {
+        ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                "xcb_change_property failed\n");
+ 
+        /* Abort */
+        fAbort = TRUE;
+        goto done;
+    } 
+ 
+    /* Free the converted string */
+    free(pszConvertData);
+    pszConvertData = NULL;
+ 
+    /* Release the clipboard data */
+    GlobalUnlock(hGlobal);
+    pszGlobalData = NULL;
+    fCloseClipboard = FALSE;
+    CloseClipboard();
+ 
+    /* Clean up */
+    free(xtpText_value);
+    xtpText_value = NULL;
+ 
+    /* Setup selection notify event */
+    xcb_selection_notify_event_t eventSelection;
+    eventSelection.response_type = XCB_SELECTION_NOTIFY;
+    eventSelection.requestor = selection_request->requestor;
+    eventSelection.selection = selection_request->selection;
+    eventSelection.target = selection_request->target;
+    eventSelection.property = selection_request->property;
+    eventSelection.time = selection_request->time;
+ 
+    /* Notify the requesting window that the operation has completed */
+    cookie = xcb_send_event_checked(conn, FALSE,
+                                    eventSelection.requestor,
+                                    0, (char *) &eventSelection);
+    if ((error = xcb_request_check(conn, cookie))) {
+        ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                "xcb_send_event() failed\n");
+ 
+        /* Abort */
+        fAbort = TRUE;
+        goto done;
+    } 
+ 
+    done:
+    /* Free allocated resources */
+    if (xtpText_value) {
+        free(xtpText_value);
+    } 
+    free(pszConvertData);
+    if (hGlobal && pszGlobalData)
+        GlobalUnlock(hGlobal);
+ 
+    /*
+        * Send a SelectionNotify event to the requesting
+        * client when we abort.
+        */
+    if (fAbort) {
+        /* Setup selection notify event */
+        eventSelection.response_type = XCB_SELECTION_NOTIFY;
+        eventSelection.requestor = selection_request->requestor;
+        eventSelection.selection = selection_request->selection;
+        eventSelection.target = selection_request->target;
+        eventSelection.property = XCB_NONE;
+        eventSelection.time = selection_request->time;
+ 
+        /* Notify the requesting window that the operation is complete */
+        cookie = xcb_send_event_checked(conn, FALSE,
+                                        eventSelection.requestor,
+                                        0, (char *) &eventSelection);
+        if ((error = xcb_request_check(conn, cookie))) {
+            /*
+                * Should not be a problem if XSendEvent fails because
+                * the client may simply have exited.
+                */
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - "
+                    "xcb_send_event() failed for abort event.\n");
+        } 
+    } 
+ 
+    /* Close clipboard if it was opened */
+    if (fCloseClipboard) {
+        fCloseClipboard = FALSE;
+        CloseClipboard();
+    } 
+    return WIN_XEVENTS_SUCCESS;
+} 
+
+static int
+handleSelectionNotify(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
+                      ClipboardConversionData *data, ClipboardAtoms *atoms,
+                      xcb_atom_t atomTargets,
+                      xcb_selection_notify_event_t *selection_notify)
+{
+    if (selection_notify->property == XCB_NONE) {
+        ErrorF("winClipboardFlushXEvents - SelectionNotify - Conversion to format %d refused.\n", selection_notify->target);
+        free(selection_notify);
+        return WIN_XEVENTS_FAILED;
+    }
+
+    if (selection_notify->target == atomTargets) {
+        int result = winClipboardSelectionNotifyTargets(hwnd, iWindow, conn, data, atoms);
+        free(selection_notify);
+        return result;
+    }
+
+    int result = winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
+    free(selection_notify);
+    if (result == WIN_XEVENTS_NOTIFY_DATA
+        || result == WIN_XEVENTS_NOTIFY_TARGETS
+        || result == WIN_XEVENTS_FAILED)
+        return result;
+    return WIN_XEVENTS_SUCCESS;
+}
+
+static int
+handlePropertyNotify(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
+                     ClipboardConversionData *data, ClipboardAtoms *atoms,
+                     xcb_property_notify_event_t *property_notify)
+{
+    if (data->incr &&
+        property_notify->atom == atoms->atomLocalProperty &&
+        property_notify->state == XCB_PROPERTY_NEW_VALUE) {
+        int result = winClipboardSelectionNotifyData(hwnd, iWindow, conn,
+                                                      data, atoms);
+        free(property_notify);
+        if (result == WIN_XEVENTS_NOTIFY_DATA
+            || result == WIN_XEVENTS_NOTIFY_TARGETS
+            || result == WIN_XEVENTS_FAILED)
+            return result;
+        return WIN_XEVENTS_SUCCESS;
+    }
+
+    return WIN_XEVENTS_SUCCESS;
+}
+
 /*
  * Process any pending X events
  */
@@ -622,481 +1208,49 @@ winClipboardFlushXEvents(HWND hwnd,
     /* Process all pending events */
     xcb_generic_event_t *event;
     while ((event = xcb_poll_for_event(conn))) {
-        const char *pszGlobalData = NULL;
-        HGLOBAL hGlobal = NULL;
-        char *pszConvertData = NULL;
-        BOOL fAbort = FALSE;
-        BOOL fCloseClipboard = FALSE;
+        int result;
 
         /* Branch on the event type */
         switch (event->response_type & ~0x80) {
         case XCB_SELECTION_REQUEST:
-        {
-            char *xtpText_value = NULL;
-            int xtpText_nitems;
-            UINT codepage = 0;
-
-            xcb_selection_request_event_t *selection_request =  (xcb_selection_request_event_t *)event;
-#ifdef _DEBUG
-        if (g_iLogVerbose >= 3)
-        {
-            char *pszAtomName = NULL;
-
-            winDebug("SelectionRequest - target %d\n", selection_request->target);
-
-            pszAtomName = get_atom_name(conn, selection_request->target);
-            winDebug("SelectionRequest - Target atom name %s\n", pszAtomName);
-            free(pszAtomName);
-        }
-#endif
-
-            /* Abort if invalid target type */
-            if (selection_request->target != XCB_ATOM_STRING
-                && selection_request->target != atomUTF8String
-                && selection_request->target != atomCompoundText
-                && selection_request->target != atomTargets
-                && selection_request->target != atoms->atomImageBmp
-                && selection_request->target != atoms->atomImagePng
-                && selection_request->target != atoms->atomImageJpeg
-                && selection_request->target != atoms->atomImageGif) {
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
-            /* Handle targets type of request */
-            if (selection_request->target == atomTargets) {
-                /* Advertise only the targets we can actually satisfy from the
-                   current Win32 clipboard contents.  IsClipboardFormatAvailable
-                   does not require the clipboard to be open. */
-                xcb_atom_t atomTargetArr[8];
-                int nTargets = 0;
-
-                atomTargetArr[nTargets++] = atomTargets;
-
-                if (IsClipboardFormatAvailable(CF_UNICODETEXT)
-                    || IsClipboardFormatAvailable(CF_TEXT)) {
-                    atomTargetArr[nTargets++] = atomUTF8String;
-                    atomTargetArr[nTargets++] = XCB_ATOM_STRING;
-                    // atomCompoundText, not implemented (yet?)
-                }
-
-                if (IsClipboardFormatAvailable(CF_DIB)) {
-                    atomTargetArr[nTargets++] = atoms->atomImagePng;
-                    atomTargetArr[nTargets++] = atoms->atomImageBmp;
-                    atomTargetArr[nTargets++] = atoms->atomImageJpeg;
-                    atomTargetArr[nTargets++] = atoms->atomImageGif;
-                }
-
-                /* Try to change the property */
-                xcb_void_cookie_t cookie = xcb_change_property_checked(conn,
-                                          XCB_PROP_MODE_REPLACE,
-                                          selection_request->requestor,
-                                          selection_request->property,
-                                          XCB_ATOM_ATOM,
-                                          32,
-                                          nTargets,
-                                          (unsigned char *) atomTargetArr);
-                xcb_generic_error_t *error;
-                if ((error = xcb_request_check(conn, cookie))) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "xcb_change_property failed");
-                    free(error);
-                }
-
-                /* Setup selection notify xevent */
-                xcb_selection_notify_event_t eventSelection;
-                eventSelection.response_type = XCB_SELECTION_NOTIFY;
-                eventSelection.requestor = selection_request->requestor;
-                eventSelection.selection = selection_request->selection;
-                eventSelection.target = selection_request->target;
-                eventSelection.property = selection_request->property;
-                eventSelection.time = selection_request->time;
-
-                /*
-                 * Notify the requesting window that
-                 * the operation has completed
-                 */
-                cookie = xcb_send_event_checked(conn, FALSE,
-                                                eventSelection.requestor,
-                                                0, (char *) &eventSelection);
-                if ((error = xcb_request_check(conn, cookie))) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "xcb_send_event() failed\n");
-                }
-                break;
-            }
-
-            /* Handle image targets: serve the Win32 clipboard image (CF_DIB)
-               encoded as PNG, BMP, or JPEG depending on what was requested. */
-            if (selection_request->target == atoms->atomImageBmp
-                || selection_request->target == atoms->atomImagePng
-                || selection_request->target == atoms->atomImageJpeg
-                || selection_request->target == atoms->atomImageGif) {
-                void *pvImage = NULL;
-                unsigned long cbImage = 0;
-                uint32_t maxreqsize;
-                xcb_void_cookie_t img_cookie;
-                xcb_generic_error_t *img_error;
-                xcb_selection_notify_event_t imgSelection;
-
-                CloseClipboard();
-                if (!OpenClipboard(hwnd)) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "OpenClipboard () failed: %08x\n",
-                           (unsigned int) GetLastError());
-                    fAbort = TRUE;
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-                fCloseClipboard = TRUE;
-
-                if (!IsClipboardFormatAvailable(CF_DIB)) {
-                    fAbort = TRUE;
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-
-                if (!winClipboardEncodeImage(selection_request->target, atoms,
-                                             &pvImage, &cbImage)
-                    || pvImage == NULL || cbImage == 0) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "image encode failed\n");
-                    free(pvImage);
-                    fAbort = TRUE;
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-
-                maxreqsize = xcb_get_maximum_request_length(conn) * 4 - 24;
-                if (cbImage > maxreqsize) {
-                    if (!winSendImageIncr(conn, selection_request->requestor,
-                                          selection_request->property,
-                                          selection_request->selection,
-                                          selection_request->target,
-                                          pvImage, cbImage, atoms)) {
-                    }
-                    free(pvImage);
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-
-                xtpText_value = pvImage;
-
-                img_cookie = xcb_change_property_checked(conn,
-                                          XCB_PROP_MODE_REPLACE,
-                                          selection_request->requestor,
-                                          selection_request->property,
-                                          selection_request->target,
-                                          8,
-                                          cbImage, pvImage);
-                if ((img_error = xcb_request_check(conn, img_cookie))) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "xcb_change_property failed for image\n");
-                    free(img_error);
-                    fAbort = TRUE;
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-
-                imgSelection.response_type = XCB_SELECTION_NOTIFY;
-                imgSelection.requestor = selection_request->requestor;
-                imgSelection.selection = selection_request->selection;
-                imgSelection.target = selection_request->target;
-                imgSelection.property = selection_request->property;
-                imgSelection.time = selection_request->time;
-                img_cookie = xcb_send_event_checked(conn, FALSE,
-                                                    imgSelection.requestor,
-                                                    0, (char *) &imgSelection);
-                if ((img_error = xcb_request_check(conn, img_cookie))) {
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "xcb_send_event() failed for image\n");
-                    free(img_error);
-                }
-
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
-            /* Close clipboard in case we have it open already */
-            CloseClipboard();
-
-            /* Access the clipboard */
-            if (!OpenClipboard(hwnd)) {
-                ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                       "OpenClipboard () failed: %08x\n", (unsigned int)GetLastError());
-
-                /* Abort */
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
-            /* Indicate that clipboard was opened */
-            fCloseClipboard = TRUE;
-
-            /* Check that clipboard format is available */
-            if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) {
-                static int count;       /* Hack to stop acroread spamming the log */
-                static HWND lasthwnd;   /* I've not seen any other client get here repeatedly? */
-
-                if (hwnd != lasthwnd)
-                    count = 0;
-                count++;
-                if (count < 6)
-                    ErrorF("winClipboardFlushXEvents - CF_UNICODETEXT is not "
-                           "available from Win32 clipboard.  Aborting %d.\n",
-                           count);
-                lasthwnd = hwnd;
-
-                /* Abort */
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
-            /* Get a pointer to the clipboard text, in desired format */
-            /* Retrieve clipboard data */
-            hGlobal = GetClipboardData(CF_UNICODETEXT);
-
-            if (!hGlobal) {
-                if (GetLastError()==ERROR_CLIPBOARD_NOT_OPEN && g_fClipboardStarted)
-                {
-                    ErrorF("We should not have received a SelectionRequest????\n"
-                            "The owner is the clipboard, but in reality it was"
-                            "an X window\n");
-                    /* Set the owner to None */
-                    if (fPrimarySelection) xcb_set_selection_owner_checked(conn, None, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
-                    xcb_set_selection_owner_checked(conn, None, atoms->atomClipboard, XCB_CURRENT_TIME);
-                }
-                ErrorF ("winClipboardFlushXEvents - SelectionRequest - "
-                        "GetClipboardData () failed: %08x\n", (unsigned int)GetLastError());
-
-                /* Abort */
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-            pszGlobalData = (char *) GlobalLock(hGlobal);
-
-            /* Convert to target string style */
-            if (selection_request->target == XCB_ATOM_STRING) {
-                codepage = CP_ISO_8559_1; // code page identifier for iso-8559-1
-            } else if (selection_request->target == atomUTF8String) {
-                codepage = CP_UTF8; // code page identifier for utf8
-            } else if (selection_request->target == atomCompoundText) {
-                // COMPOUND_TEXT is complex, not (yet) implemented
-                pszGlobalData = "COMPOUND_TEXT not implemented";
-                codepage = CP_UTF8; // code page identifier for utf8
-            }
-
-            /* Convert the UTF16 string to required encoding */
-            int iConvertDataLen = WideCharToMultiByte(codepage, 0,
-                                                      (LPCWSTR) pszGlobalData, -1,
-                                                      NULL, 0, NULL, NULL);
-            /* NOTE: iConvertDataLen includes space for null terminator */
-            pszConvertData = malloc(iConvertDataLen);
-            WideCharToMultiByte(codepage, 0,
-                                (LPCWSTR) pszGlobalData, -1,
-                                pszConvertData, iConvertDataLen, NULL, NULL);
-
-            /* Convert DOS string to UNIX string */
-            winClipboardDOStoUNIX(pszConvertData, strlen(pszConvertData));
-
-            xtpText_value = strdup(pszConvertData);
-            xtpText_nitems = strlen(pszConvertData);
-
-            /* data will fit into a single X request? (INCR not yet supported) */
-            {
-                uint32_t maxreqsize = xcb_get_maximum_request_length(conn);
-
-                /* covert to bytes and allow for allow for X_ChangeProperty request */
-                maxreqsize = maxreqsize*4 - 24;
-
-                if (xtpText_nitems > maxreqsize) {
-                    ErrorF("winClipboardFlushXEvents - clipboard data size %d greater than maximum %u\n", xtpText_nitems, maxreqsize);
-
-                    /* Abort */
-                    fAbort = TRUE;
-                    goto winClipboardFlushXEvents_SelectionRequest_Done;
-                }
-            }
-
-            /* Copy the clipboard text to the requesting window */
-            xcb_void_cookie_t cookie = xcb_change_property_checked(conn,
-                                      XCB_PROP_MODE_REPLACE,
-                                      selection_request->requestor,
-                                      selection_request->property,
-                                      selection_request->target,
-                                      8,
-                                      xtpText_nitems, xtpText_value);
-            xcb_generic_error_t *error;
-            if ((error = xcb_request_check(conn, cookie))) {
-                ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                       "xcb_change_property failed\n");
-
-                /* Abort */
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
-            /* Free the converted string */
-            free(pszConvertData);
-            pszConvertData = NULL;
-
-            /* Release the clipboard data */
-            GlobalUnlock(hGlobal);
-            pszGlobalData = NULL;
-            fCloseClipboard = FALSE;
-            CloseClipboard();
-
-            /* Clean up */
-            free(xtpText_value);
-            xtpText_value = NULL;
-
-            /* Setup selection notify event */
-            xcb_selection_notify_event_t eventSelection;
-            eventSelection.response_type = XCB_SELECTION_NOTIFY;
-            eventSelection.requestor = selection_request->requestor;
-            eventSelection.selection = selection_request->selection;
-            eventSelection.target = selection_request->target;
-            eventSelection.property = selection_request->property;
-            eventSelection.time = selection_request->time;
-
-            /* Notify the requesting window that the operation has completed */
-            cookie = xcb_send_event_checked(conn, FALSE,
-                                            eventSelection.requestor,
-                                            0, (char *) &eventSelection);
-            if ((error = xcb_request_check(conn, cookie))) {
-                ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                       "xcb_send_event() failed\n");
-
-                /* Abort */
-                fAbort = TRUE;
-                goto winClipboardFlushXEvents_SelectionRequest_Done;
-            }
-
- winClipboardFlushXEvents_SelectionRequest_Done:
-            /* Free allocated resources */
-            if (xtpText_value) {
-                free(xtpText_value);
-            }
-            free(pszConvertData);
-            if (hGlobal && pszGlobalData)
-                GlobalUnlock(hGlobal);
-
-            /*
-             * Send a SelectionNotify event to the requesting
-             * client when we abort.
-             */
-            if (fAbort) {
-                /* Setup selection notify event */
-                eventSelection.response_type = XCB_SELECTION_NOTIFY;
-                eventSelection.requestor = selection_request->requestor;
-                eventSelection.selection = selection_request->selection;
-                eventSelection.target = selection_request->target;
-                eventSelection.property = XCB_NONE;
-                eventSelection.time = selection_request->time;
-
-                /* Notify the requesting window that the operation is complete */
-                cookie = xcb_send_event_checked(conn, FALSE,
-                                                eventSelection.requestor,
-                                                0, (char *) &eventSelection);
-                if ((error = xcb_request_check(conn, cookie))) {
-                    /*
-                     * Should not be a problem if XSendEvent fails because
-                     * the client may simply have exited.
-                     */
-                    ErrorF("winClipboardFlushXEvents - SelectionRequest - "
-                           "xcb_send_event() failed for abort event.\n");
-                }
-            }
-
-            /* Close clipboard if it was opened */
-            if (fCloseClipboard) {
-                fCloseClipboard = FALSE;
-                CloseClipboard();
-            }
+            (void) handleSelectionRequest(hwnd, iWindow, conn, data, atoms,
+                                          atomClipboard, atomUTF8String,
+                                          atomCompoundText, atomTargets,
+                                          (xcb_selection_request_event_t *)event);
             break;
-        }
 
         case XCB_SELECTION_NOTIFY:
-        {
-            xcb_selection_notify_event_t *selection_notify =  (xcb_selection_notify_event_t *)event;
-#ifdef _DEBUG
-            winDebug("winClipboardFlushXEvents - SelectionNotify\n");
-            if (g_iLogVerbose >= 3)
-            {
-                char *pszAtomName;
-                pszAtomName = get_atom_name(conn, selection_notify->selection);
-                winDebug("winClipboardFlushXEvents - SelectionNotify - ATOM: %s\n", pszAtomName);
-                free(pszAtomName);
-            }
-#endif
-
-
-            /*
-              SelectionNotify with property of XCB_NONE indicates either:
-
-              (i) Generated by the X server if no owner for the specified selection exists
-                  (perhaps it's disappeared on us mid-transaction), or
-              (ii) Sent by the selection owner when the requested selection conversion could
-                   not be performed or server errors prevented the conversion data being returned
-            */
-            if (selection_notify->property == XCB_NONE) {
-                    ErrorF("winClipboardFlushXEvents - SelectionNotify - "
-                           "Conversion to format %d refused.\n",
-                           selection_notify->target);
-                    free(event);
-                    return WIN_XEVENTS_FAILED;
-                }
-
-            if (selection_notify->target == atomTargets) {
-              int result = winClipboardSelectionNotifyTargets(hwnd, iWindow, conn, data, atoms);
-              free(event);
-              return result;
-            }
-
-            {
-                int result = winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
-                free(event);
-                if (result == WIN_XEVENTS_NOTIFY_DATA || result == WIN_XEVENTS_NOTIFY_TARGETS || result == WIN_XEVENTS_FAILED) {
-                    return result;
-                }
-                /* WIN_XEVENTS_SUCCESS: INCR in progress, continue loop to
-                   drain any events already buffered by xcb during the
-                   synchronous GetProperty reply read */
+            result = handleSelectionNotify(hwnd, iWindow, conn, data, atoms,
+                                                atomTargets,
+                                                (xcb_selection_notify_event_t *)event);
+            if (result == WIN_XEVENTS_SUCCESS)
                 continue;
-            }
-        }
+            return result;
 
         case XCB_SELECTION_CLEAR:
             winDebug("SelectionClear - doing nothing\n");
             break;
 
         case XCB_PROPERTY_NOTIFY:
-        {
-            xcb_property_notify_event_t *property_notify = (xcb_property_notify_event_t *)event;
-
-            /* If INCR is in progress, collect the data */
-            if (data->incr &&
-                (property_notify->atom == atoms->atomLocalProperty) &&
-                (property_notify->state == XCB_PROPERTY_NEW_VALUE)) {
-                int result;
-                result = winClipboardSelectionNotifyData(hwnd, iWindow, conn, data, atoms);
-                free(event);
-                if (result == WIN_XEVENTS_NOTIFY_DATA || result == WIN_XEVENTS_NOTIFY_TARGETS || result == WIN_XEVENTS_FAILED) {
-                    return result;
-                }
-                /* WIN_XEVENTS_SUCCESS: continue loop to drain buffered events */
+            result = handlePropertyNotify(hwnd, iWindow, conn, data, atoms,
+                                               (xcb_property_notify_event_t *)event);
+            if (result != WIN_XEVENTS_SUCCESS)
+                return result;
+            if (data->incr)
                 continue;
-            }
-
             break;
-        }
 
         case XCB_MAPPING_NOTIFY:
             break;
 
         case 0:
+            ;
             /* This is just laziness rather than making sure we used _checked everywhere */
-            {
-                xcb_generic_error_t *err = (xcb_generic_error_t *)event;
-                ErrorF("winClipboardFlushXEvents - Error code: %i, ID: 0x%08x, "
-                       "Major opcode: %i, Minor opcode: %i\n",
-                       err->error_code, err->resource_id,
-                       err->major_code, err->minor_code);
-            }
+            xcb_generic_error_t *err = (xcb_generic_error_t *)event;
+            ErrorF("winClipboardFlushXEvents - Error code: %i, ID: 0x%08x, "
+                   "Major opcode: %i, Minor opcode: %i\n",
+                   err->error_code, err->resource_id,
+                   err->major_code, err->minor_code);
             break;
 
         default:
@@ -1105,12 +1259,10 @@ winClipboardFlushXEvents(HWND hwnd,
                 winDebug("winClipboardFlushXEvents - XFixesSetSelectionOwnerNotify\n");
 
                 /* Save selection owners for monitored selections, ignore other selections */
-                if ((e->selection == XCB_ATOM_PRIMARY) && fPrimarySelection) {
+                if ((e->selection == XCB_ATOM_PRIMARY) && fPrimarySelection)
                     MonitorSelection(e, CLIP_OWN_PRIMARY);
-                }
-                else if (e->selection == atomClipboard) {
+                else if (e->selection == atomClipboard)
                     MonitorSelection(e, CLIP_OWN_CLIPBOARD);
-                }
                 else
                     break;
 
@@ -1136,15 +1288,13 @@ winClipboardFlushXEvents(HWND hwnd,
 
                 /* Access the Windows clipboard */
                 if (!OpenClipboard(hwnd)) {
-                    ErrorF("winClipboardFlushXEvents - OpenClipboard () failed: %08x\n",
-                           (int) GetLastError());
+                    ErrorF("winClipboardFlushXEvents - OpenClipboard () failed: %08x\n", (int) GetLastError());
                     break;
                 }
 
                 /* Take ownership of the Windows clipboard */
                 if (!EmptyClipboard()) {
-                    ErrorF("winClipboardFlushXEvents - EmptyClipboard () failed: %08x\n",
-                           (int) GetLastError());
+                    ErrorF("winClipboardFlushXEvents - EmptyClipboard () failed: %08x\n", (int) GetLastError());
                     CloseClipboard();
                     break;
                 }
@@ -1156,16 +1306,14 @@ winClipboardFlushXEvents(HWND hwnd,
 
                 /* Release the clipboard */
                 if (!CloseClipboard()) {
-                    ErrorF("winClipboardFlushXEvents - CloseClipboard () failed: %08x\n",
-                           (int) GetLastError());
+                    ErrorF("winClipboardFlushXEvents - CloseClipboard () failed: %08x\n", (int) GetLastError());
                     break;
                 }
             }
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_WINDOW_DESTROY */
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_CLIENT_CLOSE */
             else {
-                ErrorF("winClipboardFlushXEvents - unexpected event type %d\n",
-                       event->response_type);
+                ErrorF("winClipboardFlushXEvents - unexpected event type %d\n", event->response_type);
             }
             break;
         }

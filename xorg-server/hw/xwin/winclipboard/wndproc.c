@@ -50,6 +50,7 @@
 #include "winwindow.h"
 #include "internal.h"
 #include "winclipboard.h"
+#include <shellapi.h>
 
 /*
  * Constants
@@ -183,6 +184,94 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Enter\n");
 
+#if 0
+        /*
+         * Diagnostic: enumerate all clipboard formats to discover what
+         * applications place on the clipboard when copying GIF images.
+         */
+        {
+            UINT fmt = 0;
+            wchar_t wname[256];
+            char name[256];
+
+            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - available formats:\n");
+
+            if (OpenClipboard(hwnd)) {
+                while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                    wname[0] = L'\0';
+                    GetClipboardFormatNameW(fmt, wname, 256);
+                    WideCharToMultiByte(CP_UTF8, 0, wname, -1,
+                                        name, sizeof(name), NULL, NULL);
+                    ErrorF("  format %u: \"%s\"\n", fmt, name);
+
+                    if (fmt == CF_HDROP) {
+                        HDROP hDrop = (HDROP) GetClipboardData(CF_HDROP);
+                        if (hDrop) {
+                            UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+                            ErrorF("  CF_HDROP: %u file(s)\n", nFiles);
+                            if (nFiles >= 1) {
+                                wchar_t wpath[MAX_PATH];
+                                char path[MAX_PATH * 4];
+                                if (DragQueryFileW(hDrop, 0, wpath, MAX_PATH)) {
+                                    WideCharToMultiByte(CP_UTF8, 0, wpath, -1, path, sizeof(path), NULL, NULL);
+                                    ErrorF("  CF_HDROP path[0]: \"%s\"\n", path);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                /*
+                 * Targeted dump of specific formats we want to inspect.
+                 * Done outside the enumeration loop to avoid issues with
+                 * calling GetClipboardData on every registered format.
+                 */
+                {
+                    UINT targets[] = { 49386, 49782, 49350, 49351 };
+                    const char *labels[] = {
+                        "UniformResourceLocatorW",
+                        "ChromiumInternalSourceUrl",
+                        "GIF",
+                        "JFIF"
+                    };
+                    int t;
+                    for (t = 0; t < 4; t++) {
+                        if (!IsClipboardFormatAvailable(targets[t]))
+                            continue;
+                        HANDLE h = GetClipboardData(targets[t]);
+                        if (!h)
+                            continue;
+                        SIZE_T cb = GlobalSize(h);
+                        const unsigned char *p = GlobalLock(h);
+                        if (!p || cb == 0)
+                            continue;
+                        if (targets[t] == 49386) {
+                            /* "W" suffix = UTF-16LE wide string */
+                            char text[512];
+                            WideCharToMultiByte(CP_UTF8, 0, (const wchar_t *)p,
+                                                -1, text, sizeof(text),
+                                                NULL, NULL);
+                            ErrorF("  %s: \"%s\" (%u bytes)\n", labels[t], text, (unsigned int)cb); } else if (targets[t] == 49782) {
+                            /* No "W" suffix — likely UTF-8 narrow string */
+                            ErrorF("  %s: \"%.*s\" (%u bytes)\n", labels[t], cb < 256 ? (int)cb : 256, (const char *)p, (unsigned int)cb);
+                        } else {
+                            /* Binary — dump first 32 bytes as hex only, no loop */
+                            int dump = cb < 32 ? (int)cb : 32;
+                            char hex[128];
+                            int hi = 0, i;
+                            for (i = 0; i < dump; i++)
+                                hi += sprintf(hex + hi, "%02x ", p[i]);
+                            ErrorF("  %s: %s(%u bytes)\n", labels[t], hex, (unsigned int)cb);
+                        }
+                    }
+                }
+                CloseClipboard();
+            } else {
+                ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
+            }
+        }
+#endif
+
         /*
          * NOTE: We cannot bail out when NULL == GetClipboardOwner ()
          * because some applications deal with the clipboard in a manner
@@ -193,11 +282,8 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         /* Bail when we still own the clipboard */
         if (hwnd == GetClipboardOwner()) {
-
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                     "We own the clipboard, returning.\n");
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - We own the clipboard, returning.\n");
             winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
-
             return 0;
         }
 
@@ -205,15 +291,21 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (!fRunning)
             return 0;
 
-        /*
-         * Do not take ownership of the X11 selections when the Win32
-         * clipboard holds neither text (CF_TEXT/CF_UNICODETEXT) nor an image
-         * (CF_DIB; Windows synthesises CF_DIB from CF_BITMAP/CF_DIBV5).
-         */
-        if (!IsClipboardFormatAvailable(CF_TEXT)
-            && !IsClipboardFormatAvailable(CF_UNICODETEXT)
-            && !IsClipboardFormatAvailable(CF_DIB)) {
+        const UINT regPNG = 49352, regJFIF = 49351, regGIF = 49350;
+        BOOL bOneOfOurs = FALSE;
 
+        if (OpenClipboard(hwnd)) {
+            UINT fmt = 0;
+            while ((fmt = EnumClipboardFormats(fmt)) != 0)
+                if (fmt == CF_UNICODETEXT || fmt == CF_TEXT || fmt == CF_HDROP ||
+                    fmt == CF_DIB || fmt == regPNG || fmt == regJFIF || fmt == regGIF)
+                    bOneOfOurs = TRUE;
+            CloseClipboard();
+        } else {
+            ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
+        }
+
+        if (!bOneOfOurs) {
             xcb_get_selection_owner_cookie_t cookie_get;
             xcb_get_selection_owner_reply_t *reply;
 
@@ -230,8 +322,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             reply = xcb_get_selection_owner_reply(conn, cookie_get, NULL);
             if (reply) {
                 if (reply->owner == iWindow) {
-                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                             "PRIMARY selection is owned by us, releasing.\n");
+                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - PRIMARY selection is owned by us, releasing.\n");
                     xcb_set_selection_owner(conn, XCB_NONE, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
                 }
                 free(reply);
@@ -258,8 +349,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         cookie_set = xcb_set_selection_owner_checked(conn, iWindow, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
         error = xcb_request_check(conn, cookie_set);
         if (error) {
-            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                   "Could not reassert ownership of PRIMARY\n");
+            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of PRIMARY\n");
             free(error);
         } else {
             winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
@@ -270,13 +360,11 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         cookie_set = xcb_set_selection_owner_checked(conn, iWindow, atoms->atomClipboard, XCB_CURRENT_TIME);
         error = xcb_request_check(conn, cookie_set);
         if (error) {
-            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                    "Could not reassert ownership of CLIPBOARD\n");
+            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of CLIPBOARD\n");
             free(error);
         }
         else {
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                     "Reasserted ownership of CLIPBOARD\n");
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Reasserted ownership of CLIPBOARD\n");
         }
 
         /* Flush the pending SetSelectionOwner event now */
