@@ -46,6 +46,7 @@
 
 #include "winclipboard.h"
 #include "internal.h"
+#include "any2any.h"
 
 /*
  * Constants
@@ -813,7 +814,7 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                     wchar_t wpath[MAX_PATH];
                     wchar_t *ext;
                     HANDLE hFile;
-                    DWORD cbFile, cbRead;
+                    convertFn_t *convertFn = NULL;
                     if (!DragQueryFileW(hDrop, f, wpath, MAX_PATH))
                         continue; 
                     ext = wcsrchr(wpath, L'.');
@@ -821,25 +822,52 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                         continue; 
                     /* Map extension to requested target */
                     if (selection_request->target == atoms->atomImageGif) {
-                        if (_wcsicmp(ext, L".gif"))
-                            continue; 
+                        if (!_wcsicmp(ext, L".gif"))
+                            convertFn = convertFnRawToRaw;
+                        else if (!_wcsicmp(ext, L".png"))
+                            convertFn = convertFnPngToGif;
+                        else if (!_wcsicmp(ext, L".jpg") || !_wcsicmp(ext, L".jpeg") || !_wcsicmp(ext, L".jfif"))
+                            convertFn = convertFnJpegToGif;
+                        else if (!_wcsicmp(ext, L".bmp"))
+                            convertFn = convertFnBmpToGif;
                     } else if (selection_request->target == atoms->atomImagePng) {
-                        if (_wcsicmp(ext, L".png"))
-                            continue; 
+                        if (!_wcsicmp(ext, L".png"))
+                            convertFn = convertFnRawToRaw;
+                        else if (!_wcsicmp(ext, L".gif"))
+                            convertFn = convertFnGifToPng;
+                        else if (!_wcsicmp(ext, L".jpg") || !_wcsicmp(ext, L".jpeg") || !_wcsicmp(ext, L".jfif"))
+                            convertFn = convertFnJpegToPng;
+                        else if (!_wcsicmp(ext, L".bmp"))
+                            convertFn = convertFnBmpToPng;
                     } else if (selection_request->target == atoms->atomImageJpeg) {
-                        if (_wcsicmp(ext, L".jpg") && _wcsicmp(ext, L".jpeg") && _wcsicmp(ext, L".jfif"))
-                            continue; 
+                        if (!_wcsicmp(ext, L".jpg") || !_wcsicmp(ext, L".jpeg") || !_wcsicmp(ext, L".jfif"))
+                            convertFn = convertFnRawToRaw;
+                        else if (!_wcsicmp(ext, L".png"))
+                            convertFn = convertFnPngToJpeg;
+                        else if (!_wcsicmp(ext, L".gif"))
+                            convertFn = convertFnGifToJpeg;
+                        else if (!_wcsicmp(ext, L".bmp"))
+                            convertFn = convertFnBmpToJpeg;
                     } else if (selection_request->target == atoms->atomImageBmp) {
-                        if (_wcsicmp(ext, L".bmp"))
-                            continue; 
+                        if (!_wcsicmp(ext, L".bmp"))
+                            convertFn = convertFnRawToRaw;
+                        else if (!_wcsicmp(ext, L".png"))
+                            convertFn = convertFnPngToBmp;
+                        else if (!_wcsicmp(ext, L".gif"))
+                            convertFn = convertFnGifToBmp;
+                        else if (!_wcsicmp(ext, L".jpg") || !_wcsicmp(ext, L".jpeg") || !_wcsicmp(ext, L".jfif"))
+                            convertFn = convertFnJpegToBmp;
                     } else {
                         continue; 
                     } 
+ 
+                    assert(convertFn != NULL);
  
                     hFile = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                     if (hFile == INVALID_HANDLE_VALUE)
                         continue; 
  
+                    DWORD cbFile, cbRead;
                     cbFile = GetFileSize(hFile, NULL);
                     if (cbFile > 0 && cbFile != INVALID_FILE_SIZE) {
                         pvImage = malloc(cbFile);
@@ -847,6 +875,14 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                             if (ReadFile(hFile, pvImage, cbFile, &cbRead, NULL) && cbRead == cbFile) {
                                 cbImage = cbFile;
                                 ErrorF("winClipboardFlushXEvents - raw copy from file: %lu bytes (no encode)\n", (unsigned long)cbFile);
+                                char statusmsg[256];
+                                if (!(*convertFn) (&pvImage, &cbImage, statusmsg, sizeof(statusmsg))) {
+                                    ErrorF("winClipboardFlushXEvents - convert failed: %s\n", statusmsg);
+                                    free(pvImage);
+                                    pvImage = NULL;
+                                } else {
+                                    ErrorF("winClipboardFlushXEvents - convert succeeded: %s\n", statusmsg);
+                                }
                             } else {
                                 free(pvImage);
                                 pvImage = NULL;

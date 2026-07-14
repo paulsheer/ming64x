@@ -410,7 +410,7 @@ XWIN_RC  := hw/xwin/XWin.rc
 XWIN_OBJS += $(OBJDIR)/hw/xwin/winprefslex.o $(OBJDIR)/hw/xwin/winprefsyacc.o
 
 # --- hw/xwin/winclipboard ---
-WINCLIP_SRCS := textconv.c thread.c wndproc.c xevents.c imageconv.c
+WINCLIP_SRCS := textconv.c thread.c wndproc.c xevents.c imageconv.c any2any.c dither.c
 WINCLIP_OBJS := $(WINCLIP_SRCS:%.c=$(OBJDIR)/hw/xwin/winclipboard/%.o)
 
 # --- giflib ---

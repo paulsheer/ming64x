@@ -10,12 +10,14 @@ two modules will be linked.  Preserve this property!
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: Copyright (C) Eric S. Raymond <esr@thyrsus.com>
 
+#include <pthread.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -25,6 +27,18 @@ two modules will be linked.  Preserve this property!
 
 #include "gif_lib.h"
 #include "gif_lib_private.h"
+
+
+#undef reallocarray
+#define reallocarray reallocarray____
+static void *reallocarray____(void *ptr, size_t nmemb, size_t size) {
+    if (size != 0 && nmemb > ((size_t)-1) / size) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    return realloc(ptr, nmemb * size);
+}
+
 
 /* compose unsigned little endian value */
 #define UNSIGNED_LITTLE_ENDIAN(lo, hi) ((lo) | ((hi) << 8))

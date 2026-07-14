@@ -6,12 +6,28 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: Copyright (C) Eric S. Raymond <esr@thyrsus.com>
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "gif_lib.h"
 #include "gif_lib_private.h"
+
+extern void ErrorF(const char *f, ...) __attribute__((format(printf, 1, 2)));
+
+
+#undef reallocarray
+#define reallocarray reallocarray____
+static void *reallocarray____(void *ptr, size_t nmemb, size_t size) {
+    if (size != 0 && nmemb > ((size_t)-1) / size) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    return realloc(ptr, nmemb * size);
+}
+
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
