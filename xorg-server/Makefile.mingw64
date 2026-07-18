@@ -648,7 +648,7 @@ clean:
 # ---------------------------------------------------------------------------
 $(PROJECTROOT)/pthreadlight/pthreadlight.o: $(PROJECTROOT)/pthreadlight/pthreadlight.c
 	@echo "  CC      pthreadlight"
-	@$(CC) -c $(OPT_FLAG) -std=gnu99 -o $@ $<
+	@$(CC) -c $(OPT_FLAG) -std=gnu99 -D_WIN32_WINNT=0x0601 -o $@ $<
 
 # ---------------------------------------------------------------------------
 # Create build directories
