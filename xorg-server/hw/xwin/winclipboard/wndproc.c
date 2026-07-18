@@ -407,7 +407,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         BOOL pasted = FALSE;
         xcb_atom_t selection;
         ClipboardConversionData data;
-        int best_target = 0;
+        int best_target = 0, best_priority = INT_MAX;
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT %d - Hello.\n",
                  (int)wParam);
@@ -460,8 +460,6 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     { atoms->atomImageGif,     6 },
                 };
 
-            int best_priority = INT_MAX;
-
             int i,j;
             for (i = 0 ; data.targetList[i] != 0; i++)
                 {
@@ -480,7 +478,22 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         free(data.targetList);
         data.targetList = 0;
 
-        winDebug("winClipboardWindowProc - best target is %d\n", best_target);
+        winDebug("winClipboardWindowProc - best target is %d, best_priority=%d\n", (int) best_target, (int) best_priority);
+
+        if (best_target) {
+            /* Diagnose type mismatch: Win32 requests image but X11 only has text */
+            if (((UINT)wParam == 8 || (UINT)wParam == 2 || (UINT)wParam == 17)
+                && best_target != atoms->atomImagePng
+                && best_target != atoms->atomImageBmp
+                && best_target != atoms->atomImageJpeg
+                && best_target != atoms->atomImageGif) {
+                ErrorF("MISMATCH: Win32 requested image format %u but"
+                       " best X11 target is a text type — setting NULL,"
+                       " app can fall back to text\n",
+                       (unsigned int)wParam);
+                goto fake_paste;
+            }
+        }
 
         /* No useful targets found */
         if (best_target == 0)
@@ -520,10 +533,9 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     fake_paste:
         if (!pasted)
           {
-            /* Paste no data, to satisfy required call to SetClipboardData */
-            SetClipboardData(CF_UNICODETEXT, NULL);
-            SetClipboardData(CF_TEXT, NULL);
-            SetClipboardData(CF_DIB, NULL);
+            /* Set NULL only for the format that was actually requested,
+               so other already-placed formats aren't wiped out */
+            SetClipboardData((UINT)wParam, NULL);
           }
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT - Returning.\n");

@@ -65,6 +65,7 @@
 
 extern int xfixes_event_base;
 BOOL fPrimarySelection = TRUE;
+static BOOL g_fPendingImageCheck = FALSE;
 
 /*
  * Local variables
@@ -165,8 +166,7 @@ winClipboardSelectionNotifyTargets(HWND hwnd, xcb_window_t iWindow, xcb_connecti
                                                       INT_MAX);
   xcb_get_property_reply_t *reply = xcb_get_property_reply(conn, cookie, NULL);
   if (!reply) {
-      ErrorF("winClipboardFlushXEvents - SelectionNotify - "
-             "XGetWindowProperty () failed\n");
+      ErrorF("winClipboardFlushXEvents - SelectionNotify - XGetWindowProperty () failed\n");
   } else {
       xcb_atom_t *prop = xcb_get_property_value(reply);
       int nitems = xcb_get_property_value_length(reply)/sizeof(xcb_atom_t);
@@ -1185,6 +1185,55 @@ handleSelectionNotify(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                       xcb_atom_t atomTargets,
                       xcb_selection_notify_event_t *selection_notify)
 {
+    /* Intercept the async image-probe TARGETS reply.  This SelectionNotify
+       uses a dedicated property (atomImageProbe) so it cannot collide with
+       WM_RENDERFORMAT's TARGETS query on atomLocalProperty.
+       Always consume replies on this property, even stale ones, so they
+       never fall through to winClipboardSelectionNotifyTargets (which
+       would read the wrong property). */
+    if (selection_notify->property == atoms->atomImageProbe) {
+        if (g_fPendingImageCheck) {
+            g_fPendingImageCheck = FALSE;
+
+            if (selection_notify->target == atomTargets) {
+                xcb_get_property_cookie_t cookie =
+                    xcb_get_property(conn, TRUE, iWindow,
+                                     atoms->atomImageProbe,
+                                     XCB_GET_PROPERTY_TYPE_ANY, 0, INT_MAX);
+                xcb_get_property_reply_t *reply =
+                    xcb_get_property_reply(conn, cookie, NULL);
+                if (reply) {
+                    xcb_atom_t *prop = xcb_get_property_value(reply);
+                    int nitems = xcb_get_property_value_length(reply)
+                                 / sizeof(xcb_atom_t);
+                    BOOL fHasImage = FALSE;
+                    int i;
+                    for (i = 0; i < nitems; i++) {
+                        if (prop[i] == atoms->atomImagePng
+                            || prop[i] == atoms->atomImageBmp
+                            || prop[i] == atoms->atomImageJpeg
+                            || prop[i] == atoms->atomImageGif) {
+                            fHasImage = TRUE;
+                            break;
+                        }
+                    }
+                    free(reply);
+
+                    if (fHasImage) {
+                        if (OpenClipboard(hwnd)) {
+                            if (GetClipboardOwner() == hwnd)
+                                SetClipboardData(CF_DIB, NULL);
+                            CloseClipboard();
+                        }
+                    }
+                }
+            }
+        }
+
+        free(selection_notify);
+        return WIN_XEVENTS_SUCCESS;
+    }
+
     if (selection_notify->property == XCB_NONE) {
         ErrorF("winClipboardFlushXEvents - SelectionNotify - Conversion to format %d refused.\n", selection_notify->target);
         free(selection_notify);
@@ -1335,16 +1384,26 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
-                /* Advertise regular text, unicode and image formats */
+                /* Advertise text formats.  CF_DIB is added later only
+                   if a background TARGETS probe finds image types. */
                 SetClipboardData(CF_UNICODETEXT, NULL);
                 SetClipboardData(CF_TEXT, NULL);
-                SetClipboardData(CF_DIB, NULL);
 
                 /* Release the clipboard */
                 if (!CloseClipboard()) {
                     ErrorF("winClipboardFlushXEvents - CloseClipboard () failed: %08x\n", (int) GetLastError());
                     break;
                 }
+
+                /* Issue async TARGETS probe so we can decide whether to
+                   also advertise CF_DIB.  Uses a dedicated property so the
+                   reply is distinguishable from WM_RENDERFORMAT's query. */
+                xcb_convert_selection(conn, iWindow, e->selection,
+                                      atoms->atomTargets,
+                                      atoms->atomImageProbe,
+                                      XCB_CURRENT_TIME);
+                xcb_flush(conn);
+                g_fPendingImageCheck = TRUE;
             }
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_WINDOW_DESTROY */
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_CLIENT_CLOSE */

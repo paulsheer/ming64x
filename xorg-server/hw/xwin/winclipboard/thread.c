@@ -196,6 +196,7 @@ winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
     atoms.atomImageBmp = intern_atom(conn, "image/bmp");
     atoms.atomImageJpeg = intern_atom(conn, "image/jpeg");
     atoms.atomImageGif  = intern_atom(conn, "image/gif");
+    atoms.atomImageProbe = intern_atom(conn, "CYGX_IMAGE_PROBE");
 
     xcb_screen_t *root_screen = xcb_aux_get_screen(conn, screen);
     xcb_window_t root_window_id = root_screen->root;

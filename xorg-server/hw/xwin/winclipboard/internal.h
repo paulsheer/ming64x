@@ -107,6 +107,7 @@ typedef struct
     xcb_atom_t atomImageBmp;
     xcb_atom_t atomImageJpeg;
     xcb_atom_t atomImageGif;
+    xcb_atom_t atomImageProbe;   /* dedicated property for async TARGETS probe */
 } ClipboardAtoms;
 
 /* Encode the Win32 clipboard image (CF_DIB) into the requested image target
