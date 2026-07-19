@@ -293,19 +293,21 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         const UINT regPNG = 49352, regJFIF = 49351, regGIF = 49350;
         BOOL bOneOfOurs = FALSE;
+        BOOL fCheckedClipboard = FALSE;
 
         if (OpenClipboard(hwnd)) {
+            fCheckedClipboard = TRUE;
             UINT fmt = 0;
             while ((fmt = EnumClipboardFormats(fmt)) != 0)
                 if (fmt == CF_UNICODETEXT || fmt == CF_TEXT || fmt == CF_HDROP ||
-                    fmt == CF_DIB || fmt == regPNG || fmt == regJFIF || fmt == regGIF)
+                    fmt == CF_DIB || fmt == CF_DIBV5 || fmt == regPNG || fmt == regJFIF || fmt == regGIF)
                     bOneOfOurs = TRUE;
             CloseClipboard();
         } else {
             ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
         }
 
-        if (!bOneOfOurs) {
+        if (fCheckedClipboard && !bOneOfOurs) {
             xcb_get_selection_owner_cookie_t cookie_get;
             xcb_get_selection_owner_reply_t *reply;
 

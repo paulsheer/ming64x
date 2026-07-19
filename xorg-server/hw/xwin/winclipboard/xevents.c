@@ -330,6 +330,50 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
                     GlobalUnlock(hDib);
                     SetClipboardData(CF_DIB, hDib);
                     fSetClipboardData = FALSE;
+
+                    /* When the DIB has BI_BITFIELDS (alpha data present),
+                       build a BITMAPV5HEADER copy and place it as CF_DIBV5.
+                       CF_DIB gets the BITMAPINFOHEADER version for
+                       backwards compatibility; CF_DIBV5 declares the
+                       alpha channel formally via bV5AlphaMask. */
+                    if (cbDib >= sizeof(BITMAPINFOHEADER)) {
+                        BITMAPINFOHEADER *pBIH = (BITMAPINFOHEADER *)pvDib;
+                        if (pBIH->biCompression == BI_BITFIELDS
+                            && pBIH->biBitCount == 32) {
+                            SIZE_T cfdibHeader = sizeof(BITMAPINFOHEADER) + 12;
+                            const unsigned char *pPixels =
+                                (const unsigned char *)pvDib + cfdibHeader;
+                            SIZE_T cbPixels = cbDib - cfdibHeader;
+                            SIZE_T cbV5 = sizeof(BITMAPV5HEADER) + cbPixels;
+
+                            HGLOBAL hDibV5 = GlobalAlloc(GMEM_MOVEABLE, cbV5);
+                            if (hDibV5) {
+                                BITMAPV5HEADER *pV5 =
+                                    (BITMAPV5HEADER *)GlobalLock(hDibV5);
+                                if (pV5) {
+                                    memset(pV5, 0, sizeof(BITMAPV5HEADER));
+                                    pV5->bV5Size  = sizeof(BITMAPV5HEADER);
+                                    pV5->bV5Width  = pBIH->biWidth;
+                                    pV5->bV5Height = pBIH->biHeight;
+                                    pV5->bV5Planes = 1;
+                                    pV5->bV5BitCount = 32;
+                                    pV5->bV5Compression = BI_BITFIELDS;
+                                    pV5->bV5SizeImage = (DWORD)cbPixels;
+                                    pV5->bV5RedMask   = 0x00FF0000;
+                                    pV5->bV5GreenMask = 0x0000FF00;
+                                    pV5->bV5BlueMask  = 0x000000FF;
+                                    pV5->bV5AlphaMask = 0xFF000000;
+                                    memcpy((unsigned char *)pV5
+                                           + sizeof(BITMAPV5HEADER),
+                                           pPixels, cbPixels);
+                                    GlobalUnlock(hDibV5);
+                                    SetClipboardData(CF_DIBV5, hDibV5);
+                                } else {
+                                    GlobalFree(hDibV5);
+                                }
+                            }
+                        }
+                    }
                 }
                 else {
                     GlobalFree(hDib);
@@ -698,7 +742,11 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                 } else if (fmt == regGIF && !fHasRegisteredGif) {
                     atomTargetArr[nTargets++] = atoms->atomImageGif;
                     fHasRegisteredAnyImage = fHasRegisteredGif = TRUE;
-                } 
+                } else if (fmt == CF_DIB) {
+                    fHasRegisteredAnyImage = TRUE;
+                } else if (fmt == CF_DIBV5) {
+                    fHasRegisteredAnyImage = TRUE;
+                }
                 if (nTargets > SOME_BIG)
                     break; 
             } 
@@ -712,7 +760,8 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                 */
             if (!fHasRegisteredPng)
                 atomTargetArr[nTargets++] = atoms->atomImagePng;
-            atomTargetArr[nTargets++] = atoms->atomImageBmp;
+            if (!fHasRegisteredBmp)
+                atomTargetArr[nTargets++] = atoms->atomImageBmp;
             if (!fHasRegisteredJpeg)
                 atomTargetArr[nTargets++] = atoms->atomImageJpeg;
             if (!fHasRegisteredGif)
@@ -906,9 +955,11 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
             /*
                 * Try to serve raw bytes directly when the corresponding
                 * registered format is available.  This preserves the
-                * original file data (e.g. animated GIFs from MSWord).
+                * original file data (e.g. animated GIFs from MSWord,
+                * transparent PNG/GIF from MSPaint).
                 */
-            if (regFmt != 0 && IsClipboardFormatAvailable(regFmt)) {
+            if (regFmt != 0
+                && IsClipboardFormatAvailable(regFmt)) {
                 HANDLE h = GetClipboardData(regFmt);
                 if (h) {
                     SIZE_T cb = GlobalSize(h);
@@ -919,22 +970,44 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                             memcpy(pvImage, p, cb);
                             cbImage = (unsigned long)cb;
                             ErrorF("winClipboardFlushXEvents - raw copy: fmt=%u, %lu bytes (no encode)\n", regFmt, (unsigned long)cb);
-                        } 
-                    } 
-                } 
-            } 
-        } 
- 
+                        }
+                    }
+                    GlobalUnlock(h);
+                }
+            }
+        }
+
+        /* DIB encoder first — for PNG, winClipboardEncodeImage internally
+           checks if the DIB lacks alpha and a transparent GIF is available,
+           merging DIB color with GIF alpha. */
         if (pvImage == NULL) {
-            if ((!winClipboardEncodeImage(selection_request->target, atoms, &pvImage, &cbImage)
-                    || pvImage == NULL || cbImage == 0)) {
-                ErrorF("winClipboardFlushXEvents - SelectionRequest - image encode failed\n");
-                free(pvImage);
-                fAbort = TRUE;
-                goto done;
-            } 
-            ErrorF("winClipboardFlushXEvents - encoded copy: fmt=%u, %lu bytes\n", regFmt, cbImage);
-        } 
+            if (winClipboardEncodeImage(selection_request->target, atoms, &pvImage, &cbImage)
+                && pvImage != NULL && cbImage > 0) {
+                ErrorF("winClipboardFlushXEvents - encoded copy: fmt=%u, %lu bytes\n", regFmt, cbImage);
+            }
+        }
+
+        /* If DIB wasn't available but a raw GIF is, decode and re-encode
+           as PNG (loses DIB color fidelity but keeps GIF transparency). */
+        if (pvImage == NULL
+            && selection_request->target == atoms->atomImagePng
+            && IsClipboardFormatAvailable(49350)) {
+            HANDLE hGif = GetClipboardData(49350);
+            if (hGif) {
+                SIZE_T cbGif = GlobalSize(hGif);
+                const void *pGif = GlobalLock(hGif);
+                if (pGif && cbGif > 0
+                    && winClipboardGifToPng(pGif, (unsigned long)cbGif,
+                                            &pvImage, &cbImage))
+                    ;
+            }
+        }
+
+        if (pvImage == NULL) {
+            ErrorF("winClipboardFlushXEvents - SelectionRequest - image encode failed\n");
+            fAbort = TRUE;
+            goto done;
+        }
  
         if (cbImage > 262144) {
             if (!winSendImageIncr(conn, selection_request->requestor,
@@ -1221,8 +1294,10 @@ handleSelectionNotify(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
 
                     if (fHasImage) {
                         if (OpenClipboard(hwnd)) {
-                            if (GetClipboardOwner() == hwnd)
+                            if (GetClipboardOwner() == hwnd) {
+                                SetClipboardData(CF_DIBV5, NULL);
                                 SetClipboardData(CF_DIB, NULL);
+                            }
                             CloseClipboard();
                         }
                     }

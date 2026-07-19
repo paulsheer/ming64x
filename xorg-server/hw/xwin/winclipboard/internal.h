@@ -118,6 +118,12 @@ BOOL
  winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
                          void **ppvData, unsigned long *pcbData);
 
+/* Convert raw GIF bytes to PNG via stb_image decode + stb_image_write
+   encode.  On success *ppvData is malloc()'d, caller frees. */
+BOOL
+ winClipboardGifToPng(const void *gifData, unsigned long gifLen,
+                      void **ppvData, unsigned long *pcbData);
+
 /* Decode X11 image data (image/bmp, image/png, image/jpeg) back to a
    packed DIB (BITMAPINFOHEADER + pixel data) for SetClipboardData(CF_DIB).
    PNG and JPEG are decoded via stb_image.

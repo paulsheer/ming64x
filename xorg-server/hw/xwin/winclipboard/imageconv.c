@@ -47,6 +47,7 @@
 #include <objbase.h>
 #include "misc.h"
 #include "winmsg.h"
+#include "dither.h"
 
 /* stb_image — public-domain single-header image decoder (PNG, JPEG, BMP,
    and more).  Define the implementation in this translation unit. */
@@ -146,27 +147,188 @@ static BOOL
 winClipboardDibToPng(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
                      void **ppvData, unsigned long *pcbData)
 {
-    void *pvBmp = NULL;
-    unsigned long cbBmp = 0;
-    unsigned char *pixels;
-    unsigned char *png;
-    int w, h, channels;
+    int w, h, bpp, pix_offset, stride, row, col;
+    int channels, bytes_pp;
+    unsigned char *rgba, *png;
+    const unsigned char *src;
     int out_len = 0;
 
-    /* Step 1: wrap DIB as a .bmp file in memory */
-    if (!winClipboardDibToBmp(pbih, cbDib, &pvBmp, &cbBmp))
+    w = pbih->biWidth;
+    h = pbih->biHeight < 0 ? -(int) pbih->biHeight : (int) pbih->biHeight;
+    if (w <= 0 || h <= 0 || w > 32767 || h > 32767)
         return FALSE;
 
-    /* Step 2: decode .bmp to RGBA pixels via stb_image */
-    pixels = stbi_load_from_memory((const stbi_uc *) pvBmp, (int) cbBmp,
-                                    &w, &h, &channels, 4);
-    free(pvBmp);
+    bpp = pbih->biBitCount;
+    if (bpp != 24 && bpp != 32)
+        return FALSE;
+
+    pix_offset = (int) winClipboardDibPixelOffset(pbih);
+    if (pix_offset <= 0 || pix_offset > (int) cbDib)
+        return FALSE;
+
+    stride = ((w * bpp + 31) / 32) * 4;
+    channels = (bpp == 32) ? 4 : 3;
+    bytes_pp = bpp / 8;
+
+    rgba = malloc((size_t) w * (size_t) h * channels);
+    if (!rgba)
+        return FALSE;
+
+    /* DIB is bottom-up BGRA; produce top-down RGBA.
+       Read pixel data directly, bypassing stb_image's BMP parser which
+       drops alpha for BI_BITFIELDS+BITMAPINFOHEADER (no alpha mask slot). */
+    src = (const unsigned char *) pbih + pix_offset;
+    {
+        int row;
+        for (row = 0; row < h; row++) {
+            const unsigned char *src_row = src + (size_t) (h - 1 - row) * stride;
+            unsigned char *dst = rgba + (size_t) row * w * channels;
+            for (col = 0; col < w; col++) {
+                dst[col * channels + 0] = src_row[col * bytes_pp + 2];  /* R */
+                dst[col * channels + 1] = src_row[col * bytes_pp + 1];  /* G */
+                dst[col * channels + 2] = src_row[col * bytes_pp + 0];  /* B */
+                if (channels == 4)
+                    dst[col * channels + 3] = src_row[col * bytes_pp + 3];  /* A */
+            }
+        }
+    }
+
+    png = stbi_write_png_to_mem(rgba, w * channels, w, h, channels, &out_len);
+    free(rgba);
+    if (!png)
+        return FALSE;
+
+    *ppvData = png;
+    *pcbData = (unsigned long) out_len;
+    return TRUE;
+}
+
+/* Decode raw GIF bytes to RGBA via stb_image, then re-encode as PNG.
+   Used when MSPaint (or other apps) register GIF on the clipboard with
+   transparency but omit PNG, forcing the DIB-encode path which has no alpha. */
+BOOL
+winClipboardGifToPng(const void *gifData, unsigned long gifLen,
+                     void **ppvData, unsigned long *pcbData)
+{
+    int w, h, channels;
+    unsigned char *pixels;
+    unsigned char *png;
+    int out_len;
+
+    pixels = stbi_load_from_memory((const stbi_uc *) gifData, (int) gifLen,
+                                   &w, &h, &channels, 4);
     if (!pixels)
         return FALSE;
 
-    /* Step 3: encode RGBA to PNG via stb_image_write */
     png = stbi_write_png_to_mem(pixels, w * 4, w, h, 4, &out_len);
     stbi_image_free(pixels);
+    if (!png)
+        return FALSE;
+
+    *ppvData = png;
+    *pcbData = (unsigned long) out_len;
+    return TRUE;
+}
+
+/* Merge DIB full-color pixels with GIF transparency mask, producing PNG.
+   MSPaint's DIB (BI_RGB, 32bpp) has all alpha=0xFF (opaque), but its
+   registered GIF format carries the real transparency via its palette.
+   Decode both, copy GIF alpha into DIB pixels, encode as PNG.
+   Falls back to GIF→PNG if DIB/GIF dimensions don't match. */
+static BOOL
+winClipboardDibMergeAlphaFromGif(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
+                                 const void *gifData, unsigned long gifLen,
+                                 void **ppvData, unsigned long *pcbData)
+{
+    int w, h, bpp, pix_offset, stride, channels, bytes_pp;
+    int gifW, gifH, gifChannels;
+    unsigned char *rgba, *gifPixels, *png;
+    const unsigned char *src;
+    int out_len = 0;
+    int row, col;
+    BOOL merged = FALSE;
+
+    *ppvData = NULL;
+    *pcbData = 0;
+
+    /* Step 1: read DIB pixels directly */
+    w = pbih->biWidth;
+    h = pbih->biHeight < 0 ? -(int) pbih->biHeight : (int) pbih->biHeight;
+    bpp = pbih->biBitCount;
+    if (w <= 0 || h <= 0 || (bpp != 24 && bpp != 32))
+        return FALSE;
+
+    pix_offset = (int) winClipboardDibPixelOffset(pbih);
+    if (pix_offset <= 0 || pix_offset > (int) cbDib)
+        return FALSE;
+
+    stride = ((w * bpp + 31) / 32) * 4;
+    channels = (bpp == 32) ? 4 : 3;
+    bytes_pp = bpp / 8;
+
+    rgba = malloc((size_t) w * (size_t) h * channels);
+    if (!rgba)
+        return FALSE;
+
+    src = (const unsigned char *) pbih + pix_offset;
+    for (row = 0; row < h; row++) {
+        const unsigned char *src_row = src + (size_t) (h - 1 - row) * stride;
+        unsigned char *dst = rgba + (size_t) row * w * channels;
+        for (col = 0; col < w; col++) {
+            dst[col * channels + 0] = src_row[col * bytes_pp + 2]; /* R */
+            dst[col * channels + 1] = src_row[col * bytes_pp + 1]; /* G */
+            dst[col * channels + 2] = src_row[col * bytes_pp + 0]; /* B */
+            if (channels == 4)
+                dst[col * channels + 3] = 255; /* force opaque initially */
+        }
+    }
+
+    /* Step 2: decode GIF to get transparency */
+    gifPixels = stbi_load_from_memory((const stbi_uc *) gifData, (int) gifLen,
+                                      &gifW, &gifH, &gifChannels, 4);
+    if (!gifPixels) {
+        free(rgba);
+        return FALSE;
+    }
+
+    /* Step 3: if dimensions match, copy alpha from GIF to DIB pixels */
+    if (w == gifW && h == gifH) {
+        if (channels == 3) {
+            /* Need 4-channel output — realloc and shift */
+            unsigned char *rgba4 = malloc((size_t) w * (size_t) h * 4);
+            int i;
+            if (rgba4) {
+                for (i = w * h - 1; i >= 0; i--) {
+                    rgba4[i * 4 + 0] = rgba[i * 3 + 0];
+                    rgba4[i * 4 + 1] = rgba[i * 3 + 1];
+                    rgba4[i * 4 + 2] = rgba[i * 3 + 2];
+                    rgba4[i * 4 + 3] = gifPixels[i * 4 + 3];
+                }
+                free(rgba);
+                rgba = rgba4;
+                channels = 4;
+            }
+        } else {
+            int total = w * h;
+            int i;
+            for (i = 0; i < total; i++) {
+                unsigned char gifA = gifPixels[i * 4 + 3];
+                rgba[i * 4 + 3] = gifA;
+            }
+        }
+        merged = TRUE;
+    }
+
+    stbi_image_free(gifPixels);
+
+    if (!merged) {
+        free(rgba);
+        return FALSE;
+    }
+
+    /* Step 4: encode to PNG */
+    png = stbi_write_png_to_mem(rgba, w * channels, w, h, channels, &out_len);
+    free(rgba);
     if (!png)
         return FALSE;
 
@@ -322,15 +484,15 @@ winClipboardDibToGif(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
                      void **ppvData, unsigned long *pcbData)
 {
     int w, h, bpp, stride, pix_offset, num_pixels;
-    GifByteType *red = NULL, *green = NULL, *blue = NULL;
-    GifByteType *indices = NULL;
+    unsigned char *rgb = NULL, *indices = NULL;
+    unsigned char colormapOut[256 * 3];
     GifColorType colors[256];
     int cmap_size, gct_size, i, row, col;
     GifMemBuffer mb = { NULL, 0, 0 };
     GifFileType *gif = NULL;
     ColorMapObject *color_map = NULL;
-    int error;
-    BOOL ok = FALSE;
+    int error, outColors, maxColors;
+    BOOL ok = FALSE, hasTransparency;
 
     w = pbih->biWidth;
     h = pbih->biHeight < 0 ? -(int) pbih->biHeight : (int) pbih->biHeight;
@@ -347,45 +509,85 @@ winClipboardDibToGif(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
         return FALSE;
     stride = ((w * bpp + 31) / 32) * 4;
 
-    /* Build planar R/G/B arrays from the DIB for GifQuantizeBuffer.
-       DIB pixels are bottom-up BGRA; extract top-down RGB. */
-    red   = malloc((size_t) num_pixels);
-    green = malloc((size_t) num_pixels);
-    blue  = malloc((size_t) num_pixels);
+    rgb     = malloc((size_t) num_pixels * 3);
     indices = malloc((size_t) num_pixels);
-    if (!red || !green || !blue || !indices)
+    if (!rgb || !indices)
         goto fail;
 
+    /* Build interleaved RGB top-down from bottom-up BGRA DIB.
+       Zero out fully-transparent pixels so they don't pollute the palette. */
+    hasTransparency = FALSE;
     {
         int bytes_pp = bpp / 8;
         const unsigned char *src = (const unsigned char *) pbih + pix_offset;
         for (row = 0; row < h; row++) {
             const unsigned char *src_row = src + (size_t) (h - 1 - row) * stride;
-            GifByteType *r_row = red   + (size_t) row * w;
-            GifByteType *g_row = green + (size_t) row * w;
-            GifByteType *b_row = blue  + (size_t) row * w;
+            unsigned char *dst = rgb + (size_t) row * w * 3;
             for (col = 0; col < w; col++) {
-                b_row[col] = src_row[col * bytes_pp];
-                g_row[col] = src_row[col * bytes_pp + 1];
-                r_row[col] = src_row[col * bytes_pp + 2];
+                unsigned char a = (bytes_pp == 4)
+                                  ? src_row[col * bytes_pp + 3] : 255;
+                if (a < 128) {
+                    dst[col * 3 + 0] = 0;
+                    dst[col * 3 + 1] = 0;
+                    dst[col * 3 + 2] = 0;
+                    hasTransparency = TRUE;
+                } else {
+                    dst[col * 3 + 0] = src_row[col * bytes_pp + 2];
+                    dst[col * 3 + 1] = src_row[col * bytes_pp + 1];
+                    dst[col * 3 + 2] = src_row[col * bytes_pp];
+                }
             }
         }
     }
 
-    /* Median-cut quantisation via giflib.  cmap_size is in/out. */
-    cmap_size = 256;
-    if (GifQuantizeBuffer((unsigned int) w, (unsigned int) h,
-                          &cmap_size, red, green, blue,
-                          indices, colors) == GIF_ERROR)
+    /* Reserve palette entry 255 for transparency if needed */
+    maxColors = hasTransparency ? 255 : 256;
+    if (!bscqQuantize(rgb, w, h, maxColors, 1 /* dither */,
+                       colormapOut, indices, &outColors))
         goto fail;
-    if (cmap_size < 2)
-        cmap_size = 2;
+    if (outColors < 2)
+        outColors = 2;
 
-    free(red);   red   = NULL;
-    free(green); green = NULL;
-    free(blue);  blue  = NULL;
+    free(rgb);  rgb = NULL;
 
-    /* Round colour map to a power of 2 for the GIF global colour table. */
+    /* Unpack flat palette into giflib colour struct */
+    for (i = 0; i < outColors; i++) {
+        colors[i].Red   = colormapOut[i * 3 + 0];
+        colors[i].Green = colormapOut[i * 3 + 1];
+        colors[i].Blue  = colormapOut[i * 3 + 2];
+    }
+
+    if (hasTransparency) {
+        int transIdx = 255;
+        /* Re-scan DIB pixels: map alpha < 128 to the transparent index */
+        {
+            int bytes_pp = bpp / 8;
+            const unsigned char *src = (const unsigned char *) pbih + pix_offset;
+            int idx = 0;
+            for (row = 0; row < h; row++) {
+                const unsigned char *src_row = src + (size_t) (h - 1 - row) * stride;
+                for (col = 0; col < w; col++) {
+                    unsigned char a = (bytes_pp == 4)
+                                      ? src_row[col * bytes_pp + 3] : 255;
+                    if (a < 128)
+                        indices[idx] = (unsigned char) transIdx;
+                    idx++;
+                }
+            }
+        }
+
+        colors[transIdx].Red   = 0;
+        colors[transIdx].Green = 0;
+        colors[transIdx].Blue  = 0;
+
+        if (outColors <= transIdx)
+            outColors = transIdx + 1;
+        cmap_size = outColors;
+    } else {
+        cmap_size = outColors;
+    }
+
+    /* GIF colour table must be power-of-2 sized */
     gct_size = 2;
     while (gct_size < cmap_size)
         gct_size <<= 1;
@@ -401,18 +603,24 @@ winClipboardDibToGif(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
         goto fail;
 
     EGifSetGifVersion(gif, true);
-    if (EGifPutScreenDesc(gif, w, h, 8 /* bits per primary */,
-                          0 /* background index */, color_map) == GIF_ERROR)
+    if (EGifPutScreenDesc(gif, w, h, 8, 0, color_map) == GIF_ERROR)
         goto fail;
 
     GifFreeMapObject(color_map);
     color_map = NULL;
 
-    /* Image descriptor: no local colour table (NULL = reuse global). */
+    if (hasTransparency) {
+        GifByteType gce[4];
+        gce[0] = 0x01;
+        gce[1] = 0x00;
+        gce[2] = 0x00;
+        gce[3] = 255;
+        EGifPutExtension(gif, GRAPHICS_EXT_FUNC_CODE, 4, gce);
+    }
+
     if (EGifPutImageDesc(gif, 0, 0, w, h, false, NULL) == GIF_ERROR)
         goto fail;
 
-    /* GifQuantizeBuffer produces top-down indices, matching GIF row order. */
     for (row = 0; row < h; row++) {
         if (EGifPutLine(gif, indices + (size_t) row * w, w) == GIF_ERROR)
             goto fail;
@@ -430,9 +638,7 @@ fail:
     if (!ok)
         free(mb.data);
     free(indices);
-    free(red);
-    free(green);
-    free(blue);
+    free(rgb);
     if (color_map)
         GifFreeMapObject(color_map);
     if (gif)
@@ -460,10 +666,33 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
         && target != atoms->atomImageJpeg && target != atoms->atomImageGif)
         return FALSE;
 
-    /* Windows synthesises CF_DIB from CF_BITMAP/CF_DIBV5 when needed. */
-    hDib = GetClipboardData(CF_DIB);
+    /* Try CF_DIBV5 first to preserve alpha channel; fall back to CF_DIB. */
+    hDib = GetClipboardData(CF_DIBV5);
     if (!hDib)
+        hDib = GetClipboardData(CF_DIB);
+    if (!hDib) {
+        {
+            UINT fmt = 0;
+            ErrorF("winClipboardEncodeImage - GetClipboardData(CF_DIBV5/CF_DIB) failed, clipboard formats:");
+            while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                const char *name = "other";
+                switch (fmt) {
+                case 1:  name = "CF_TEXT"; break;
+                case 2:  name = "CF_BITMAP"; break;
+                case 7:  name = "CF_OEMTEXT"; break;
+                case 8:  name = "CF_DIB"; break;
+                case 13: name = "CF_UNICODETEXT"; break;
+                case 14: name = "CF_ENHMETAFILE"; break;
+                case 15: name = "CF_HDROP"; break;
+                case 16: name = "CF_LOCALE"; break;
+                case 17: name = "CF_DIBV5"; break;
+                }
+                ErrorF(" %u(%s)", (unsigned)fmt, name);
+            }
+            ErrorF("\n");
+        }
         return FALSE;
+    }
 
     cbDib = GlobalSize(hDib);
     if (cbDib < sizeof(BITMAPINFOHEADER))
@@ -474,8 +703,54 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
         return FALSE;
 
     if (pbih->biSize >= sizeof(BITMAPINFOHEADER)) {
-        if (target == atoms->atomImagePng)
-            ok = winClipboardDibToPng(pbih, cbDib, ppvData, pcbData);
+        if (target == atoms->atomImagePng) {
+            /* If the DIB has no alpha (all pixels opaque) and a raw GIF
+               with transparency is on the clipboard, merge DIB color with
+               GIF alpha to produce a PNG that preserves both. */
+            int bpp = pbih->biBitCount;
+            if (bpp == 32 && IsClipboardFormatAvailable(49350)) {
+                int hasDibAlpha = 0;
+                int pix_offset = (int) winClipboardDibPixelOffset(pbih);
+                int stride = ((pbih->biWidth * bpp + 31) / 32) * 4;
+                int w = pbih->biWidth;
+                int h = pbih->biHeight < 0 ? -(int) pbih->biHeight
+                                           : (int) pbih->biHeight;
+                int bytes_pp = 4;
+                const unsigned char *src =
+                    (const unsigned char *) pbih + pix_offset;
+                int row, col;
+
+                if (pix_offset > 0 && pix_offset <= (int) cbDib
+                    && w > 0 && h > 0) {
+                    for (row = 0; row < h && !hasDibAlpha; row++) {
+                        const unsigned char *src_row =
+                            src + (size_t) (h - 1 - row) * stride;
+                        for (col = 0; col < w; col++) {
+                            if (src_row[col * bytes_pp + 3] < 128) {
+                                hasDibAlpha = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!hasDibAlpha) {
+                    HANDLE hGif = GetClipboardData(49350);
+                    if (hGif) {
+                        SIZE_T cbGif = GlobalSize(hGif);
+                        const void *pGif = GlobalLock(hGif);
+                        if (pGif && cbGif > 0) {
+                            ok = winClipboardDibMergeAlphaFromGif(
+                                pbih, cbDib, pGif, (unsigned long) cbGif,
+                                ppvData, pcbData);
+                            GlobalUnlock(hGif);
+                        }
+                    }
+                }
+            }
+            if (!ok)
+                ok = winClipboardDibToPng(pbih, cbDib, ppvData, pcbData);
+        }
         else if (target == atoms->atomImageJpeg)
             ok = winClipboardDibToJpeg(pbih, cbDib, ppvData, pcbData);
         else if (target == atoms->atomImageGif)
@@ -543,8 +818,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         ColorMapObject *cmap;
         int w, h, transparent, i;
         BITMAPINFOHEADER *pbih;
-        SIZE_T cbPixels, cbDib;
+        SIZE_T cbPixels, cbDib, headerSize;
         unsigned char *dib;
+        BOOL fHasAlpha;
 
         mr.data = (const unsigned char *) data;
         mr.pos = 0;
@@ -592,14 +868,16 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
             }
         }
 
-        /* Build 32-bit BI_RGB DIB (bottom-up BGRA) */
+        fHasAlpha = (transparent != NO_TRANSPARENT_COLOR);
+
         cbPixels = (SIZE_T) w * (SIZE_T) h * 4;
-        if (cbPixels > (SIZE_T) ULONG_MAX - sizeof(BITMAPINFOHEADER)) {
+        headerSize = sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
+        if (cbPixels > (SIZE_T) ULONG_MAX - headerSize) {
             DGifCloseFile(gif, &error);
             return FALSE;
         }
 
-        cbDib = sizeof(BITMAPINFOHEADER) + cbPixels;
+        cbDib = headerSize + cbPixels;
         dib = malloc(cbDib);
         if (!dib) {
             DGifCloseFile(gif, &error);
@@ -613,14 +891,21 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         pbih->biHeight = h;
         pbih->biPlanes = 1;
         pbih->biBitCount = 32;
-        pbih->biCompression = BI_RGB;
+        pbih->biCompression = fHasAlpha ? BI_BITFIELDS : BI_RGB;
         pbih->biSizeImage = (DWORD) cbPixels;
+
+        if (fHasAlpha) {
+            DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
+            masks[0] = 0x000000FF;  /* Blue  */
+            masks[1] = 0x0000FF00;  /* Green */
+            masks[2] = 0x00FF0000;  /* Red   */
+        }
 
         /* GIF is top-down; DIB is bottom-up. Flip rows while converting. */
         {
             int row;
             for (row = 0; row < h; row++) {
-                unsigned char *dstRow = dib + sizeof(BITMAPINFOHEADER)
+                unsigned char *dstRow = dib + headerSize
                     + (SIZE_T) (h - 1 - row) * w * 4;
                 const unsigned char *srcRow = img->RasterBits
                     + (SIZE_T) row * w;
@@ -647,7 +932,7 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         int w, h, channels;
         unsigned char *pixels;
         BITMAPINFOHEADER *pbih;
-        SIZE_T cbPixels, cbDib;
+        SIZE_T cbPixels, cbDib, headerSize;
         unsigned char *dib;
         int row;
 
@@ -661,46 +946,59 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
             return FALSE;
         }
 
-        /* 32-bit BI_RGB DIB: BITMAPINFOHEADER + pixel rows (bottom-up) */
-        cbPixels = (SIZE_T) w * (SIZE_T) h * 4;
-        if (cbPixels > (SIZE_T) ULONG_MAX - sizeof(BITMAPINFOHEADER)) {
-            stbi_image_free(pixels);
-            return FALSE;
-        }
-
-        cbDib = sizeof(BITMAPINFOHEADER) + cbPixels;
-        dib = malloc(cbDib);
-        if (!dib) {
-            stbi_image_free(pixels);
-            return FALSE;
-        }
-
-        pbih = (BITMAPINFOHEADER *) dib;
-        memset(pbih, 0, sizeof(BITMAPINFOHEADER));
-        pbih->biSize = sizeof(BITMAPINFOHEADER);
-        pbih->biWidth = w;
-        pbih->biHeight = h;             /* positive = bottom-up */
-        pbih->biPlanes = 1;
-        pbih->biBitCount = 32;
-        pbih->biCompression = BI_RGB;
-        pbih->biSizeImage = (DWORD) cbPixels;
-
-        /* stb_image returns top-down RGBA; DIB expects bottom-up BGRA.
-           Flip rows and swap R<->B in one pass. */
+        /* Use BI_BITFIELDS only when the source had an alpha channel so the
+           unused bits (24-31) are available as implicit alpha. */
         {
-            unsigned char *dstRow = dib + sizeof(BITMAPINFOHEADER)
-                                    + (SIZE_T) (h - 1) * w * 4;
-            const unsigned char *srcRow = pixels;
-            for (row = 0; row < h; row++) {
-                int col;
-                for (col = 0; col < w; col++) {
-                    dstRow[col * 4 + 0] = srcRow[col * 4 + 2];  /* B */
-                    dstRow[col * 4 + 1] = srcRow[col * 4 + 1];  /* G */
-                    dstRow[col * 4 + 2] = srcRow[col * 4 + 0];  /* R */
-                    dstRow[col * 4 + 3] = srcRow[col * 4 + 3];  /* A */
+            BOOL fHasAlpha = (channels == 4);
+
+            cbPixels = (SIZE_T) w * (SIZE_T) h * 4;
+            headerSize = sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
+            if (cbPixels > (SIZE_T) ULONG_MAX - headerSize) {
+                stbi_image_free(pixels);
+                return FALSE;
+            }
+
+            cbDib = headerSize + cbPixels;
+            dib = malloc(cbDib);
+            if (!dib) {
+                stbi_image_free(pixels);
+                return FALSE;
+            }
+
+            pbih = (BITMAPINFOHEADER *) dib;
+            memset(pbih, 0, sizeof(BITMAPINFOHEADER));
+            pbih->biSize = sizeof(BITMAPINFOHEADER);
+            pbih->biWidth = w;
+            pbih->biHeight = h;
+            pbih->biPlanes = 1;
+            pbih->biBitCount = 32;
+            pbih->biCompression = fHasAlpha ? BI_BITFIELDS : BI_RGB;
+            pbih->biSizeImage = (DWORD) cbPixels;
+
+            if (fHasAlpha) {
+                DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
+                masks[0] = 0x000000FF;  /* Blue  */
+                masks[1] = 0x0000FF00;  /* Green */
+                masks[2] = 0x00FF0000;  /* Red   */
+            }
+
+            /* stb_image returns top-down RGBA; DIB expects bottom-up BGRA.
+               Flip rows and swap R<->B in one pass. */
+            {
+                unsigned char *dstRow = dib + headerSize
+                                        + (SIZE_T) (h - 1) * w * 4;
+                const unsigned char *srcRow = pixels;
+                for (row = 0; row < h; row++) {
+                    int col;
+                    for (col = 0; col < w; col++) {
+                        dstRow[col * 4 + 0] = srcRow[col * 4 + 2];  /* B */
+                        dstRow[col * 4 + 1] = srcRow[col * 4 + 1];  /* G */
+                        dstRow[col * 4 + 2] = srcRow[col * 4 + 0];  /* R */
+                        dstRow[col * 4 + 3] = srcRow[col * 4 + 3];  /* A */
+                    }
+                    srcRow += w * 4;
+                    dstRow -= w * 4;
                 }
-                srcRow += w * 4;
-                dstRow -= w * 4;
             }
         }
 
