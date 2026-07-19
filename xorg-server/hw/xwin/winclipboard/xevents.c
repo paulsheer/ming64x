@@ -247,8 +247,10 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 
     /* INCR reply indicates the start of a incremental transfer */
     if (encoding == atoms->atomIncr) {
+        int incrSize = *(int *)value;
+        free(reply);
         data->incrsize = 0;
-        data->incr = malloc(*(int *)value);
+        data->incr = malloc(incrSize);
         return WIN_XEVENTS_SUCCESS;
     }
     else if (data->incr) {
@@ -290,11 +292,14 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
                     /* Fall through to image processing below */
                 }
                 else {
+                    free(reply);
                     return WIN_XEVENTS_SUCCESS;
                 }
             }
-            else
+            else {
+                free(reply);
                 return WIN_XEVENTS_SUCCESS;
+            }
         }
     }
     else {
@@ -439,7 +444,7 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     pwszUnicodeStr = malloc(sizeof(wchar_t) * iUnicodeLen);
     if (!pwszUnicodeStr) {
         ErrorF("winClipboardFlushXEvents - SelectionNotify malloc failed for pwszUnicodeStr, aborting.\n");
-
+        free(pszReturnData);
         /* Abort */
         goto winClipboardFlushXEvents_SelectionNotify_Done;
     }
@@ -465,7 +470,8 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
     pszGlobalData = GlobalLock(hGlobal);
     if (pszGlobalData == NULL) {
         ErrorF("winClipboardFlushXEvents - Could not lock global memory for clipboard transfer\n");
-
+        GlobalFree(hGlobal);
+        hGlobal = NULL;
         /* Abort */
         goto winClipboardFlushXEvents_SelectionNotify_Done;
     }
@@ -1000,6 +1006,7 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                     && winClipboardGifToPng(pGif, (unsigned long)cbGif,
                                             &pvImage, &cbImage))
                     ;
+                GlobalUnlock(hGif);
             }
         }
 
@@ -1487,6 +1494,8 @@ winClipboardFlushXEvents(HWND hwnd,
             }
             break;
         }
+
+        free(event);
 
         /* I/O errors etc. */
         {

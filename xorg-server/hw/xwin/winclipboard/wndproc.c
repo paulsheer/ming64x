@@ -409,6 +409,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         BOOL pasted = FALSE;
         xcb_atom_t selection;
         ClipboardConversionData data;
+        memset(&data, '\0', sizeof(data));
         int best_target = 0, best_priority = INT_MAX;
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT %d - Hello.\n",
@@ -533,6 +534,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
           * satisfy the requirement that we write something to it.
           */
     fake_paste:
+        free(data.incr);
         if (!pasted)
           {
             /* Set NULL only for the format that was actually requested,
