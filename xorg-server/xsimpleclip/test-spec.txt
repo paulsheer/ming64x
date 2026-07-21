@@ -1,0 +1,170 @@
+
+The following represents a design for a comprehensive automated test of the
+code xorg-server/hw/xwin/winclipboard/*.[ch] which does copy-paste conversion
+Win32->X11 and X11->Win32.
+
+1. Write a Windows application called win32cliptest.exe that listens on TCP port 21406
+and accepts incoming socket connections. It takes -listen as an IPv4 listen address.
+An incoming connections can send and recv message of type union message.
+Only one connection is allowed at a time. The Windows application builds using x86_64-w64-mingw32-gcc
+under /paulsbackup/desktop-10.1.0.7/root/cooledit/git/deepseek-workspace/vcxsrv/xorg-server/xsimpleclip/
+Modify the Makefile to build win32cliptest.exe.
+
+2. Write a Linux application called x11cliptest that connects to TCP port 21406 on a socket. It takes -host as an IPv4 argument.
+The connection can send and recv messages of type union message.
+The Linux application builds under /paulsbackup/desktop-10.1.0.7/root/cooledit/git/deepseek-workspace/vcxsrv/xorg-server/xsimpleclip/
+Modify the Makefile to build x11cliptest.
+
+3. Both applications will share a common header cliptest.h
+The header will define these types:
+
+    union message {
+        struct message_request {
+            uint32_t type;      // enum message_type type;
+            uint32_t length;
+            uint32_t index;
+            ...
+        } request;
+        struct message_response {
+            uint32_t type;      // enum message_type type;
+            uint32_t length;
+            uint32_t index;
+            uint32_t success;
+            ...
+        } response;
+        struct message_generic {
+            uint32_t type;      // enum message_type type;
+            uint32_t length;
+            uint32_t index;
+        };
+    };
+
+    enum direction {
+        CLIPTEST_WIN32_TO_X11 = 1,
+        CLIPTEST_X11_TO_WIN32 = 2,
+    };
+    
+    enum format {
+        CLIPTEST_FORMAT_PNG = 1,
+        CLIPTEST_FORMAT_BMP,
+        CLIPTEST_FORMAT_GIF,
+        CLIPTEST_FORMAT_JPEG,
+        CLIPTEST_FORMAT_DIB,
+        CLIPTEST_FORMAT_DIBV5,
+    };
+
+    enum transparency {
+        CLIPTEST_TRANSPARENCY_YES,
+        CLIPTEST_TRANSPARENCY_NO,
+    };
+    
+    enum hdrop {
+        CLIPTEST_HDROP_YES,
+        CLIPTEST_HDROP_NO,
+    };
+    
+    struct cliptest {
+        enum direction direction;
+        enum format from_format;
+        enum format to_format;
+        enum hdrop hdrop;
+        int width;
+        int height;
+        enum transparency transparency;
+    };
+    
+    struct cliptest tests[] {
+        ...
+    };
+
+
+4. Create a utility mask for alpha-channel work representing a solid circle
+with diameter of 900 pixels in a file xsimpleclip/mask.png
+xsimpleclip/mask.png is a 256 gray-level image, 900 x 900. The circle
+should have a feathered edge. Resize as needed for the steps below.
+
+5. A test image xsimpleclip/input/dalmatian.png exists. Convert it to various
+formats under xsimpleclip/input/ using:    convert -quality 100 -geometry WxH ...
+Create the following combinations of test images:
+
+    1. with and without transparency. Use the utility mask from Step 4.
+    2. small 200x200, medium 900x900, and large 3600x3600
+    3. gif, png, jpeg, bmp
+
+Name the images dalmatian-<size>-<maskcombine>.<format> where <size> is small, medium, or large,
+<maskcombine> is circle for images combined with transparency and square for no transparency,
+and <format> is gif, png, jpeg, or bmp.
+Since jpeg and bmp do not support alpha channel, the area outside of the circular center
+region should be flat medium gray for <maskcombine> of "circle". Images with transparency
+have an alpha channel if supported for <maskcombine> of "circle".
+
+Step 5. should have its own Makefile target 'generate_images' so that it can be done only once.
+
+For Step 5., assume the convert utility appropriately handles the gif 1-bit alpha channel.
+
+
+6. For tests were Win32 advertises CF_DIB or CF_DIBV5 for sending, it should load the
+png file from disk, convert it as required to CF_DIB or CF_DIBV5.
+
+7. For tests were Win32 advertises CF_DIB or CF_DIBV5 for receiving, it should convert
+the result to png to store on disk.
+
+8. X11 cannot receive or send DIB nor DIBV5. No test for this.
+
+9. Create every valid combination of test. The resulting received images should go in a
+directory clip-results/ in the current directory.
+Name the results <testnum>-<size>-<maskcombine>.<format> where <testnum> is the tests[] index
+as a 4-digit decimal, <size> is small, medium, or large, <maskcombine> is circle for images combined
+with transparency and square for no transparency, and <format> is gif, png, jpeg, or bmp.
+
+10. Receiving a message involves first reading 4 bytes of the type, 4 bytes of the length
+and then the length - 8 bytes of remainder of the message.
+
+11. Sending a message involves populating the length field with the total number of
+bytes inclusive of the 4 bytes of the type and the 4 bytes of the length; and the
+writing length bytes.
+
+12. The Linux application application should signal a test to start by sending 
+a message on the socket. When the server is done it should send a response back
+to the Linux application.
+
+13. The Win32 application does not write to the disk if it receives an image. Instead it responds with
+the full image in a response message. The Linux application writes this result to disk.
+If Windows is the copy-paste sender, then the response does not contain an image.
+
+14. For each output file the Linux application parses the number of transparent pixels.
+This should be within ±5% of the area outside of the circle. (2R)² - ΠR²  where R = Width/2.
+The Linux application should write these results to results.txt and indicate whether
+transparency was properly preserved or dropped.
+
+15. The Linux application should have the option to specify the test range to
+execute tests between two indexes of test[], or a specific test.
+
+16. The makefile should have a clean target to clear out clip-results/.
+
+17. Add any necessary fields to the socket messages.
+
+18. The Linux application will execute tests where it is the copy-paste sender
+as follows:
+
+    1. The Linux application acts as though the user selected Copy using an input image xsimpleclip/input/dalmatian....
+    2. The Linux application sends a message to the Windows application on the socket to Paste.
+    3. The Windows application receives the paste message.
+    4. The Windows application Pastes the image into memory according the parameters of that test index.
+    5. The Windows application sends the image back on the socket without conversion with the format information.
+    6. The Linux application reads the message from the socket and writes out the image into clip-results/ in the appropriate format.
+
+19. The Linux application will execute tests where it is the copy-paste receiver
+as follows:
+
+    1. The Linux application sends a message to the Windows application on the socket to act as though the Windows user selected Copy.
+    2. The Windows application receives the message to execute a copy.
+    3. The Windows application acts as though the Windows user hit Copy.
+    4. The Linux application execute a paste as though the X11 user selected Paste.
+    5. The Linux application saves the pasted image into clip-results/
+
+20. If a test ought to logically fail, then implement it anyway. The person running the
+test will see the failure and make corrections to this specification later.
+
+
+

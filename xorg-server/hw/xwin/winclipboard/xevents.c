@@ -43,6 +43,7 @@
 
 #include <xcb/xcb.h>
 #include <xcb/xfixes.h>
+#include <time.h>
 
 #include "winclipboard.h"
 #include "internal.h"
@@ -76,6 +77,52 @@ static const char *szSelectionNames[CLIP_NUM_SELECTIONS] =
     { "PRIMARY", "CLIPBOARD" };
 
 static unsigned int lastOwnedSelectionIndex = CLIP_OWN_NONE;
+
+/* ---------- debug logging to %HOMEPATH%\debug-log.txt ---------- */
+#ifdef CLIPDEBUG
+static FILE *g_debug_log = NULL;
+
+void dbg_open(void)
+{
+    const char *home = getenv("HOMEPATH");
+    char path[MAX_PATH];
+    if (!home) home = "C:\\Users\\Owner";
+    snprintf(path, sizeof(path), "%s\\debug-log.txt", home);
+    /* Use "a" so restarting the log (CLIPTEST_DBG_ON after startup)
+       does not truncate messages written earlier. */
+    g_debug_log = fopen(path, "a");
+    if (g_debug_log) {
+        time_t t = time(NULL);
+        fprintf(g_debug_log, "=== CLIPTEST DEBUG LOG (re)opened %s", ctime(&t));
+        fflush(g_debug_log);
+    }
+}
+
+static void dbg_close(void)
+{
+    if (g_debug_log) {
+        time_t t = time(NULL);
+        fprintf(g_debug_log, "=== CLIPTEST DEBUG LOG closed %s", ctime(&t));
+        fclose(g_debug_log);
+        g_debug_log = NULL;
+    }
+}
+
+void dbg_write(const char *fmt, ...)
+{
+    if (!g_debug_log) return;
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    fprintf(g_debug_log, "%02d:%02d:%02d %s\n",
+            tm->tm_hour, tm->tm_min, tm->tm_sec, buf);
+    fflush(g_debug_log);
+}
+#endif
 
 static void
 MonitorSelection(xcb_xfixes_selection_notify_event_t * e, unsigned int i)
@@ -324,8 +371,11 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
 
         void *pvDib = NULL;
         SIZE_T cbDib = 0;
+        BOOL fV5 = (data->requestedFmt == CF_DIBV5);
 
-        if (winClipboardDecodeImageToDib(xtpText_encoding, atoms, xtpText_value, xtpText_nitems, &pvDib, &cbDib)
+        if (winClipboardDecodeImageToDib(xtpText_encoding, atoms,
+                                          xtpText_value, xtpText_nitems,
+                                          &pvDib, &cbDib, fV5)
             && pvDib && cbDib) {
             HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, cbDib);
             if (hDib) {
@@ -333,52 +383,8 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
                 if (pDst) {
                     memcpy(pDst, pvDib, cbDib);
                     GlobalUnlock(hDib);
-                    SetClipboardData(CF_DIB, hDib);
+                    SetClipboardData(data->requestedFmt, hDib);
                     fSetClipboardData = FALSE;
-
-                    /* When the DIB has BI_BITFIELDS (alpha data present),
-                       build a BITMAPV5HEADER copy and place it as CF_DIBV5.
-                       CF_DIB gets the BITMAPINFOHEADER version for
-                       backwards compatibility; CF_DIBV5 declares the
-                       alpha channel formally via bV5AlphaMask. */
-                    if (cbDib >= sizeof(BITMAPINFOHEADER)) {
-                        BITMAPINFOHEADER *pBIH = (BITMAPINFOHEADER *)pvDib;
-                        if (pBIH->biCompression == BI_BITFIELDS
-                            && pBIH->biBitCount == 32) {
-                            SIZE_T cfdibHeader = sizeof(BITMAPINFOHEADER) + 12;
-                            const unsigned char *pPixels =
-                                (const unsigned char *)pvDib + cfdibHeader;
-                            SIZE_T cbPixels = cbDib - cfdibHeader;
-                            SIZE_T cbV5 = sizeof(BITMAPV5HEADER) + cbPixels;
-
-                            HGLOBAL hDibV5 = GlobalAlloc(GMEM_MOVEABLE, cbV5);
-                            if (hDibV5) {
-                                BITMAPV5HEADER *pV5 =
-                                    (BITMAPV5HEADER *)GlobalLock(hDibV5);
-                                if (pV5) {
-                                    memset(pV5, 0, sizeof(BITMAPV5HEADER));
-                                    pV5->bV5Size  = sizeof(BITMAPV5HEADER);
-                                    pV5->bV5Width  = pBIH->biWidth;
-                                    pV5->bV5Height = pBIH->biHeight;
-                                    pV5->bV5Planes = 1;
-                                    pV5->bV5BitCount = 32;
-                                    pV5->bV5Compression = BI_BITFIELDS;
-                                    pV5->bV5SizeImage = (DWORD)cbPixels;
-                                    pV5->bV5RedMask   = 0x00FF0000;
-                                    pV5->bV5GreenMask = 0x0000FF00;
-                                    pV5->bV5BlueMask  = 0x000000FF;
-                                    pV5->bV5AlphaMask = 0xFF000000;
-                                    memcpy((unsigned char *)pV5
-                                           + sizeof(BITMAPV5HEADER),
-                                           pPixels, cbPixels);
-                                    GlobalUnlock(hDibV5);
-                                    SetClipboardData(CF_DIBV5, hDibV5);
-                                } else {
-                                    GlobalFree(hDibV5);
-                                }
-                            }
-                        }
-                    }
                 }
                 else {
                     GlobalFree(hDib);
@@ -693,24 +699,27 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
         BOOL fHasRegisteredBmp = FALSE;
         BOOL fHasRegisteredText = FALSE;
         BOOL fHasRegisteredAnyImage = FALSE;
-        const UINT regPNG = 49352, regJFIF = 49351, regGIF = 49350;
+        const UINT regPNG = atoms->cfPng, regJFIF = atoms->cfJfif, regGIF = atoms->cfGif;
  
         /*
             * Begin by putting the order the way the applicaiton wants it:
             */
+        dbg_write("TARGETS: OpenClipboard for TARGETS...");
         if (OpenClipboard(hwnd)) {
             UINT fmt = 0;
+            dbg_write("TARGETS: OpenClipboard OK, enumerating...");
             while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                dbg_write("TARGETS:   fmt=%u (0x%x)", (unsigned)fmt, (unsigned)fmt);
                 if (0) {
                     /* pass */
                 } else if (fmt == CF_UNICODETEXT && !fHasRegisteredText) {
                     atomTargetArr[nTargets++] = XCB_ATOM_STRING;
                     atomTargetArr[nTargets++] = atomUTF8String;
-                    fHasRegisteredText = FALSE;
+                    fHasRegisteredText = TRUE;
                 } else if (fmt == CF_TEXT && !fHasRegisteredText) {
                     atomTargetArr[nTargets++] = XCB_ATOM_STRING;
                     atomTargetArr[nTargets++] = atomUTF8String;
-                    fHasRegisteredText = FALSE;
+                    fHasRegisteredText = TRUE;
                 } else if (fmt == CF_HDROP) {
                     HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
                     if (!hDrop)
@@ -750,13 +759,22 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                     fHasRegisteredAnyImage = fHasRegisteredGif = TRUE;
                 } else if (fmt == CF_DIB) {
                     fHasRegisteredAnyImage = TRUE;
+                    dbg_write("TARGETS:   -> CF_DIB, set fHasRegisteredAnyImage=TRUE");
                 } else if (fmt == CF_DIBV5) {
                     fHasRegisteredAnyImage = TRUE;
+                    dbg_write("TARGETS:   -> CF_DIBV5, set fHasRegisteredAnyImage=TRUE");
+                } else {
+                    dbg_write("TARGETS:   -> UNHANDLED (skipped)");
                 }
                 if (nTargets > SOME_BIG)
-                    break; 
-            } 
+                    break;
+            }
             CloseClipboard();
+            dbg_write("TARGETS: enum done, anyImg=%d png=%d nT=%d",
+                      (int)fHasRegisteredAnyImage, (int)fHasRegisteredPng,
+                      nTargets);
+        } else {
+            dbg_write("TARGETS: OpenClipboard FAILED: %lu", GetLastError());
         } 
  
         if (fHasRegisteredAnyImage) {
@@ -832,19 +850,23 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
             goto done;
         } 
         fCloseClipboard = TRUE;
+        dbg_write("IMAGE: OpenClipboard OK, checking formats...");
  
         if (IsClipboardFormatAvailable(CF_HDROP)) {
             HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
             if (hDrop) {
                 UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+                dbg_write("IMAGE: HDROP has %u files", (unsigned)nFiles);
                 UINT f;
                 for (f = 0; f < nFiles && !fHaveImageFile; f++) {
                     wchar_t wpath[MAX_PATH];
                     wchar_t *ext;
                     if (!DragQueryFileW(hDrop, f, wpath,
                                         MAX_PATH))
-                        continue; 
+                        continue;
                     ext = wcsrchr(wpath, L'.');
+                    dbg_write("IMAGE: HDROP[%u] = '%ls' ext='%ls'",
+                              (unsigned)f, wpath, ext ? ext : L"");
                     if (ext && (!_wcsicmp(ext, L".gif")
                         || !_wcsicmp(ext, L".png")
                         || !_wcsicmp(ext, L".jpg")
@@ -852,9 +874,9 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                         || !_wcsicmp(ext, L".jfif")
                         || !_wcsicmp(ext, L".bmp")))
                         fHaveImageFile = TRUE;
-                } 
-            } 
-        } 
+                }
+            }
+        }
  
         /*
             * Try CF_HDROP: if a file with a matching extension is
@@ -919,8 +941,12 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                     assert(convertFn != NULL);
  
                     hFile = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                    if (hFile == INVALID_HANDLE_VALUE)
-                        continue; 
+                    if (hFile == INVALID_HANDLE_VALUE) {
+                        dbg_write("IMAGE: CreateFileW FAILED for '%ls' err=%lu",
+                                  wpath, GetLastError());
+                        continue;
+                    }
+                    dbg_write("IMAGE: CreateFileW OK for '%ls'", wpath); 
  
                     DWORD cbFile, cbRead;
                     cbFile = GetFileSize(hFile, NULL);
@@ -945,17 +971,18 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                         } 
                     } 
                     CloseHandle(hFile);
-                } 
-            } 
+                }
+            }
+            dbg_write("IMAGE: HDROP file-open done, fHaveImageFile=%d pvImage=%p",
+                      (int)fHaveImageFile, pvImage);
         } 
- 
         UINT regFmt = 0;
         if (selection_request->target == atoms->atomImageGif)
-            regFmt = 49350;
+            regFmt = atoms->cfGif;
         else if (selection_request->target == atoms->atomImageJpeg)
-            regFmt = 49351;
+            regFmt = atoms->cfJfif;
         else if (selection_request->target == atoms->atomImagePng)
-            regFmt = 49352;
+            regFmt = atoms->cfPng;
  
         if (pvImage == NULL) {
             /*
@@ -964,6 +991,7 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                 * original file data (e.g. animated GIFs from MSWord,
                 * transparent PNG/GIF from MSPaint).
                 */
+            dbg_write("IMAGE: checking regFmt=%u, IsAvail=%d", (unsigned)regFmt, (int)IsClipboardFormatAvailable(regFmt));
             if (regFmt != 0
                 && IsClipboardFormatAvailable(regFmt)) {
                 HANDLE h = GetClipboardData(regFmt);
@@ -987,8 +1015,13 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
            checks if the DIB lacks alpha and a transparent GIF is available,
            merging DIB color with GIF alpha. */
         if (pvImage == NULL) {
-            if (winClipboardEncodeImage(selection_request->target, atoms, &pvImage, &cbImage)
-                && pvImage != NULL && cbImage > 0) {
+            dbg_write("IMAGE: calling winClipboardEncodeImage target=0x%x",
+                      (unsigned)selection_request->target);
+            BOOL enc_ok = winClipboardEncodeImage(selection_request->target,
+                            atoms, &pvImage, &cbImage);
+            dbg_write("IMAGE: winClipboardEncodeImage returned %d, pvImage=%p cbImage=%lu",
+                      (int)enc_ok, pvImage, (unsigned long)cbImage);
+            if (enc_ok && pvImage != NULL && cbImage > 0) {
                 ErrorF("winClipboardFlushXEvents - encoded copy: fmt=%u, %lu bytes\n", regFmt, cbImage);
             }
         }
@@ -997,8 +1030,8 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
            as PNG (loses DIB color fidelity but keeps GIF transparency). */
         if (pvImage == NULL
             && selection_request->target == atoms->atomImagePng
-            && IsClipboardFormatAvailable(49350)) {
-            HANDLE hGif = GetClipboardData(49350);
+            && IsClipboardFormatAvailable(atoms->cfGif)) {
+            HANDLE hGif = GetClipboardData(atoms->cfGif);
             if (hGif) {
                 SIZE_T cbGif = GlobalSize(hGif);
                 const void *pGif = GlobalLock(hGif);
@@ -1011,6 +1044,7 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
         }
 
         if (pvImage == NULL) {
+            dbg_write("IMAGE: FAILED -- pvImage still NULL, sending refuse");
             ErrorF("winClipboardFlushXEvents - SelectionRequest - image encode failed\n");
             fAbort = TRUE;
             goto done;
@@ -1031,6 +1065,14 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
  
         xtpText_value = pvImage;
  
+        dbg_write("IMAGE: writing property: req=0x%x prop=0x%x(%u) "
+                  "target=0x%x cb=%lu",
+                  (unsigned)selection_request->requestor,
+                  (unsigned)selection_request->property,
+                  (unsigned)selection_request->property,
+                  (unsigned)selection_request->target,
+                  (unsigned long)cbImage);
+
         img_cookie = xcb_change_property_checked(conn,
                                     XCB_PROP_MODE_REPLACE,
                                     selection_request->requestor,
@@ -1038,12 +1080,19 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                                     selection_request->target,
                                     8,
                                     cbImage, pvImage);
+        {
+            int conn_err = xcb_connection_has_error(conn);
+            dbg_write("IMAGE: after change_property, conn_error=%d", conn_err);
+        }
         if ((img_error = xcb_request_check(conn, img_cookie))) {
+            dbg_write("IMAGE: xcb_change_property FAILED: code=%u",
+                      (unsigned)img_error->error_code);
             ErrorF("winClipboardFlushXEvents - SelectionRequest - xcb_change_property failed for image\n");
             free(img_error);
             fAbort = TRUE;
             goto done;
-        } 
+        }
+        dbg_write("IMAGE: xcb_change_property OK"); 
  
         imgSelection.response_type = XCB_SELECTION_NOTIFY;
         imgSelection.requestor = selection_request->requestor;
@@ -1051,13 +1100,28 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
         imgSelection.target = selection_request->target;
         imgSelection.property = selection_request->property;
         imgSelection.time = selection_request->time;
+
+        dbg_write("IMAGE: sending SelectionNotify: req=0x%x prop=0x%x(%u) tgt=0x%x",
+                  (unsigned)imgSelection.requestor,
+                  (unsigned)imgSelection.property,
+                  (unsigned)imgSelection.property,
+                  (unsigned)imgSelection.target);
+
         img_cookie = xcb_send_event_checked(conn, FALSE,
                                             imgSelection.requestor,
                                             0, (char *) &imgSelection);
+        {
+            int conn_err = xcb_connection_has_error(conn);
+            dbg_write("IMAGE: after send_event, conn_error=%d", conn_err);
+        }
         if ((img_error = xcb_request_check(conn, img_cookie))) {
+            dbg_write("IMAGE: xcb_send_event FAILED: code=%u",
+                      (unsigned)img_error->error_code);
             ErrorF("winClipboardFlushXEvents - SelectionRequest - "
                     "xcb_send_event() failed for image\n");
             free(img_error);
+        } else {
+            dbg_write("IMAGE: xcb_send_event OK");
         } 
  
         goto done;
@@ -1399,6 +1463,36 @@ winClipboardFlushXEvents(HWND hwnd,
             break;
 
         case XCB_PROPERTY_NOTIFY:
+#ifdef CLIPDEBUG
+            {
+                xcb_property_notify_event_t *pn =
+                    (xcb_property_notify_event_t *)event;
+                if (pn->atom == atoms->atomDebugOn &&
+                    pn->state == XCB_PROPERTY_NEW_VALUE) {
+                    dbg_open();
+                    dbg_write("DEBUG LOG STARTED");
+                    free(event);
+                    continue;
+                }
+                if (pn->atom == atoms->atomDebugOn &&
+                    pn->state == XCB_PROPERTY_DELETE) {
+                    dbg_write("DEBUG LOG STOPPED");
+                    dbg_close();
+                    free(event);
+                    continue;
+                }
+                if (pn->atom == atoms->atomDebugOff &&
+                    pn->state == XCB_PROPERTY_NEW_VALUE) {
+                    dbg_write("X server shutdown requested via CLIPTEST_DBG_OFF");
+                    dbg_close();
+                    ErrorF("winClipboardFlushXEvents - CLIPTEST_DBG_OFF, "
+                           "terminating process\n");
+                    TerminateProcess(GetCurrentProcess(), 0);
+                    free(event);
+                    continue;
+                }
+            }
+#endif
             result = handlePropertyNotify(hwnd, iWindow, conn, data, atoms,
                                                (xcb_property_notify_event_t *)event);
             if (result != WIN_XEVENTS_SUCCESS)

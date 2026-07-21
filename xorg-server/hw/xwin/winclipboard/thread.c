@@ -197,6 +197,24 @@ winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
     atoms.atomImageJpeg = intern_atom(conn, "image/jpeg");
     atoms.atomImageGif  = intern_atom(conn, "image/gif");
     atoms.atomImageProbe = intern_atom(conn, "CYGX_IMAGE_PROBE");
+#ifdef CLIPDEBUG
+    atoms.atomDebugOn = intern_atom(conn, "CLIPTEST_DBG_ON");
+    atoms.atomDebugOff = intern_atom(conn, "CLIPTEST_DBG_OFF");
+#endif
+
+    /* Register clipboard formats dynamically (NOT hardcoded) */
+    atoms.cfPng  = RegisterClipboardFormatA("PNG");
+    atoms.cfJfif = RegisterClipboardFormatA("JFIF");
+    atoms.cfGif  = RegisterClipboardFormatA("GIF");
+
+    /* Open debug log unconditionally so we capture all events */
+#ifdef CLIPDEBUG
+    dbg_open();
+    dbg_write("winClipboardProc: debug log opened, atoms interned, "
+              "cfPng=%u cfJfif=%u cfGif=%u",
+              (unsigned)atoms.cfPng, (unsigned)atoms.cfJfif,
+              (unsigned)atoms.cfGif);
+#endif
 
     xcb_screen_t *root_screen = xcb_aux_get_screen(conn, screen);
     xcb_window_t root_window_id = root_screen->root;

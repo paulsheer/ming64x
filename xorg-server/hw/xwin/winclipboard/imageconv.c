@@ -59,6 +59,11 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#define MAKE32(a,b,c,d)        ((((unsigned int) (a)) << 24) | \
+                                (((unsigned int) (b)) << 16) | \
+                                (((unsigned int) (c)) << 8) | \
+                                (((unsigned int) (d)) << 0))
+
 /*
  * Size in bytes of everything in a packed DIB before the pixel data: the info
  * header, any BI_BITFIELDS colour masks, and the colour table.  This is also
@@ -96,19 +101,88 @@ winClipboardDibPixelOffset(const BITMAPINFOHEADER *pbih)
 }
 
 /*
- * Wrap a packed DIB as a .bmp file (image/bmp).  No codec needed: prepend a
- * BITMAPFILEHEADER (14 bytes, packed in the SDK so sizeof == 14) and copy the
- * DIB verbatim, which preserves the exact colour depth and any alpha bytes.
+ * Wrap a packed DIB as a .bmp file (image/bmp).
+ *
+ * When flatten is TRUE and the DIB is DIBV5 (biSize >= 124) with 32-bit
+ * colour, alpha is composited against a gray (128,128,128) background and
+ * a 24-bit BI_RGB BMP is produced.  Otherwise the DIB is copied verbatim,
+ * preserving the exact colour depth and any alpha bytes.
  */
 static BOOL
 winClipboardDibToBmp(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
-                     void **ppvData, unsigned long *pcbData)
+                     void **ppvData, unsigned long *pcbData,
+                     BOOL flatten)
 {
     SIZE_T offBits;
     SIZE_T cbFile;
     unsigned char *out;
     BITMAPFILEHEADER *pbfh;
+    int bpp = pbih->biBitCount;
 
+    if (flatten && pbih->biSize >= sizeof(BITMAPV5HEADER) && bpp == 32) {
+        /* Composite alpha against gray (128,128,128), produce 24-bit BMP */
+        int w = pbih->biWidth;
+        int h = pbih->biHeight < 0 ? -(int)pbih->biHeight : (int)pbih->biHeight;
+        int pix_offset = (int)winClipboardDibPixelOffset(pbih);
+        int stride = ((w * bpp + 31) / 32) * 4;
+        int out_stride = ((w * 24 + 31) / 32) * 4;
+        SIZE_T cbPixels = (SIZE_T)h * out_stride;
+        SIZE_T cbHeader = sizeof(BITMAPINFOHEADER);
+        SIZE_T cbDibOut = cbHeader + cbPixels;
+        const unsigned char *src = (const unsigned char *)pbih + pix_offset;
+        unsigned char *dstPixels;
+        BITMAPINFOHEADER *out_ih;
+        int row, col;
+
+        if (pix_offset <= 0 || pix_offset > (int)cbDib)
+            return FALSE;
+
+        cbFile = sizeof(BITMAPFILEHEADER) + cbDibOut;
+        out = malloc(cbFile);
+        if (!out)
+            return FALSE;
+
+        pbfh = (BITMAPFILEHEADER *)out;
+        pbfh->bfType = 0x4D42;              /* 'BM' */
+        pbfh->bfSize = (DWORD)cbFile;
+        pbfh->bfReserved1 = 0;
+        pbfh->bfReserved2 = 0;
+        pbfh->bfOffBits = (DWORD)(sizeof(BITMAPFILEHEADER) + cbHeader);
+
+        out_ih = (BITMAPINFOHEADER *)(out + sizeof(BITMAPFILEHEADER));
+        memset(out_ih, 0, sizeof(BITMAPINFOHEADER));
+        out_ih->biSize = sizeof(BITMAPINFOHEADER);
+        out_ih->biWidth = w;
+        out_ih->biHeight = pbih->biHeight;
+        out_ih->biPlanes = 1;
+        out_ih->biBitCount = 24;
+        out_ih->biCompression = BI_RGB;
+        out_ih->biSizeImage = (DWORD)cbPixels;
+
+        dstPixels = out + sizeof(BITMAPFILEHEADER) + cbHeader;
+        for (row = 0; row < h; row++) {
+            const unsigned char *src_row = src + (SIZE_T)(h - 1 - row) * stride;
+            unsigned char *dst_row = dstPixels + (SIZE_T)row * out_stride;
+            for (col = 0; col < w; col++) {
+                unsigned int b = src_row[col * 4 + 0];
+                unsigned int g = src_row[col * 4 + 1];
+                unsigned int r = src_row[col * 4 + 2];
+                unsigned int a = src_row[col * 4 + 3];
+                unsigned int inv_a = 255 - a;
+                dst_row[col * 3 + 0] = (unsigned char)((b * a + 128 * inv_a) / 255);
+                dst_row[col * 3 + 1] = (unsigned char)((g * a + 128 * inv_a) / 255);
+                dst_row[col * 3 + 2] = (unsigned char)((r * a + 128 * inv_a) / 255);
+            }
+            for (col = w * 3; col < out_stride; col++)
+                dst_row[col] = 0;
+        }
+
+        *ppvData = out;
+        *pcbData = (unsigned long)cbFile;
+        return TRUE;
+    }
+
+    /* Original verbatim path */
     offBits = winClipboardDibPixelOffset(pbih);
     if (offBits > cbDib)
         return FALSE;                   /* malformed: header runs past the data */
@@ -379,7 +453,7 @@ winClipboardDibToJpeg(const BITMAPINFOHEADER *pbih, SIZE_T cbDib,
     int w, h, channels;
     JpgMemContext ctx = { NULL, 0, 0 };
 
-    if (!winClipboardDibToBmp(pbih, cbDib, &pvBmp, &cbBmp))
+    if (!winClipboardDibToBmp(pbih, cbDib, &pvBmp, &cbBmp, TRUE))
         return FALSE;
 
     /* Force 3 channels (RGB) — JPEG has no alpha */
@@ -708,7 +782,7 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
                with transparency is on the clipboard, merge DIB color with
                GIF alpha to produce a PNG that preserves both. */
             int bpp = pbih->biBitCount;
-            if (bpp == 32 && IsClipboardFormatAvailable(49350)) {
+            if (bpp == 32 && IsClipboardFormatAvailable(atoms->cfGif)) {
                 int hasDibAlpha = 0;
                 int pix_offset = (int) winClipboardDibPixelOffset(pbih);
                 int stride = ((pbih->biWidth * bpp + 31) / 32) * 4;
@@ -735,7 +809,7 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
                 }
 
                 if (!hasDibAlpha) {
-                    HANDLE hGif = GetClipboardData(49350);
+                    HANDLE hGif = GetClipboardData(atoms->cfGif);
                     if (hGif) {
                         SIZE_T cbGif = GlobalSize(hGif);
                         const void *pGif = GlobalLock(hGif);
@@ -756,7 +830,7 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
         else if (target == atoms->atomImageGif)
             ok = winClipboardDibToGif(pbih, cbDib, ppvData, pcbData);
         else
-            ok = winClipboardDibToBmp(pbih, cbDib, ppvData, pcbData);
+            ok = winClipboardDibToBmp(pbih, cbDib, ppvData, pcbData, FALSE);
     }
 
     GlobalUnlock(hDib);
@@ -779,7 +853,8 @@ winClipboardEncodeImage(xcb_atom_t target, ClipboardAtoms *atoms,
 BOOL
 winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
                               const void *data, unsigned long len,
-                              void **ppvDib, SIZE_T *pcbDib)
+                              void **ppvDib, SIZE_T *pcbDib,
+                              BOOL fV5)
 {
     *ppvDib = NULL;
     *pcbDib = 0;
@@ -871,7 +946,8 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         fHasAlpha = (transparent != NO_TRANSPARENT_COLOR);
 
         cbPixels = (SIZE_T) w * (SIZE_T) h * 4;
-        headerSize = sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
+        headerSize = (fV5 && fHasAlpha) ? sizeof(BITMAPV5HEADER)
+                     : sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
         if (cbPixels > (SIZE_T) ULONG_MAX - headerSize) {
             DGifCloseFile(gif, &error);
             return FALSE;
@@ -885,8 +961,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         }
 
         pbih = (BITMAPINFOHEADER *) dib;
-        memset(pbih, 0, sizeof(BITMAPINFOHEADER));
-        pbih->biSize = sizeof(BITMAPINFOHEADER);
+        memset(pbih, 0, headerSize);
+        pbih->biSize = (fV5 && fHasAlpha) ? sizeof(BITMAPV5HEADER)
+                                          : sizeof(BITMAPINFOHEADER);
         pbih->biWidth = w;
         pbih->biHeight = h;
         pbih->biPlanes = 1;
@@ -895,10 +972,19 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         pbih->biSizeImage = (DWORD) cbPixels;
 
         if (fHasAlpha) {
-            DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
-            masks[0] = 0x000000FF;  /* Blue  */
-            masks[1] = 0x0000FF00;  /* Green */
-            masks[2] = 0x00FF0000;  /* Red   */
+            if (fV5) {
+                BITMAPV5HEADER *pV5 = (BITMAPV5HEADER *) dib;
+                pV5->bV5RedMask   = 0x00FF0000;
+                pV5->bV5GreenMask = 0x0000FF00;
+                pV5->bV5BlueMask  = 0x000000FF;
+                pV5->bV5AlphaMask = 0xFF000000;
+                pV5->bV5CSType    = MAKE32('B','G','R','s');
+            } else {
+                DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
+                masks[0] = 0x000000FF;  /* Blue  */
+                masks[1] = 0x0000FF00;  /* Green */
+                masks[2] = 0x00FF0000;  /* Red   */
+            }
         }
 
         /* GIF is top-down; DIB is bottom-up. Flip rows while converting. */
@@ -947,12 +1033,15 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         }
 
         /* Use BI_BITFIELDS only when the source had an alpha channel so the
-           unused bits (24-31) are available as implicit alpha. */
+           unused bits (24-31) are available as implicit alpha.
+           When fV5 is set and alpha is present, produce a full
+           BITMAPV5HEADER with bV5AlphaMask. */
         {
             BOOL fHasAlpha = (channels == 4);
 
             cbPixels = (SIZE_T) w * (SIZE_T) h * 4;
-            headerSize = sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
+            headerSize = (fV5 && fHasAlpha) ? sizeof(BITMAPV5HEADER)
+                         : sizeof(BITMAPINFOHEADER) + (fHasAlpha ? 12 : 0);
             if (cbPixels > (SIZE_T) ULONG_MAX - headerSize) {
                 stbi_image_free(pixels);
                 return FALSE;
@@ -966,8 +1055,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
             }
 
             pbih = (BITMAPINFOHEADER *) dib;
-            memset(pbih, 0, sizeof(BITMAPINFOHEADER));
-            pbih->biSize = sizeof(BITMAPINFOHEADER);
+            memset(pbih, 0, headerSize);
+            pbih->biSize = (fV5 && fHasAlpha) ? sizeof(BITMAPV5HEADER)
+                                              : sizeof(BITMAPINFOHEADER);
             pbih->biWidth = w;
             pbih->biHeight = h;
             pbih->biPlanes = 1;
@@ -976,10 +1066,19 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
             pbih->biSizeImage = (DWORD) cbPixels;
 
             if (fHasAlpha) {
-                DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
-                masks[0] = 0x000000FF;  /* Blue  */
-                masks[1] = 0x0000FF00;  /* Green */
-                masks[2] = 0x00FF0000;  /* Red   */
+                if (fV5) {
+                    BITMAPV5HEADER *pV5 = (BITMAPV5HEADER *) dib;
+                    pV5->bV5RedMask   = 0x00FF0000;
+                    pV5->bV5GreenMask = 0x0000FF00;
+                    pV5->bV5BlueMask  = 0x000000FF;
+                    pV5->bV5AlphaMask = 0xFF000000;
+                    pV5->bV5CSType    = MAKE32('B','G','R','s');
+                } else {
+                    DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
+                    masks[0] = 0x000000FF;  /* Blue  */
+                    masks[1] = 0x0000FF00;  /* Green */
+                    masks[2] = 0x00FF0000;  /* Red   */
+                }
             }
 
             /* stb_image returns top-down RGBA; DIB expects bottom-up BGRA.

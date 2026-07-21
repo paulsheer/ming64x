@@ -1,0 +1,1 @@
+../giflib/gif_lib_private.h

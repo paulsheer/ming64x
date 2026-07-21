@@ -225,6 +225,84 @@ decodeToRgba(const void *src, unsigned long srcLen, int *w, int *h, int fmt)
 /* --- encode RGBA to BMP file (BITMAPFILEHEADER + DIB) ------------------- */
 
 static BOOL
+rgbaToBmpFlatten(const unsigned char *rgba, int w, int h,
+          void **ppvData, unsigned long *pcbData)
+{
+    SIZE_T cbPixels, cbFile;
+    int stride, row;
+    unsigned char *out;
+    BITMAPFILEHEADER *pbfh;
+    BITMAPINFOHEADER *pbih;
+
+    if (w <= 0 || h <= 0)
+        return FALSE;
+
+    /* 24-bit DIB rows are DWORD-aligned */
+    stride = ((w * 24 + 31) / 32) * 4;
+    cbPixels = (SIZE_T) stride * (SIZE_T) h;
+    if (cbPixels > (SIZE_T) ULONG_MAX - sizeof(BITMAPFILEHEADER)
+                  - sizeof(BITMAPINFOHEADER))
+        return FALSE;
+    cbFile = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + cbPixels;
+
+    out = malloc(cbFile);
+    if (!out) return FALSE;
+
+    /* BITMAPFILEHEADER */
+    pbfh = (BITMAPFILEHEADER *) out;
+    pbfh->bfType = 0x4D42;      /* 'BM' */
+    pbfh->bfSize = (DWORD) cbFile;
+    pbfh->bfReserved1 = 0;
+    pbfh->bfReserved2 = 0;
+    pbfh->bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+
+    /* BITMAPINFOHEADER */
+    pbih = (BITMAPINFOHEADER *) (out + sizeof(BITMAPFILEHEADER));
+    memset(pbih, 0, sizeof(BITMAPINFOHEADER));
+    pbih->biSize = sizeof(BITMAPINFOHEADER);
+    pbih->biWidth = w;
+    pbih->biHeight = h;                 /* positive = bottom-up */
+    pbih->biPlanes = 1;
+    pbih->biBitCount = 24;
+    pbih->biCompression = BI_RGB;
+    pbih->biSizeImage = (DWORD) cbPixels;
+
+    /* RGBA is top-down; DIB is bottom-up BGR.
+       Composite alpha against gray (128,128,128) so feathered
+       edges have a smooth transition rather than a hard cut. */
+    {
+        unsigned char *dstRow = out + pbfh->bfOffBits
+                                + (SIZE_T) (h - 1) * stride;
+        const unsigned char *srcRow = rgba;
+        for (row = 0; row < h; row++) {
+            int col;
+            for (col = 0; col < w; col++) {
+                unsigned int r = srcRow[col * 4 + 0];
+                unsigned int g = srcRow[col * 4 + 1];
+                unsigned int b = srcRow[col * 4 + 2];
+                unsigned int a = srcRow[col * 4 + 3];
+                unsigned int inv_a = 255 - a;
+                dstRow[col * 3 + 0] =
+                    (unsigned char)((b * a + 128 * inv_a) / 255);
+                dstRow[col * 3 + 1] =
+                    (unsigned char)((g * a + 128 * inv_a) / 255);
+                dstRow[col * 3 + 2] =
+                    (unsigned char)((r * a + 128 * inv_a) / 255);
+            }
+            /* Zero-fill row padding bytes (if stride > w*3) */
+            for (col = w * 3; col < stride; col++)
+                dstRow[col] = 0;
+            srcRow += w * 4;
+            dstRow -= stride;
+        }
+    }
+
+    *ppvData = out;
+    *pcbData = (unsigned long) cbFile;
+    return TRUE;
+}
+
+static BOOL
 rgbaToBmp(const unsigned char *rgba, int w, int h,
           void **ppvData, unsigned long *pcbData)
 {
@@ -438,15 +516,18 @@ encodeFromRgba(const unsigned char *rgba, int w, int h,
         MemBufContext ctx = { NULL, 0, 0 };
         unsigned char *rgb;
         int i, npixels;
-        /* stbi_write_jpg_to_func has no stride parameter — strip alpha to a
-           tightly-packed RGB buffer first. */
+        /* stbi_write_jpg_to_func has no stride parameter.
+           Composite alpha against gray (128,128,128) so feathered
+           edges have a smooth transition. */
         npixels = w * h;
         rgb = malloc((size_t) npixels * 3);
         if (!rgb) return FALSE;
         for (i = 0; i < npixels; i++) {
-            rgb[i * 3 + 0] = rgba[i * 4 + 0];
-            rgb[i * 3 + 1] = rgba[i * 4 + 1];
-            rgb[i * 3 + 2] = rgba[i * 4 + 2];
+            unsigned int a = rgba[i * 4 + 3];
+            unsigned int inv_a = 255 - a;
+            rgb[i * 3 + 0] = (unsigned char)((rgba[i * 4 + 0] * a + 128 * inv_a) / 255);
+            rgb[i * 3 + 1] = (unsigned char)((rgba[i * 4 + 1] * a + 128 * inv_a) / 255);
+            rgb[i * 3 + 2] = (unsigned char)((rgba[i * 4 + 2] * a + 128 * inv_a) / 255);
         }
         if (0 == stbi_write_jpg_to_func(memBufWrite, &ctx,
                                          w, h, 3, rgb, 85)) {
@@ -510,8 +591,11 @@ convertFnRawToRaw(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
     (void) ppvData;
-    (void) pcbData;
+    dbg_write("convertFnRawToRaw: entry cb=%lu",
+              pcbData ? *pcbData : 0);
     snprintf(statusmsg, statusmsgSize, "no conversion");
+    dbg_write("convertFnRawToRaw: OK (no conversion) cb=%lu",
+              pcbData ? *pcbData : 0);
     return TRUE;
 }
 
@@ -521,82 +605,142 @@ BOOL
 convertFnPngToGif(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_PNG, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToGif: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_PNG, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToGif: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnJpegToGif(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_JPEG, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToGif: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_JPEG, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToGif: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnBmpToGif(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_BMP, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToGif: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_BMP, FMT_GIF, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToGif: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnGifToPng(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_GIF, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToPng: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_GIF, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToPng: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnJpegToPng(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_JPEG, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToPng: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_JPEG, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToPng: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnBmpToPng(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_BMP, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToPng: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_BMP, FMT_PNG, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToPng: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnPngToJpeg(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_PNG, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToJpeg: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_PNG, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToJpeg: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnGifToJpeg(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_GIF, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToJpeg: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_GIF, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToJpeg: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnBmpToJpeg(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_BMP, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToJpeg: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_BMP, FMT_JPEG, statusmsg, statusmsgSize);
+    dbg_write("convertFnBmpToJpeg: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnPngToBmp(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_PNG, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToBmp: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_PNG, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnPngToBmp: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnGifToBmp(void **ppvData, unsigned long *pcbData,
                   char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_GIF, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToBmp: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_GIF, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnGifToBmp: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }
 
 BOOL
 convertFnJpegToBmp(void **ppvData, unsigned long *pcbData,
                    char *statusmsg, size_t statusmsgSize)
 {
-    return doConvert(ppvData, pcbData, FMT_JPEG, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToBmp: entry cb=%lu",
+              pcbData ? *pcbData : 0);
+    BOOL ok = doConvert(ppvData, pcbData, FMT_JPEG, FMT_BMP, statusmsg, statusmsgSize);
+    dbg_write("convertFnJpegToBmp: %s cb=%lu",
+              ok ? "OK" : "FAIL", pcbData ? *pcbData : 0);
+    return ok;
 }

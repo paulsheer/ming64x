@@ -173,7 +173,10 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         atoms = cwcp->atoms;
         fRunning = TRUE;
 
-        AddClipboardFormatListener(hwnd);
+        {
+            BOOL b = AddClipboardFormatListener(hwnd);
+            dbg_write("WM_CREATE: AddClipboardFormatListener returned %d", (int)b);
+        }
     }
         return 0;
 
@@ -281,33 +284,47 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
          */
 
         /* Bail when we still own the clipboard */
-        if (hwnd == GetClipboardOwner()) {
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - We own the clipboard, returning.\n");
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
-            return 0;
+        {
+            HWND owner = GetClipboardOwner();
+            dbg_write("WM_CBUPDATE: GetClipboardOwner=0x%p hwnd=0x%p", owner, hwnd);
+            if (hwnd == owner) {
+                dbg_write("WM_CBUPDATE: we own clipboard, returning");
+                winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - We own the clipboard, returning.\n");
+                winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
+                return 0;
+            }
         }
 
         /* Bail when shutting down */
         if (!fRunning)
             return 0;
 
-        const UINT regPNG = 49352, regJFIF = 49351, regGIF = 49350;
+        const UINT regPNG = atoms->cfPng, regJFIF = atoms->cfJfif, regGIF = atoms->cfGif;
         BOOL bOneOfOurs = FALSE;
         BOOL fCheckedClipboard = FALSE;
 
+        dbg_write("WM_CBUPDATE: opening clipboard...");
         if (OpenClipboard(hwnd)) {
             fCheckedClipboard = TRUE;
             UINT fmt = 0;
-            while ((fmt = EnumClipboardFormats(fmt)) != 0)
+            dbg_write("WM_CBUPDATE: OpenClipboard OK, enumerating...");
+            while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                dbg_write("WM_CBUPDATE:   fmt=%u (0x%x)", (unsigned)fmt, (unsigned)fmt);
                 if (fmt == CF_UNICODETEXT || fmt == CF_TEXT || fmt == CF_HDROP ||
-                    fmt == CF_DIB || fmt == CF_DIBV5 || fmt == regPNG || fmt == regJFIF || fmt == regGIF)
+                    fmt == CF_DIB || fmt == CF_DIBV5 || fmt == regPNG || fmt == regJFIF || fmt == regGIF) {
                     bOneOfOurs = TRUE;
+                    dbg_write("WM_CBUPDATE:   -> bOneOfOurs=TRUE");
+                }
+            }
+            dbg_write("WM_CBUPDATE: enum done, bOneOfOurs=%d", (int)bOneOfOurs);
             CloseClipboard();
         } else {
+            dbg_write("WM_CBUPDATE: OpenClipboard FAILED: %lu", GetLastError());
             ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
         }
 
         if (fCheckedClipboard && !bOneOfOurs) {
+            dbg_write("WM_CBUPDATE: not ours, releasing X11 selections");
             xcb_get_selection_owner_cookie_t cookie_get;
             xcb_get_selection_owner_reply_t *reply;
 
@@ -347,6 +364,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         }
 
+        dbg_write("WM_CBUPDATE: reasserting X11 selections (bOneOfOurs=%d)", (int)bOneOfOurs);
         /* Reassert ownership of PRIMARY */
         cookie_set = xcb_set_selection_owner_checked(conn, iWindow, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
         error = xcb_request_check(conn, cookie_set);
@@ -410,6 +428,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         xcb_atom_t selection;
         ClipboardConversionData data;
         memset(&data, '\0', sizeof(data));
+        data.requestedFmt = (UINT)wParam;
         int best_target = 0, best_priority = INT_MAX;
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT %d - Hello.\n",
@@ -566,6 +585,13 @@ winClipboardFlushWindowsMessageQueue(HWND hwnd)
      * are sent to our thread, such as WM_QUIT.
      */
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        /* Log every non-paint, non-timer message */
+        if (msg.message != WM_TIMER && msg.message != WM_NCHITTEST &&
+            msg.message != 0x0093 && msg.message != 0x0096) {
+            dbg_write("MSG: hwnd=%p msg=0x%x(%u) w=%lu l=%lu",
+                      msg.hwnd, (unsigned)msg.message, (unsigned)msg.message,
+                      (unsigned long)msg.wParam, (unsigned long)msg.lParam);
+        }
         /* Dispatch the message if not WM_QUIT */
         if (msg.message == WM_QUIT)
             return FALSE;

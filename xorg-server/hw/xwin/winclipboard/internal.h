@@ -108,7 +108,23 @@ typedef struct
     xcb_atom_t atomImageJpeg;
     xcb_atom_t atomImageGif;
     xcb_atom_t atomImageProbe;   /* dedicated property for async TARGETS probe */
+#ifdef CLIPDEBUG
+    xcb_atom_t atomDebugOn;      /* CLIPTEST_DBG_ON — starts debug logging */
+    xcb_atom_t atomDebugOff;     /* CLIPTEST_DBG_OFF — stops debug logging */
+#endif
+    /* Registered Win32 clipboard format IDs (populated at startup) */
+    UINT cfPng;
+    UINT cfJfif;
+    UINT cfGif;
 } ClipboardAtoms;
+
+#ifdef CLIPDEBUG
+/* Debug logging (xevents.c, wndproc.c) */
+void dbg_open(void);
+void dbg_write(const char *fmt, ...) _X_ATTRIBUTE_PRINTF(1, 2);
+#else
+#define dbg_write(fmt...)       do { } while(0)
+#endif
 
 /* Encode the Win32 clipboard image (CF_DIB) into the requested image target
    (image/bmp only — no PNG/JPEG encoder is linked).
@@ -131,7 +147,8 @@ BOOL
 BOOL
  winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
                                const void *data, unsigned long len,
-                               void **ppvDib, SIZE_T *pcbDib);
+                               void **ppvDib, SIZE_T *pcbDib,
+                               BOOL fV5);
 
 /*
  * winclipboardwndproc.c
@@ -158,6 +175,7 @@ typedef struct
   xcb_atom_t *targetList;
   unsigned char *incr;
   unsigned long int incrsize;
+  UINT requestedFmt;
 } ClipboardConversionData;
 
 int
