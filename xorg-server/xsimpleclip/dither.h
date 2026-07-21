@@ -1,1 +1,0 @@
-../hw/xwin/winclipboard/dither.h

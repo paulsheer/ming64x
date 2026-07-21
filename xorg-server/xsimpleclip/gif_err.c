@@ -1,1 +1,0 @@
-../giflib/gif_err.c

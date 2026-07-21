@@ -1,1 +1,0 @@
-../giflib/egif_lib.c
