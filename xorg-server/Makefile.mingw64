@@ -201,11 +201,9 @@ $(OBJDIR)/include/dix-config.h: $(PROJECTROOT)/include/dix-config.h
 	@mkdir -p $(dir $@)
 	@echo "  FIXUP   $< -> $@"
 	@$(SED) \
-		-e 's/#define IPv6 1/#undef IPv6/' \
-		-e 's/#define HAVE_GETADDRINFO 1/#undef HAVE_GETADDRINFO/' \
 		-e 's/#define HAVE_DLFCN_H 1/#undef HAVE_DLFCN_H/' \
 		-e 's/#define HAVE_SETITIMER 1/#undef HAVE_SETITIMER/' \
-		-e 's/#define HYPERV 1/#undef HYPERV/' \
+		-e 's/#undef HYPERV/#define HYPERV 1/' \
 		-e '/^#define strcasecmp _stricmp$$/d' \
 		-e '/^#define strncasecmp _strnicmp$$/d' \
 		-e '/^const char \*inet_ntop.*socklen_t cnt);$$/d' \

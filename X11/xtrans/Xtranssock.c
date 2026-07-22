@@ -375,6 +375,7 @@ TRANS(SocketINETGetAddr) (XtransConnInfo ciptr)
 
 
 #ifdef HYPERV
+static int TRANS(SocketCreateListener) (XtransConnInfo ciptr, struct sockaddr *sockname, int socknamelen, unsigned int flags);
 static int StringToGUID(const char* szGUID, GUID* g) {
     // Check if string is a valid GUID
     if (strlen(szGUID) != 38) return 0;
