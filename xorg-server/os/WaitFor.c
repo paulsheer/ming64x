@@ -201,6 +201,7 @@ WaitForSomething(Bool are_ready)
             i = -1;
         else
         {
+//             if (!timeout) timeout=10; /* Avoid a 100 % usage loop, timeout is in milliseconds */
             i = ospoll_wait(server_poll, timeout);
         }
         pollerr = GetErrno();
