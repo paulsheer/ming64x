@@ -1270,8 +1270,10 @@ SocketBytesReadable(Display *dpy)
 {
     int bytes = 0, last_error;
 #ifdef WIN32
+    u_long nbytes;
     last_error = WSAGetLastError();
-    ioctlsocket(ConnectionNumber(dpy), FIONREAD, &bytes);
+    ioctlsocket(ConnectionNumber(dpy), FIONREAD, &nbytes);
+    bytes = (int)nbytes;
     WSASetLastError(last_error);
 #else
     last_error = errno;

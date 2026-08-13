@@ -638,7 +638,7 @@ XdmcpInit(void)
              }
           }
           sprintf(ErrorMessage+strlen(ErrorMessage),"When problems connecting, please specify the ip-address you want to use with -from\n");
-          ErrorF(ErrorMessage);
+          ErrorF("%s", ErrorMessage);
         }
         xdmcp_start();
     }

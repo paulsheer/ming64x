@@ -2,7 +2,8 @@
 # using MinGW-w64. With OpenGL/Mesa support.
 #
 # Prerequisites:
-#   MinGW-w64 toolchain (x86_64-w64-mingw32-gcc, ar, windres)
+#   MinGW-w64 toolchain (x86_64-w64-mingw32-gcc, ar, windres; or CLANG=1 for
+#   the clang/lld toolchain at /opt/clang-mingw)
 #   flex, bison (for winprefs lex/yacc)
 #   Dependencies pre-built and installed under $(DEP_PREFIX):
 #     zlib, pixman-1, freetype2, openssl, libX11, libxcb, libXau,
@@ -13,10 +14,33 @@
 # ---------------------------------------------------------------------------
 # Toolchain
 # ---------------------------------------------------------------------------
+# CLANG=1 selects the clang/lld mingw-w64 toolchain at $(CLANG_PREFIX)
+# (/opt/clang-mingw) instead of the default MinGW gcc toolchain.
 CROSS      ?= x86_64-w64-mingw32-
+CLANG_PREFIX ?= /opt/clang-mingw/bin
+ifneq ($(CLANG),1)
 CC         := $(CROSS)gcc
 AR         := $(CROSS)ar
 WINDRES    := $(CROSS)windres
+else
+CC         := $(CLANG_PREFIX)/$(CROSS)clang
+AR         := $(CLANG_PREFIX)/$(CROSS)ar
+WINDRES    := $(CLANG_PREFIX)/$(CROSS)windres
+# clang-only warnings (gcc does not emit these)
+CFLAGS     += -Wno-typedef-redefinition -Wno-deprecated-non-prototype
+endif
+
+# ASAN=1 enables AddressSanitizer; only supported with the clang/lld toolchain.
+ASAN ?= 0
+ifeq ($(ASAN),1)
+ifeq ($(CLANG),1)
+CFLAGS  += -fsanitize=address -fno-omit-frame-pointer
+LDFLAGS += -fsanitize=address
+else
+$(error ASAN=1 requires CLANG=1)
+endif
+endif
+
 FLEX       ?= flex
 BISON      ?= bison
 SED        := sed
@@ -211,7 +235,10 @@ $(OBJDIR)/include/dix-config.h: $(PROJECTROOT)/include/dix-config.h
 		$< > $@
 	@echo '' >> $@
 	@echo '/* MinGW: _sigset_t for os.h sigset_t typedef */' >> $@
+	@echo '#ifndef _XORG_DIX_CONFIG_SIGSET_T' >> $@
+	@echo '#define _XORG_DIX_CONFIG_SIGSET_T' >> $@
 	@echo 'typedef unsigned long long _sigset_t;' >> $@
+	@echo '#endif /* _XORG_DIX_CONFIG_SIGSET_T */' >> $@
 
 $(OBJDIR)/include/stdint.h: $(PROJECTROOT)/include/stdint.h
 	@mkdir -p $(dir $@)
@@ -466,7 +493,7 @@ $(DAMAGEEXT_OBJS):      CFLAGS += -I$(TOPSRCDIR)/dix
 $(MIEXT_ROOTLESS_OBJS): CFLAGS += -I$(TOPSRCDIR)/dix
 $(XWIN_OBJS):           CFLAGS += -I$(TOPSRCDIR)/miext/rootless -I$(TOPSRCDIR)/dix
 $(XWIN_OBJS):           CFLAGS += -I$(OBJDIR)/hw/xwin -I$(TOPSRCDIR)/glx -I$(TOPSRCDIR)/hw/xwin/glx
-$(GLX_OBJS):            CFLAGS += -I$(TOPSRCDIR)/glx
+$(GLX_OBJS):            CFLAGS += -I$(TOPSRCDIR)/glx -D_GLAPI_NO_EXPORTS
 $(GLX_WIN_OBJS):        CFLAGS += -I$(TOPSRCDIR)/glx -I$(OBJDIR)/hw/xwin/glx -I$(TOPSRCDIR)/hw/xwin/glx
 $(XKB_OBJS):            CFLAGS += -I$(TOPSRCDIR)
 $(GIFLIB_OBJS):         CFLAGS += -I$(GIFLIB_DIR) -DHAVE_REALLOCARRAY=1
@@ -494,6 +521,8 @@ help:
 	@echo ""
 	@echo "  Build targets:"
 	@echo "    make -f Makefile.mingw64 all       Build the server (ming64x.exe + xkbcomp.exe)"
+	@echo "    make -f Makefile.mingw64 CLANG=1 all   Build with clang/lld toolchain (/opt/clang-mingw)"
+	@echo "    make -f Makefile.mingw64 CLANG=1 ASAN=1 all   Build with clang + AddressSanitizer (copies runtime DLLs to ../install/ming64x)"
 	@echo "    make -f Makefile.mingw64 clean     Remove build artifacts"
 	@echo ""
 	@echo "  Output:"
@@ -512,6 +541,21 @@ help:
 	@echo "================================================================================"
 
 all: $(TARGET) $(XKBCOMP_TARGET)
+
+ifeq ($(ASAN),1)
+# ASAN runtime DLLs ship with the clang-mingw toolchain; copy them next to the
+# installed server so an ASAN build can run on Windows (see /opt/clang-mingw/INSTALL).
+ASAN_RT_BIN  := $(CLANG_PREFIX)/../$(patsubst %-,%,$(CROSS))/bin
+ASAN_RT_DLLS := libclang_rt.asan_dynamic-x86_64.dll libc++.dll libunwind.dll libwinpthread-1.dll
+ASAN_INSTALL_DIR := $(PROJECTROOT)/install/ming64x
+ASAN_DLLS    := $(addprefix $(ASAN_INSTALL_DIR)/,$(ASAN_RT_DLLS))
+
+all: $(ASAN_DLLS)
+
+$(ASAN_DLLS): $(ASAN_INSTALL_DIR)/%: $(ASAN_RT_BIN)/%
+	@mkdir -p $(dir $@)
+	@cp $< $@
+endif
 
 $(ALL_OBJS): | $(FIXUP_HEADERS)
 
@@ -640,6 +684,7 @@ $(OBJDIR)/xkbcomp/xkbparse.o: $(OBJDIR)/xkbcomp/xkbparse.c $(OBJDIR)/xkbcomp/xkb
 
 clean:
 	rm -rf $(OBJDIR)
+	rm -f $(PROJECTROOT)/pthreadlight/*.o $(PROJECTROOT)/zlib/*.o
 
 # ---------------------------------------------------------------------------
 # pthreadlight — minimal pthreads-on-Windows replacement

@@ -433,7 +433,7 @@ CheckForAlpha(HWND hWnd, WindowPtr pWin, winScreenInfo *pScreenInfo)
     else if (useDwmEnableBlurBehindWindow)
         {
             HRESULT rc;
-            BOOL enabled;
+            WINBOOL enabled;
 
             rc = DwmIsCompositionEnabled(&enabled);
             if ((rc == S_OK) && enabled)
