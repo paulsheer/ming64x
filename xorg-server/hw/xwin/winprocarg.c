@@ -1231,10 +1231,8 @@ winLogVersionInfo(void)
         return;
     s_fBeenHere = TRUE;
 
-    ErrorF("Welcome to the VcXsrv X Server\n");
-    ErrorF("Vendor: %s\n", XVENDORNAME);
-    ErrorF("Release: %d.%d.%d.%d\n\n", XORG_VERSION_MAJOR,
-           XORG_VERSION_MINOR, XORG_VERSION_PATCH, XORG_VERSION_SNAP);
+    ErrorF("Welcome to https://github.com/paulsheer/ming64x --- based on VcXsrv by https://github.com/marchaesen\n");
+
 #ifdef HAVE_SYS_UTSNAME_H
     {
         struct utsname name;
