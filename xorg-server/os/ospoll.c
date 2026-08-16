@@ -448,6 +448,7 @@ ospoll_add(struct ospoll *ospoll, int fd,
 #ifdef WIN32POLL
         if (pos <= ospoll->iterator)
             ospoll->iterator++;
+        ospoll->osfds[pos].look_ahead_events = 0;
 #else
         ospoll->changed = TRUE;
 #endif
