@@ -662,6 +662,26 @@ CreateRootWindow(ScreenPtr pScreen)
     return TRUE;
 }
 
+static Pixel
+RootDefaultBackgroundPixel(ScreenPtr pScreen)
+{
+    unsigned short red, green, blue;
+    ColormapPtr pmap = NULL;
+    Pixel pixel;
+
+    red = 0x0F * 0x101;
+    green = 0x0F * 0x101;
+    blue = 0x1E * 0x101;
+
+    if (dixLookupResourceByType((void **) &pmap, pScreen->defColormap,
+                                X11_RESTYPE_COLORMAP, serverClient,
+                                DixReadAccess) == Success &&
+        AllocColor(pmap, &red, &green, &blue, &pixel, 0) == Success)
+        return pixel;
+
+    return pScreen->blackPixel;
+}
+
 void
 InitRootWindow(WindowPtr pWin)
 {
@@ -689,7 +709,7 @@ InitRootWindow(WindowPtr pWin)
         if (whiteRoot)
             pWin->background.pixel = pScreen->whitePixel;
         else
-            pWin->background.pixel = pScreen->blackPixel;
+            pWin->background.pixel = RootDefaultBackgroundPixel(pScreen);
         backFlag |= CWBackPixel;
     }
 
@@ -1149,7 +1169,7 @@ SetRootWindowBackground(WindowPtr pWin, ScreenPtr pScreen, Mask *index2)
         if (whiteRoot)
             pWin->background.pixel = pScreen->whitePixel;
         else
-            pWin->background.pixel = pScreen->blackPixel;
+            pWin->background.pixel = RootDefaultBackgroundPixel(pScreen);
         *index2 = CWBackPixel;
     }
 }
