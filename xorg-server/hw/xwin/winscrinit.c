@@ -177,7 +177,7 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
         winInitCursor(pScreen);
 #ifdef WINDBG
     else
-        winDebug("winScreenInit - Using software cursor\n");  
+        winDebug("winScreenInit - Using software cursor\n");
 #endif
 
     if (!noPanoramiXExtension) {

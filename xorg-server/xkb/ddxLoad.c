@@ -103,6 +103,97 @@ OutputDirectory(char *outdir, size_t size)
  */
 typedef void (*xkbcomp_buffer_callback)(FILE *out, void *userdata);
 
+#ifdef WIN32
+static int
+spawn_capture(const char *exe, const char *args)
+{
+    HANDLE hRead = NULL, hWrite = NULL;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    char *cmdline = NULL;
+    char buf[4096];
+    char line[4096];
+    size_t linelen = 0;
+    DWORD dwRead, i;
+    DWORD exitCode = 0;
+
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        ErrorF("XKB: CreatePipe failed: %lu\n", (unsigned long) GetLastError());
+        return -1;
+    }
+
+    /* The child must not inherit the read end, otherwise we never see EOF. */
+    if (!SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0)) {
+        ErrorF("XKB: SetHandleInformation failed: %lu\n",
+               (unsigned long) GetLastError());
+        CloseHandle(hRead);
+        CloseHandle(hWrite);
+        return -1;
+    }
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (asprintf(&cmdline, "\"%s\" %s", exe, args) == -1)
+        cmdline = NULL;
+
+    if (!CreateProcess(NULL, cmdline, NULL, NULL, TRUE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        ErrorF("XKB: Could not run xkbcomp (%s): %lu\n",
+               cmdline ? cmdline : exe, (unsigned long) GetLastError());
+        free(cmdline);
+        CloseHandle(hWrite);
+        CloseHandle(hRead);
+        return -1;
+    }
+
+    /* Parent never writes to the pipe; close it so ReadFile hits EOF
+       once the child exits. */
+    CloseHandle(hWrite);
+
+    while (ReadFile(hRead, buf, sizeof(buf) - 1, &dwRead, NULL) && dwRead > 0) {
+        buf[dwRead] = '\0';
+        for (i = 0; i < dwRead; i++) {
+            char c = buf[i];
+
+            if (c == '\n') {
+                line[linelen] = '\0';
+                ErrorF("%s\n", line);
+                linelen = 0;
+            }
+            else if (c != '\r') {
+                if (linelen < sizeof(line) - 1)
+                    line[linelen++] = c;
+            }
+        }
+    }
+    if (linelen > 0) {
+        line[linelen] = '\0';
+        ErrorF("%s\n", line);
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(hRead);
+    free(cmdline);
+
+    return (int) exitCode;
+}
+#endif
+
 /**
  * Start xkbcomp, let the callback write into xkbcomp's stdin. When done,
  * return a strdup'd copy of the file name we've written to.
@@ -112,6 +203,10 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
 {
     FILE *out;
     char *buf = NULL, keymap[PATH_MAX], xkm_output_dir[PATH_MAX];
+#ifdef WIN32
+    char *exe = NULL, *args = NULL;
+#endif
+    int warn;
 
     const char *emptystring = "";
     char *xkbbasedirflag = NULL;
@@ -153,24 +248,50 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
         }
     }
 
+    warn = ((xkbDebugFlags < 2) ? 1 :
+            ((xkbDebugFlags > 10) ? 10 : (int) xkbDebugFlags));
+
     if (asprintf(&buf,
                  "\"\"%s%sxkbcomp\" -w %d %s -xkm \"%s\" "
                  "-em1 %s -emp %s -eml %s \"%s%s.xkm\"\"",
                  xkbbindir, xkbbindirsep,
-                 ((xkbDebugFlags < 2) ? 1 :
-                  ((xkbDebugFlags > 10) ? 10 : (int) xkbDebugFlags)),
+                 warn,
                  xkbbasedirflag ? xkbbasedirflag : "", xkmfile,
                  PRE_ERROR_MSG, ERROR_PREFIX, POST_ERROR_MSG1,
                  xkm_output_dir, keymap) == -1)
         buf = NULL;
 
+#ifdef WIN32
+    if (asprintf(&exe, "%s%sxkbcomp.exe", xkbbindir, xkbbindirsep) == -1)
+        exe = NULL;
+    if (asprintf(&args,
+                 "-w %d %s -xkm \"%s\" "
+                 "-em1 %s -emp %s -eml %s \"%s%s.xkm\"",
+                 warn,
+                 xkbbasedirflag ? xkbbasedirflag : "", xkmfile,
+                 PRE_ERROR_MSG, ERROR_PREFIX, POST_ERROR_MSG1,
+                 xkm_output_dir, keymap) == -1)
+        args = NULL;
+#endif
+
     free(xkbbasedirflag);
 
+#ifdef WIN32
+    if (!buf || !exe || !args) {
+        free(buf);
+        free(exe);
+        free(args);
+        LogMessage(X_ERROR,
+                   "XKB: Could not invoke xkbcomp: not enough memory\n");
+        return NULL;
+    }
+#else
     if (!buf) {
         LogMessage(X_ERROR,
                    "XKB: Could not invoke xkbcomp: not enough memory\n");
         return NULL;
     }
+#endif
 
 #ifndef WIN32
     out = Popen(buf, "w");
@@ -185,14 +306,16 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
 #ifndef WIN32
         if (Pclose(out) == 0)
 #else
-        LogMessage(X_INFO, "Running xkbcomp: %s\n", buf);
-        if (fclose(out) == 0 && system(buf) >= 0)
+        LogMessage(X_INFO, "Running xkbcomp: %s\n", exe);
+        if (fclose(out) == 0 && spawn_capture(exe, args) >= 0)
 #endif
         {
             if (xkbDebugFlags)
                 DebugF("[xkb] xkb executes: %s\n", buf);
             free(buf);
 #ifdef WIN32
+            free(exe);
+            free(args);
             unlink(tmpname);
 #endif
             return XNFstrdup(keymap);
@@ -211,6 +334,8 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
     }
 #ifdef WIN32
         LogMessage(X_INFO, "Temp file kept for debugging: %s\n", tmpname);
+        free(exe);
+        free(args);
 #endif
     free(buf);
     return NULL;

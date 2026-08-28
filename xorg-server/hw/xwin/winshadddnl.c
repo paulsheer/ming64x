@@ -317,7 +317,7 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
             ErrorF ("winAllocateFBShadowDDNL - Could not allocate bits\n");
             return FALSE;
         }
-  
+
     }
     /* Create a clipper */
     ddrval = (*g_fpDirectDrawCreateClipper) (0,
@@ -341,26 +341,37 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
 
     winDebug("winAllocateFBShadowDDNL - Attached clipper to window\n");
 
-    /* Create a DirectDraw object, store the address at lpdd */
-    ddrval = (*g_fpDirectDrawCreate) (NULL,
-                                      (LPDIRECTDRAW *) &pScreenPriv->pdd,
-                                      NULL);
-    if (FAILED(ddrval)) {
-        ErrorF("winAllocateFBShadowDDNL - Could not start "
-               "DirectDraw: %08x\n", (unsigned int) ddrval);
-        return FALSE;
+    /* Reuse the DirectDraw objects cached during engine detection, if any.
+       DirectDrawCreate is slow on modern Windows, so avoid calling it twice. */
+    if (g_pddDetected != NULL && g_pdd4Detected != NULL) {
+        pScreenPriv->pdd = g_pddDetected;
+        pScreenPriv->pdd4 = g_pdd4Detected;
+        g_pddDetected = NULL;
+        g_pdd4Detected = NULL;
+        winDebug("winAllocateFBShadowDDNL - Reused detected DD objects\n");
     }
+    else {
+        /* Create a DirectDraw object, store the address at lpdd */
+        ddrval = (*g_fpDirectDrawCreate) (NULL,
+                                          (LPDIRECTDRAW *) &pScreenPriv->pdd,
+                                          NULL);
+        if (FAILED(ddrval)) {
+            ErrorF("winAllocateFBShadowDDNL - Could not start "
+                   "DirectDraw: %08x\n", (unsigned int) ddrval);
+            return FALSE;
+        }
 
-    winDebug("winAllocateFBShadowDDNL - Created and initialized DD\n");
+        winDebug("winAllocateFBShadowDDNL - Created and initialized DD\n");
 
-    /* Get a DirectDraw4 interface pointer */
-    ddrval = IDirectDraw_QueryInterface(pScreenPriv->pdd,
-                                        &IID_IDirectDraw4,
-                                        (LPVOID *) &pScreenPriv->pdd4);
-    if (FAILED(ddrval)) {
-        ErrorF("winAllocateFBShadowDDNL - Failed DD4 query: %08x\n",
-               (unsigned int) ddrval);
-        return FALSE;
+        /* Get a DirectDraw4 interface pointer */
+        ddrval = IDirectDraw_QueryInterface(pScreenPriv->pdd,
+                                            &IID_IDirectDraw4,
+                                            (LPVOID *) &pScreenPriv->pdd4);
+        if (FAILED(ddrval)) {
+            ErrorF("winAllocateFBShadowDDNL - Failed DD4 query: %08x\n",
+                   (unsigned int) ddrval);
+            return FALSE;
+        }
     }
 
     /* Are we full screen? */

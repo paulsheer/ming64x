@@ -41,6 +41,12 @@
 FARPROC g_fpDirectDrawCreate = NULL;
 FARPROC g_fpDirectDrawCreateClipper = NULL;
 
+/* DirectDraw objects created during engine detection and cached so that
+   winAllocateFBShadowDDNL can reuse them instead of calling the slow
+   DirectDrawCreate a second time. */
+LPDIRECTDRAW g_pddDetected = NULL;
+LPDIRECTDRAW4 g_pdd4Detected = NULL;
+
 /*
   module handle for dynamically loaded directdraw library
 */
@@ -88,9 +94,20 @@ winDetectSupportedEngines(void)
             winDebug (
                       "winDetectSupportedEngines - DirectDraw4 installed, allowing ShadowDDNL\n");
             g_dwEnginesSupported |= WIN_SERVER_SHADOW_DDNL;
+
+            /* Cache the objects so the engine can reuse them instead of
+               calling the slow DirectDrawCreate a second time. */
+            g_pddDetected = lpdd;
+            g_pdd4Detected = lpdd4;
+            lpdd = NULL;
+            lpdd4 = NULL;
+        }
+        else {
+            g_pddDetected = NULL;
+            g_pdd4Detected = NULL;
         }
 
-        /* Cleanup DirectDraw interfaces */
+        /* Cleanup DirectDraw interfaces we did not cache */
         if (lpdd4 != NULL)
             IDirectDraw_Release(lpdd4);
         if (lpdd != NULL)
@@ -100,6 +117,21 @@ winDetectSupportedEngines(void)
     winDebug (
                   "winDetectSupportedEngines - Returning, supported engines %08x\n",
                   (unsigned int) g_dwEnginesSupported);
+}
+
+/* Release the DirectDraw objects cached during engine detection, if the
+   ShadowDDNL engine did not consume them. */
+void
+winReleaseDetectedDD(void)
+{
+    if (g_pdd4Detected != NULL) {
+        IDirectDraw4_Release(g_pdd4Detected);
+        g_pdd4Detected = NULL;
+    }
+    if (g_pddDetected != NULL) {
+        IDirectDraw_Release(g_pddDetected);
+        g_pddDetected = NULL;
+    }
 }
 
 /*
@@ -142,6 +174,9 @@ winSetEngine(ScreenPtr pScreen)
 
         /* Set engine function pointers */
         winSetEngineFunctionsShadowGDI(pScreen);
+
+        /* We aren't going to use the cached DirectDraw objects */
+        winReleaseDetectedDD();
         return TRUE;
     }
 
@@ -155,6 +190,9 @@ winSetEngine(ScreenPtr pScreen)
 
         /* Set engine function pointers */
         winSetEngineFunctionsShadowGDI(pScreen);
+
+        /* We aren't going to use the cached DirectDraw objects */
+        winReleaseDetectedDD();
         return TRUE;
     }
 
@@ -168,6 +206,7 @@ winSetEngine(ScreenPtr pScreen)
         switch (pScreenInfo->dwEngine) {
         case WIN_SERVER_SHADOW_GDI:
             winSetEngineFunctionsShadowGDI(pScreen);
+            winReleaseDetectedDD();
             break;
         case WIN_SERVER_SHADOW_DDNL:
             winSetEngineFunctionsShadowDDNL(pScreen);
@@ -195,6 +234,9 @@ winSetEngine(ScreenPtr pScreen)
 
         /* Set engine function pointers */
         winSetEngineFunctionsShadowGDI(pScreen);
+
+        /* We aren't going to use the cached DirectDraw objects */
+        winReleaseDetectedDD();
         return TRUE;
     }
 

@@ -537,6 +537,8 @@ extern DeviceIntPtr g_pwinKeyboard;
 
 extern FARPROC g_fpDirectDrawCreate;
 extern FARPROC g_fpDirectDrawCreateClipper;
+extern LPDIRECTDRAW g_pddDetected;
+extern LPDIRECTDRAW4 g_pdd4Detected;
 
 /*
  * Screen privates macros
@@ -705,6 +707,9 @@ Bool
 
 void
  winReleaseDDProcAddresses(void);
+
+void
+ winReleaseDetectedDD(void);
 
 /*
  * winerror.c

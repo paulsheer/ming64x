@@ -1253,6 +1253,10 @@ main(int argc, char *argv[])
     inDpy = NULL;
     if (outDpy)
         XCloseDisplay(outDpy);
+    if (ok) {
+        fprintf(stdout, "xkbcomp: keymap compiled successfully\n");
+        fflush(stdout);
+    }
     uFinishUp();
     return (ok == 0);
 }
