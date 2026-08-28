@@ -15,7 +15,7 @@
 #define BIGREQS 1
 
 /* Builder address */
-#define BUILDERADDR "https://github.com/marchaesen"
+#define BUILDERADDR "https://github.com/paulsheer"
 
 /* Operating System Name */
 #define OSNAME "Win32"
