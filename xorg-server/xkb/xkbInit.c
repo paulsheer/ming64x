@@ -830,4 +830,7 @@ XkbUseMsg(void)
     ErrorF("-ardelay               set XKB autorepeat delay\n");
     ErrorF("-arinterval            set XKB autorepeat interval\n");
 #endif
+#ifdef WIN32
+    ErrorF("-xkbdir directory      base directory for XKB configuration files\n");
+#endif
 }

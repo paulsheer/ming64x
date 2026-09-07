@@ -297,7 +297,11 @@ UseMsg(void)
     ErrorF("-byteswappedclients    Prohibit clients with endianess different to that of the server\n");
     ErrorF("-cc int                default color visual class\n");
     ErrorF("-nocursor              disable the cursor\n");
+#ifdef WIN32
+    ErrorF("-core                  abort on fatal error (may produce a crash dump)\n");
+#else
     ErrorF("-core                  generate core dump on fatal error\n");
+#endif
     ErrorF("-displayfd fd          file descriptor to write display number to when ready to connect\n");
 #ifdef _MSC_VER
     ErrorF("-dpi [auto|int]        screen resolution set to native or this dpi\n");
@@ -346,11 +350,20 @@ UseMsg(void)
 #ifdef XINERAMA
     ErrorF("+xinerama              Enable XINERAMA extension\n");
     ErrorF("-xinerama              Disable XINERAMA extension\n");
+#ifdef WIN32
+    ErrorF("-disablexineramaextension Disable the XINERAMA extension\n");
+#endif
 #endif /* XINERAMA */
     ErrorF("-dumbSched             Disable smart scheduling and threaded input, enable old behavior\n");
     ErrorF("-schedInterval int     Set scheduler interval in msec\n");
     ErrorF("+extension name        Enable extension\n");
     ErrorF("-extension name        Disable extension\n");
+#ifdef WIN32
+    ErrorF("-schedMax int          Set scheduler max slice (msec)\n");
+    ErrorF("-maxbigreqsize size    Set maximum big request size to size MB\n");
+    ErrorF("-p #                   screen-saver pattern duration (minutes)\n");
+    ErrorF("-s #                   screen-saver timeout (minutes)\n");
+#endif
     ListStaticExtensions();
 #ifdef HYPERV
     ErrorF("-vmid GUID             Hyper-V VM GUID to accept VSock connections from\n");

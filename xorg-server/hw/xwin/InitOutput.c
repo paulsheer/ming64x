@@ -745,10 +745,6 @@ winUseMsg(void)
 
     ErrorF("-[no]clipboard\n"
            "\tEnable [disable] the clipboard integration. Default is enabled.\n");
-    ErrorF ("-noprimary\n"
-	        "\tDo not map the PRIMARY selection to the windows clipboard.\n"
-          "\tThe CLIPBOARD selection is always mapped if -clipboard is enabled.\n"
-          "\tDefault is mapped.\n");
 
     ErrorF("-clipupdates num_boxes\n"
            "\tUse a clipping region to constrain shadow update blits to\n"
@@ -767,10 +763,6 @@ winUseMsg(void)
 
     ErrorF("-[no]compositealpha\n"
            "\tX windows with per-pixel alpha are composited into the Windows desktop.\n");
-    ErrorF("-[no]compositewm\n"
-           "\tUse the Composite extension to keep a bitmap image of each top-level\n"
-           "\tX window, so window contents which are occluded show correctly in\n"
-           "\ttask bar and task switcher previews.\n");
 
 #ifdef XWIN_XF86CONFIG
     ErrorF("-config\n" "\tSpecify a configuration file.\n");
@@ -849,16 +841,23 @@ winUseMsg(void)
 
     ErrorF("-[no]primary\n"
            "\tWhen clipboard integration is enabled, map the X11 PRIMARY selection\n"
-           "\tto the Windows clipboard. Default is enabled.\n");
+           "\tto the Windows clipboard. The CLIPBOARD selection is always mapped\n"
+           "\tif -clipboard is enabled. Default is enabled.\n");
 
     ErrorF("-refresh rate_in_Hz\n"
            "\tSpecify an optional refresh rate to use in fullscreen mode\n"
            "\twith a DirectDraw engine.\n");
 
     ErrorF("-resize=none|scrollbars|randr\n"
-           "\tIn windowed mode, [don't] allow resizing of the window. 'scrollbars'\n"
-           "\tmode gives the window scrollbars as needed, 'randr' mode uses the RANR\n"
-           "\textension to resize the X screen.  'randr' is the default.\n");
+           "\tIn windowed mode, set the resizing mode. 'scrollbars' mode gives the\n"
+           "\twindow scrollbars as needed, 'randr' mode uses the RANDR extension to\n"
+           "\tresize the X screen. 'randr' is the default. A bare '-resize' is\n"
+           "\tequivalent to '-resize=randr'.\n");
+    ErrorF("-noresize\n"
+           "\tDo not allow resizing of the window. Equivalent to -resize=none.\n");
+    ErrorF("-scrollbars\n"
+           "\tAllow resizing of the window with scrollbars. Equivalent to\n"
+           "\t-resize=scrollbars.\n");
 
     ErrorF("-rootless\n"
            "\tUse a transparent root window with an external window\n"
@@ -915,6 +914,13 @@ winUseMsg(void)
     ErrorF("-xkbvariant XKBVariant\n"
            "\tSet the variant to use for XKB.  This defaults to not set.\n"
            "\tFor example: -xkbvariant nodeadkeys\n");
+
+#ifdef WIN32
+    ErrorF("-version\n"
+           "\tPrint version information and exit.\n");
+    ErrorF("-parentprocessid pid\n"
+           "\tAllow the process with the given id to set the foreground window.\n");
+#endif
 }
 
 /* See Porting Layer Definition - p. 57 */
