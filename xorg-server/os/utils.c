@@ -288,6 +288,8 @@ UseMsg(void)
     ErrorF("-silent-dup-error      Do not show fatal exit error mesage box\n");
     ErrorF("-a #                   default pointer acceleration (factor)\n");
     ErrorF("-ac                    disable access control restrictions\n");
+    ErrorF("-allow ALLOWSTRING     allow connections whose address matches ALLOWSTRING\n");
+    ErrorF("                       e.g. -allow 192.168.1.0/24,10.0.0.5-10.0.0.9,FE80::1\n");
     ErrorF("-audit int             set audit trail level\n");
     ErrorF("-auth file             select authorization file\n");
     ErrorF("-br                    create root window with black background\n");
@@ -487,7 +489,18 @@ ProcessCommandLine(int argc, char *argv[])
                 UseMsg();
         }
         else if (strcmp(argv[i], "-ac") == 0) {
+            if (AllowListEnabled())
+                FatalError("Options -ac and -allow are mutually exclusive\n");
             defeatAccessControl = TRUE;
+        }
+        else if (strcmp(argv[i], "-allow") == 0) {
+            if (++i < argc) {
+                if (defeatAccessControl)
+                    FatalError("Options -ac and -allow are mutually exclusive\n");
+                SetAllowList(argv[i]);
+            }
+            else
+                UseMsg();
         }
         else if (strcmp(argv[i], "-audit") == 0) {
             if (++i < argc)

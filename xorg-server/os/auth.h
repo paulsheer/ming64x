@@ -98,6 +98,9 @@ Bool ForEachHostInFamily(int family,
 int RemoveHost(ClientPtr client, int family, unsigned length, void *pAddr);
 int GetHosts(void **data, int *pnHosts, int *pLen, BOOL *pEnabled);
 int InvalidHost(sockaddrPtr saddr, int len, ClientPtr client);
+void SetAllowList(const char *str);
+Bool AllowListEnabled(void);
+Bool AllowListCheck(sockaddrPtr saddr, int len);
 void AddLocalHosts(void);
 void ResetHosts(const char *display);
 

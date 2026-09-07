@@ -558,6 +558,31 @@ ClientAuthorized(ClientPtr client,
     priv = (OsCommPtr) client->osPrivate;
     trans_conn = priv->trans_conn;
 
+    /* -allow: if the peer address matches the allowed IP range, allow the
+       connection immediately, skipping cookie and host-based authorization. */
+    if (AllowListEnabled()) {
+        Xtransaddr *allow_from = NULL;
+        int allow_family, allow_fromlen;
+
+        if (_XSERVTransGetPeerAddr(trans_conn, &allow_family, &allow_fromlen,
+                                   &allow_from) != -1) {
+            Bool allow_match = AllowListCheck((struct sockaddr *) allow_from,
+                                              allow_fromlen);
+
+            free(allow_from);
+            if (allow_match) {
+                auth_id = (XID) 0L;
+                priv->auth_id = auth_id;
+                priv->conn_time = 0;
+#ifdef XDMCP
+                XdmcpOpenDisplay(priv->fd);
+#endif
+                XaceHookAuthAvail(client, auth_id);
+                return (char *) NULL;
+            }
+        }
+    }
+
     /* Allow any client to connect without authorization on a launchd socket,
        because it is securely created -- this prevents a race condition on launch */
     if (trans_conn->flags & TRANS_NOXAUTH) {

@@ -178,6 +178,7 @@ SOFTWARE.
 #include <X11/Xos_r.h>
 
 #include "os/auth.h"
+#include "ipv6scan.h"
 #include "os/client_priv.h"
 #include "os/osdep.h"
 
@@ -187,6 +188,9 @@ SOFTWARE.
 #include "xdmcp.h"
 
 Bool defeatAccessControl = FALSE;
+
+/* -allow IP range list; NULL when the option was not given */
+static struct iprange_list *allowList = NULL;
 
 #define addrEqual(fam, address, length, host) \
 			 ((fam) == (host)->family &&\
@@ -1615,6 +1619,40 @@ InvalidHost(register struct sockaddr *saddr, int len, ClientPtr client)
 
     }
     return 1;
+}
+
+void
+SetAllowList(const char *str)
+{
+    allowList = iprange_parse(str, NULL);
+    if (allowList == NULL)
+        FatalError("Invalid IP range string for -allow: \"%s\"\n", str);
+}
+
+Bool
+AllowListEnabled(void)
+{
+    return allowList != NULL;
+}
+
+Bool
+AllowListCheck(sockaddrPtr saddr, int len)
+{
+    int family;
+    void *addr = NULL;
+
+    if (allowList == NULL)
+        return FALSE;
+
+    family = ConvertAddr(saddr, &len, &addr);
+    if (family == FamilyInternet
+#if defined(IPv6)
+        || family == FamilyInternet6
+#endif
+        )
+        return iprange_match(allowList, addr, len) != 0;
+
+    return FALSE;
 }
 
 static int

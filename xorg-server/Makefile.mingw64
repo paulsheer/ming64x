@@ -307,7 +307,7 @@ OS_SRCS := WaitFor.c access.c auth.c backtrace.c client.c connection.c \
 	inputthread.c io.c mitauth.c osinit.c ospoll.c utils.c strcasecmp.c \
 	timingsafe_memcmp.c strcasestr.c xdmauth.c xsha1.c opensslsha1.c xstrans.c xprintf.c \
 	reallocarray.c alloc.c fmt.c string.c serverlock.c log.c xdmcp.c \
-	xserver_poll.c strlcat.c strlcpy.c strndup.c
+	xserver_poll.c strlcat.c strlcpy.c strndup.c ipv6scan.c
 OS_OBJS := $(OS_SRCS:%.c=$(OBJDIR)/os/%.o)
 
 # --- fb ---
