@@ -511,6 +511,8 @@ $(OBJDIR)/lcGenConv.o:   CFLAGS += -I$(PROJECTROOT)/libX11/modules/lc/gen
 # Targets
 # ---------------------------------------------------------------------------
 TARGET := $(OBJDIR)/ming64x.exe
+NUKLEAR_LIB := $(OBJDIR)/libnuklear.a
+LAUNCHX_TARGET := $(OBJDIR)/launchx.exe
 
 .PHONY: help all clean
 
@@ -540,7 +542,7 @@ help:
 	@echo ""
 	@echo "================================================================================"
 
-all: $(TARGET) $(XKBCOMP_TARGET)
+all: $(TARGET) $(XKBCOMP_TARGET) $(NUKLEAR_LIB) $(LAUNCHX_TARGET)
 
 ifeq ($(ASAN),1)
 # ASAN runtime DLLs ship with the clang-mingw toolchain; copy them next to the
@@ -692,6 +694,35 @@ clean:
 $(PROJECTROOT)/pthreadlight/pthreadlight.o: $(PROJECTROOT)/pthreadlight/pthreadlight.c
 	@echo "  CC      pthreadlight"
 	@$(CC) -c $(OPT_FLAG) -std=gnu99 -D_WIN32_WINNT=0x0601 -o $@ $<
+
+# ---------------------------------------------------------------------------
+# Nuklear — immediate-mode GUI library (static library, not linked into server)
+# ---------------------------------------------------------------------------
+NUKLEAR_OBJ := $(OBJDIR)/Nuklear/nuklear.o
+
+$(NUKLEAR_OBJ): Nuklear/nuklear.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+$(NUKLEAR_LIB): $(NUKLEAR_OBJ)
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $<
+
+# ---------------------------------------------------------------------------
+# launchx.exe — standalone Win32 launcher dialog (Nuklear + GDI)
+# ---------------------------------------------------------------------------
+LAUNCHX_SRC := winconfig/launchx.c
+LAUNCHX_OBJ := $(OBJDIR)/winconfig/launchx.o
+
+$(LAUNCHX_OBJ): $(LAUNCHX_SRC)
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(NUKLEAR_LIB)
+	@echo "  LINK    $@"
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(NUKLEAR_LIB) -lmsimg32 -lgdi32 -luser32
 
 # ---------------------------------------------------------------------------
 # Create build directories
