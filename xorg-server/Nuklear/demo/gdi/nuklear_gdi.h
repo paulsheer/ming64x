@@ -25,6 +25,7 @@ NK_API void nk_gdi_shutdown(void);
 
 /* font */
 NK_API GdiFont* nk_gdifont_create(const char *name, int size);
+NK_API GdiFont* nk_gdifont_create_bold(const char *name, int size);
 NK_API void nk_gdifont_del(GdiFont *font);
 NK_API void nk_gdi_set_font(GdiFont *font);
 
@@ -560,6 +561,21 @@ nk_gdifont_create(const char *name, int size)
         return NULL;
     font->dc = CreateCompatibleDC(0);
     font->handle = CreateFontA(size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, name);
+    SelectObject(font->dc, font->handle);
+    GetTextMetricsW(font->dc, &metric);
+    font->height = metric.tmHeight;
+    return font;
+}
+
+GdiFont*
+nk_gdifont_create_bold(const char *name, int size)
+{
+    TEXTMETRICW metric;
+    GdiFont *font = (GdiFont*)calloc(1, sizeof(GdiFont));
+    if (!font)
+        return NULL;
+    font->dc = CreateCompatibleDC(0);
+    font->handle = CreateFontA(size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, name);
     SelectObject(font->dc, font->handle);
     GetTextMetricsW(font->dc, &metric);
     font->height = metric.tmHeight;
