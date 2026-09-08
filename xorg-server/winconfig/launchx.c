@@ -134,7 +134,11 @@ tab_network_and_access_control(struct nk_context *ctx,
 
     checkbox_option(ctx, "Disable access control (-ac)", &opt->ac_enabled, "disable access control restrictions");
 
+    if (opt->ac_enabled)
+        nk_widget_disable_begin(ctx);
     text_option(ctx, "Allowed IP addresses (-allow)", opt->allow_string, (int)sizeof(opt->allow_string), "allow connections whose address matches ALLOWSTRING (e.g. 192.168.1.0/24,10.0.0.5-10.0.0.9,FE80::1)");
+    if (opt->ac_enabled)
+        nk_widget_disable_end(ctx);
 
     text_option(ctx, "Authorization file (-auth)", opt->auth_file, (int)sizeof(opt->auth_file), "select authorization file");
 
@@ -490,21 +494,18 @@ tab_logging_extensions(struct nk_context *ctx,
     }
 }
 
-int main(void)
+static void
+reset_all_options(struct options_network_and_access_control *net_opt,
+    struct options_xdmcp *xdmcp_opt,
+    struct options_screen_windowing *screen_opt,
+    struct options_pointer_keyboard *pointer_opt,
+    struct options_xkb *xkb_opt,
+    struct options_desktop_integration *desktop_opt,
+    struct options_glx *glx_opt,
+    struct options_fonts_rendering *fonts_opt,
+    struct options_logging_extensions *logging_opt)
 {
-    GdiFont *font;
-    struct nk_context *ctx;
-    WNDCLASSW wc = {0};
-    RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
-    DWORD style = WS_OVERLAPPEDWINDOW;
-    DWORD exstyle = WS_EX_APPWINDOW;
-    HWND wnd;
-    HDC dc;
-    int running = 1;
-    int needs_refresh = 1;
-    int current_tab = 0;
-    char option[9][128];
-    struct options_network_and_access_control net_opt = {
+    *net_opt = (struct options_network_and_access_control) {
         .ac_enabled = 0,
         .allow_string = {0},
         .auth_file = {0},
@@ -512,7 +513,7 @@ int main(void)
         .maxclients_sel = 4,      /* 1024 (LIMITCLIENTS) */
         .maxbigreqsize = 4,       /* 4 MB (MAX_BIG_REQUEST_SIZE) */
     };
-    struct options_xdmcp xdmcp_opt = {
+    *xdmcp_opt = (struct options_xdmcp) {
         .query_host = {0},
         .broadcast_enabled = 0,
         .indirect_host = {0},
@@ -524,7 +525,7 @@ int main(void)
         .cookie = {0},               /* xdmAuthCookie = NULL */
         .display_id = {0},
     };
-    struct options_screen_windowing screen_opt = {
+    *screen_opt = (struct options_screen_windowing) {
         .screen_geometry = {0},
         .fullscreen_enabled = 0,
         .rootless_enabled = 0,
@@ -541,7 +542,7 @@ int main(void)
         .lesspointer_enabled = 0,
         .swcursor_enabled = 0,
     };
-    struct options_pointer_keyboard pointer_opt = {
+    *pointer_opt = (struct options_pointer_keyboard) {
         .emulate3buttons_enabled = 0,
         .emulate3buttons_timeout = "50",   /* WIN_DEFAULT_E3B_TIME */
         .winkill_enabled = 1,              /* WIN_DEFAULT_WIN_KILL */
@@ -556,7 +557,7 @@ int main(void)
         .autorepeat_delay = "660",         /* XkbDfltRepeatDelay */
         .autorepeat_interval = "40",       /* XkbDfltRepeatInterval */
     };
-    struct options_xkb xkb_opt = {
+    *xkb_opt = (struct options_xkb) {
         .xkblayout = {0},
         .xkbmodel = "pc105",
         .xkbvariant = {0},
@@ -564,7 +565,7 @@ int main(void)
         .xkbrules = "xorg",
         .xkbdir = {0},
     };
-    struct options_desktop_integration desktop_opt = {
+    *desktop_opt = (struct options_desktop_integration) {
         .clipboard_enabled = 1,      /* g_fClipboard */
         .primary_enabled = 1,        /* fPrimarySelection */
         .codepage_enabled = 0,
@@ -575,12 +576,12 @@ int main(void)
         .compositealpha_enabled = 1, /* g_fCompositeAlpha */
         .clipupdates = "0",          /* WIN_DEFAULT_CLIP_UPDATES_NBOXES */
     };
-    struct options_glx glx_opt = {
+    *glx_opt = (struct options_glx) {
         .wgl_enabled = 1,       /* g_fNativeGl */
         .swrastwgl_enabled = 0, /* g_fswrastwgl */
         .iglx_enabled = 1,      /* enableIndirectGLX */
     };
-    struct options_fonts_rendering fonts_opt = {
+    *fonts_opt = (struct options_fonts_rendering) {
         .font_path = {0},
         .render_sel = 0,          /* default */
         .deferglyphs_sel = 2,     /* "16" (CACHE_16_BIT_GLYPHS) */
@@ -591,7 +592,7 @@ int main(void)
         .color_visual_class = {0},
         .nocursor_enabled = 0,
     };
-    struct options_logging_extensions logging_opt = {
+    *logging_opt = (struct options_logging_extensions) {
         .logfile = {0},
         .logverbose = 2,           /* g_iLogVerbose */
         .audit = "1",              /* auditTrailLevel */
@@ -609,6 +610,34 @@ int main(void)
             1, 1, 1, 1,  /* RECORD, DPMS, X-Resource, GLX */
         },
     };
+}
+
+int main(void)
+{
+    GdiFont *font;
+    struct nk_context *ctx;
+    WNDCLASSW wc = {0};
+    RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    DWORD exstyle = WS_EX_APPWINDOW;
+    HWND wnd;
+    HDC dc;
+    int running = 1;
+    int needs_refresh = 1;
+    int current_tab = 0;
+    char option[9][128];
+    struct options_network_and_access_control net_opt;
+    struct options_xdmcp xdmcp_opt;
+    struct options_screen_windowing screen_opt;
+    struct options_pointer_keyboard pointer_opt;
+    struct options_xkb xkb_opt;
+    struct options_desktop_integration desktop_opt;
+    struct options_glx glx_opt;
+    struct options_fonts_rendering fonts_opt;
+    struct options_logging_extensions logging_opt;
+
+    reset_all_options(&net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
+        &xkb_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
     int row, col;
     DWORD last_time = 0;
 
@@ -740,7 +769,13 @@ int main(void)
                 /* OK / Cancel, gravity South */
                 nk_layout_space_push(ctx, nk_rect(0, H - 30 - 15, W, 30 + 15));
                 if (nk_group_begin(ctx, "buttons", NK_WINDOW_NO_SCROLLBAR)) {
-                    nk_layout_row_dynamic(ctx, 30, 2);
+                    struct nk_rect bb;
+                    nk_layout_row_dynamic(ctx, 30, 3);
+                    bb = nk_widget_bounds(ctx);
+                    if (nk_button_label(ctx, "Reset"))
+                        reset_all_options(&net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
+                            &xkb_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
+                    option_tooltip(ctx, bb, "Resets all configuration parameters in all sections to factory defaults");
                     if (nk_button_label(ctx, "OK"))
                         running = 0;
                     if (nk_button_label(ctx, "Cancel"))
