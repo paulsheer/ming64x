@@ -123,14 +123,24 @@ combobox_option(struct nk_context *ctx, const char *label, const char *const *it
     option_tooltip(ctx, b, tooltip);
 }
 
+static GdiFont *g_bold_font;
+
+static void
+heading(struct nk_context *ctx, const char *text)
+{
+    nk_style_push_font(ctx, &g_bold_font->nk);
+    nk_layout_row_dynamic(ctx, 30, 1);
+    nk_label(ctx, text, NK_TEXT_CENTERED);
+    nk_style_pop_font(ctx);
+}
+
 static void
 tab_network_and_access_control(struct nk_context *ctx,
     struct options_network_and_access_control *opt)
 {
     struct nk_rect b;
 
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Networking & access control", NK_TEXT_CENTERED);
+    heading(ctx, "Networking & access control");
 
     checkbox_option(ctx, "Disable access control (-ac)", &opt->ac_enabled, "disable access control restrictions");
 
@@ -172,8 +182,7 @@ struct options_xdmcp {
 static void
 tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "XDMCP", NK_TEXT_CENTERED);
+    heading(ctx, "XDMCP");
 
     text_option(ctx, "Query host (-query)", opt->query_host, (int)sizeof(opt->query_host), "contact named host for XDMCP");
 
@@ -218,8 +227,7 @@ static void
 tab_screen_and_windowing(struct nk_context *ctx,
     struct options_screen_windowing *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Screen & windowing modes", NK_TEXT_CENTERED);
+    heading(ctx, "Screen & windowing modes");
 
     text_option(ctx, "Screen geometry (-screen)", opt->screen_geometry, (int)sizeof(opt->screen_geometry), "enable screen scr_num and optionally specify a width and height and initial position for that screen; a monitor number can be specified to start the server on. Examples: 0 800x600+100+100@2 ; 0 1024x768@3 ; 0 @1");
 
@@ -273,8 +281,7 @@ tab_pointer_keyboard(struct nk_context *ctx, struct options_pointer_keyboard *op
 {
     struct nk_rect b;
 
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Pointer & keyboard input", NK_TEXT_CENTERED);
+    heading(ctx, "Pointer & keyboard input");
 
     checkbox_option(ctx, "Emulate 3-button mouse (-emulate3buttons)", &opt->emulate3buttons_enabled, "Emulate 3 button mouse with an optional timeout in milliseconds.");
 
@@ -322,8 +329,7 @@ struct options_xkb {
 static void
 tab_xkb(struct nk_context *ctx, struct options_xkb *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "XKB keyboard layout", NK_TEXT_CENTERED);
+    heading(ctx, "XKB keyboard layout");
 
     text_option(ctx, "Layout (-xkblayout)", opt->xkblayout, (int)sizeof(opt->xkblayout), "Set the layout to use for XKB. This defaults to a layout matching your current layout from Windows or us (i.e. USA) if no matching layout was found. For example: -xkblayout de");
 
@@ -354,8 +360,7 @@ static void
 tab_desktop_integration(struct nk_context *ctx,
     struct options_desktop_integration *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Windows desktop integration", NK_TEXT_CENTERED);
+    heading(ctx, "Windows desktop integration");
 
     checkbox_option(ctx, "Clipboard integration (-clipboard)", &opt->clipboard_enabled, "Enable [disable] the clipboard integration. Default is enabled.");
 
@@ -385,8 +390,7 @@ struct options_glx {
 static void
 tab_glx(struct nk_context *ctx, struct options_glx *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "OpenGL / GLX", NK_TEXT_CENTERED);
+    heading(ctx, "OpenGL / GLX");
 
     checkbox_option(ctx, "Native WGL for GLX (-wgl)", &opt->wgl_enabled, "Enable the GLX extension to use the native Windows WGL interface for hardware-accelerated OpenGL");
 
@@ -410,8 +414,7 @@ struct options_fonts_rendering {
 static void
 tab_fonts_rendering(struct nk_context *ctx, struct options_fonts_rendering *opt)
 {
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Fonts, rendering & appearance", NK_TEXT_CENTERED);
+    heading(ctx, "Fonts, rendering & appearance");
 
     text_option(ctx, "Font path (-fp)", opt->font_path, (int)sizeof(opt->font_path), "default font path");
 
@@ -453,8 +456,7 @@ tab_logging_extensions(struct nk_context *ctx,
     struct nk_rect b;
     int i;
 
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Logging, scheduling & extensions", NK_TEXT_CENTERED);
+    heading(ctx, "Logging, scheduling & extensions");
 
     text_option(ctx, "Log file (-logfile)", opt->logfile, (int)sizeof(opt->logfile), "Write log messages to <filename>.");
 
@@ -661,6 +663,10 @@ int main(void)
     SetTimer(wnd, 1, 16, NULL);
 
     font = nk_gdifont_create("Arial", 14);
+    g_bold_font = nk_gdifont_create_bold("Arial", 14);
+    g_bold_font->nk.userdata = nk_handle_ptr(g_bold_font);
+    g_bold_font->nk.height = (float)g_bold_font->height;
+    g_bold_font->nk.width = nk_gdifont_get_text_width;
     ctx = nk_gdi_init(font, dc, WINDOW_WIDTH, WINDOW_HEIGHT);
 
     while (running) {
@@ -791,6 +797,7 @@ int main(void)
         nk_gdi_render(nk_rgb(30, 30, 30));
     }
 
+    nk_gdifont_del(g_bold_font);
     nk_gdifont_del(font);
     ReleaseDC(wnd, dc);
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
