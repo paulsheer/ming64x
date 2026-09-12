@@ -118,7 +118,14 @@ SProcXFixesGetClientDisconnectMode(ClientPtr client)
 Bool
 XFixesShouldDisconnectClient(ClientPtr client)
 {
-    ClientDisconnectPtr pDisconnect = GetClientDisconnect(client);
+    ClientDisconnectPtr pDisconnect;
+
+    /* XFIXES may be disabled (-extension XFIXES), in which case the private
+     * key is never registered and dixLookupPrivate() would assert. */
+    if (!dixPrivateKeyRegistered(ClientDisconnectPrivateKey))
+        return FALSE;
+
+    pDisconnect = GetClientDisconnect(client);
 
     if (!pDisconnect)
         return FALSE;
