@@ -281,7 +281,7 @@ GetTimeInMicros(void)
 void
 UseMsg(void)
 {
-    ErrorF("Usage...\nVcxsrv [:<display>] [option]\n\n");
+    ErrorF("Usage...\nming64x [:<display>] [option]\n\n");
     ErrorF(":display-number\n\tVcxsrv runs as the given display-number, which defaults to 0.\n");
     ErrorF("\tTo run multiple instances, use unique display-numbers.\n\n");
 
