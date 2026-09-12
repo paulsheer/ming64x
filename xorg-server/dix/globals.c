@@ -110,6 +110,8 @@ FontPtr defaultFont;            /* not declared in dix.h to avoid including font
 CursorPtr rootCursor;
 Bool party_like_its_1989 = FALSE;
 Bool whiteRoot = FALSE;
+Bool bgColorRoot = FALSE;
+unsigned int bgColorValue = 0x00000000;
 
 TimeStamp currentTime;
 

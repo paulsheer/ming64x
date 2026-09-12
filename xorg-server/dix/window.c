@@ -669,9 +669,16 @@ RootDefaultBackgroundPixel(ScreenPtr pScreen)
     ColormapPtr pmap = NULL;
     Pixel pixel;
 
-    red = 0x0F * 0x101;
-    green = 0x0F * 0x101;
-    blue = 0x1E * 0x101;
+    if (bgColorRoot) {
+        red = ((bgColorValue >> 16) & 0xFF) * 0x101;
+        green = ((bgColorValue >> 8) & 0xFF) * 0x101;
+        blue = (bgColorValue & 0xFF) * 0x101;
+    }
+    else {
+        red = 0x0F * 0x101;
+        green = 0x0F * 0x101;
+        blue = 0x1E * 0x101;
+    }
 
     if (dixLookupResourceByType((void **) &pmap, pScreen->defColormap,
                                 X11_RESTYPE_COLORMAP, serverClient,

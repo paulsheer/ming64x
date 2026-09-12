@@ -232,6 +232,9 @@ int CoreKeyboardProc(DeviceIntPtr dev, int what);
 
 extern Bool whiteRoot;
 
+extern Bool bgColorRoot;
+extern unsigned int bgColorValue;
+
 extern volatile char isItTimeToYield;
 
 /* bit values for dispatchException */

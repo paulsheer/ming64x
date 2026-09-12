@@ -349,6 +349,7 @@ UseMsg(void)
     ErrorF("-terminate [delay]     terminate at server reset (optional delay in sec)\n");
     ErrorF("-tst                   disable testing extensions\n");
     ErrorF("-wr                    create root window with white background\n");
+    ErrorF("-bgcolor RRGGBB        create root window with background color RRGGBB (hex)\n");
 #ifdef XINERAMA
     ErrorF("+xinerama              Enable XINERAMA extension\n");
     ErrorF("-xinerama              Disable XINERAMA extension\n");
@@ -758,6 +759,21 @@ ProcessCommandLine(int argc, char *argv[])
                 else
                     UseMsg();
             }
+        }
+        else if (strcmp(argv[i], "-bgcolor") == 0) {
+            if (++i < argc) {
+                char *endptr;
+                unsigned long val = strtoul(argv[i], &endptr, 16);
+
+                if (endptr == argv[i] || *endptr != '\0' || val > 0xFFFFFF)
+                    UseMsg();
+                else {
+                    bgColorRoot = TRUE;
+                    bgColorValue = (unsigned int) val;
+                }
+            }
+            else
+                UseMsg();
         }
         else if (strcmp(argv[i], "-maxbigreqsize") == 0) {
             if (++i < argc) {
