@@ -514,7 +514,7 @@ TARGET := $(OBJDIR)/ming64x.exe
 NUKLEAR_LIB := $(OBJDIR)/libnuklear.a
 LAUNCHX_TARGET := $(OBJDIR)/launchx.exe
 
-.PHONY: help all clean
+.PHONY: help all clean install
 
 help:
 	@echo "================================================================================"
@@ -526,13 +526,12 @@ help:
 	@echo "    make -f Makefile.mingw64 CLANG=1 all   Build with clang/lld toolchain (/opt/clang-mingw)"
 	@echo "    make -f Makefile.mingw64 CLANG=1 ASAN=1 all   Build with clang + AddressSanitizer (copies runtime DLLs to ../install/ming64x)"
 	@echo "    make -f Makefile.mingw64 clean     Remove build artifacts"
+	@echo "    make -f Makefile.mingw64 install   Copy to ../install/ming64x/"
 	@echo ""
 	@echo "  Output:"
 	@echo "    $(OBJDIR)/ming64x.exe     X11 Server"
 	@echo "    $(OBJDIR)/xkbcomp.exe     XKB keymap compiler"
-	@echo ""
-	@echo "  Install:"
-	@echo "    cp $(OBJDIR)/ming64x.exe $(OBJDIR)/xkbcomp.exe ../install/ming64x/"
+	@echo "    $(OBJDIR)/launchx.exe     Configuration tool and ssh client"
 	@echo ""
 	@echo "  Package for deployment:"
 	@echo "    cd ../install/ ; zip -r ming64x.zip ming64x"
@@ -543,6 +542,12 @@ help:
 	@echo "================================================================================"
 
 all: $(TARGET) $(XKBCOMP_TARGET) $(NUKLEAR_LIB) $(LAUNCHX_TARGET)
+
+install: all
+	mkdir -p ../install/ming64x/
+	cp $(OBJDIR)/ming64x.exe ../install/ming64x/
+	cp $(OBJDIR)/xkbcomp.exe ../install/ming64x/
+	cp $(OBJDIR)/launchx.exe ../install/ming64x/
 
 ifeq ($(ASAN),1)
 # ASAN runtime DLLs ship with the clang-mingw toolchain; copy them next to the
@@ -700,7 +705,7 @@ $(PROJECTROOT)/pthreadlight/pthreadlight.o: $(PROJECTROOT)/pthreadlight/pthreadl
 # ---------------------------------------------------------------------------
 NUKLEAR_OBJ := $(OBJDIR)/Nuklear/nuklear.o
 
-$(NUKLEAR_OBJ): Nuklear/nuklear.c
+$(NUKLEAR_OBJ): Nuklear/nuklear.c Nuklear/nukleardefault.h Nuklear/nuklear.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) -c -o $@ $<
@@ -714,15 +719,70 @@ $(NUKLEAR_LIB): $(NUKLEAR_OBJ)
 # ---------------------------------------------------------------------------
 LAUNCHX_SRC := winconfig/launchx.c
 LAUNCHX_OBJ := $(OBJDIR)/winconfig/launchx.o
+TERMINAL_SRC := winconfig/terminal.c
+TERMINAL_OBJ := $(OBJDIR)/winconfig/terminal.o
+SSH_SRC := winconfig/ssh.c
+SSH_OBJ := $(OBJDIR)/winconfig/ssh.o
 
-$(LAUNCHX_OBJ): $(LAUNCHX_SRC)
+$(LAUNCHX_OBJ): $(LAUNCHX_SRC) winconfig/terminal.h winconfig/ssh.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) -c -o $@ $<
 
-$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(NUKLEAR_LIB)
+$(TERMINAL_OBJ): $(TERMINAL_SRC) winconfig/terminal.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+$(SSH_OBJ): $(SSH_SRC) winconfig/ssh.h winconfig/terminal.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) -c -o $@ $<
+
+# ---------------------------------------------------------------------------
+# libssh2 (WinCNG backend) — statically linked into launchx.exe for SSH logins
+# ---------------------------------------------------------------------------
+# Only the WinCNG backend is built. openssl/libgcrypt/mbedtls/os400qc3 sources
+# are omitted. blowfish.c is #included by bcrypt_pbkdf.c (OpenSSH bcrypt KDF),
+# so it is NOT a separate compile unit.
+LIBSSH2_SRCS := \
+	winconfig/agent.c \
+	winconfig/bcrypt_pbkdf.c \
+	winconfig/chacha.c \
+	winconfig/channel.c \
+	winconfig/cipher-chachapoly.c \
+	winconfig/comp.c \
+	winconfig/crypt.c \
+	winconfig/global.c \
+	winconfig/hostkey.c \
+	winconfig/keepalive.c \
+	winconfig/kex.c \
+	winconfig/knownhost.c \
+	winconfig/mac.c \
+	winconfig/misc.c \
+	winconfig/packet.c \
+	winconfig/pem.c \
+	winconfig/poly1305.c \
+	winconfig/publickey.c \
+	winconfig/scp.c \
+	winconfig/session.c \
+	winconfig/sftp.c \
+	winconfig/transport.c \
+	winconfig/userauth.c \
+	winconfig/userauth_kbd_packet.c \
+	winconfig/version.c \
+	winconfig/wincng.c
+
+LIBSSH2_OBJS := $(LIBSSH2_SRCS:winconfig/%.c=$(OBJDIR)/winconfig/%.o)
+
+# libssh2 must not inherit the Xserver's -DHAVE_CONFIG_H or Xserver defines;
+# it uses its own hand-crafted WinCNG/MinGW configuration.
+$(LIBSSH2_OBJS): DEFINES := -DLIBSSH2_WINCNG
+$(LIBSSH2_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
+
+$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS)
 	@echo "  LINK    $@"
-	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(NUKLEAR_LIB) -lmsimg32 -lgdi32 -luser32
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lbcrypt -lcrypt32
 
 # ---------------------------------------------------------------------------
 # Create build directories

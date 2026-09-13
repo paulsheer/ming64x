@@ -26,6 +26,8 @@ NK_API void nk_gdi_shutdown(void);
 /* font */
 NK_API GdiFont* nk_gdifont_create(const char *name, int size);
 NK_API GdiFont* nk_gdifont_create_bold(const char *name, int size);
+NK_API GdiFont* nk_gdifont_create_fixed(const char *name, int size);
+NK_API struct nk_user_font* nk_gdifont_get_nk(GdiFont *font);
 NK_API void nk_gdifont_del(GdiFont *font);
 NK_API void nk_gdi_set_font(GdiFont *font);
 
@@ -56,8 +58,36 @@ static struct {
     HDC memory_dc;
     unsigned int width;
     unsigned int height;
+    unsigned char *pixels;
+    int pitch;
     struct nk_context ctx;
 } gdi;
+
+/* 32bpp top-down DIB section so pixels are directly addressable (for the
+   alpha-blended multi-color gradient below). */
+static HBITMAP
+nk_gdi_create_surface(HDC dc, unsigned int width, unsigned int height,
+    unsigned char **pixels, int *pitch)
+{
+    BITMAPINFO bmi;
+    HBITMAP hbm;
+    void *bits = NULL;
+
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = (LONG)width;
+    bmi.bmiHeader.biHeight = -(LONG)height; /* negative = top-down */
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    hbm = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (pixels)
+        *pixels = (unsigned char *)bits;
+    if (pitch)
+        *pitch = (int)(width * 4);
+    return hbm;
+}
 
 static void
 nk_create_image(struct nk_image * image, const char * frame_buffer, const int width, const int height)
@@ -217,56 +247,128 @@ nk_gdi_fill_rect(HDC dc, short x, short y, unsigned short w,
     }
 }
 static void
-nk_gdi_set_vertexColor(PTRIVERTEX tri, struct nk_color col)
+nk_gdi_set_pixel(int x, int y, struct nk_color col)
 {
-    tri->Red   = col.r << 8;
-    tri->Green = col.g << 8;
-    tri->Blue  = col.b << 8;
-    tri->Alpha = 0xff << 8;
+    unsigned char *p;
+
+    if (!gdi.pixels)
+        return;
+    if (x < 0 || y < 0 || (unsigned int)x >= gdi.width ||
+        (unsigned int)y >= gdi.height)
+        return;
+    p = gdi.pixels + (size_t)y * (size_t)gdi.pitch + (size_t)x * 4;
+    p[0] = col.b;
+    p[1] = col.g;
+    p[2] = col.r;
+    p[3] = 255;
 }
 
+static struct nk_color
+nk_gdi_get_pixel(int x, int y)
+{
+    struct nk_color col = { 0, 0, 0, 255 };
+    unsigned char *p;
+
+    if (!gdi.pixels)
+        return col;
+    if (x < 0 || y < 0 || (unsigned int)x >= gdi.width ||
+        (unsigned int)y >= gdi.height)
+        return col;
+    p = gdi.pixels + (size_t)y * (size_t)gdi.pitch + (size_t)x * 4;
+    col.b = p[0];
+    col.g = p[1];
+    col.r = p[2];
+    return col;
+}
+
+static void
+nk_gdi_blend_pixel(int x, int y, struct nk_color col)
+{
+    struct nk_color dst;
+    unsigned int inv_a;
+
+    if (col.a == 0)
+        return;
+    inv_a = 255 - col.a;
+    dst = nk_gdi_get_pixel(x, y);
+    col.r = (unsigned char)((col.r * col.a + dst.r * inv_a) >> 8);
+    col.g = (unsigned char)((col.g * col.a + dst.g * inv_a) >> 8);
+    col.b = (unsigned char)((col.b * col.a + dst.b * inv_a) >> 8);
+    nk_gdi_set_pixel(x, y, col);
+}
+
+/* Reference renderer (rawfb) rasterizes the four-corner gradient per-pixel
+   and alpha-blends it; GdiGradientFill cannot source-over onto existing
+   pixels, so replicate that here against the DIB section bits. */
 static void
 nk_gdi_rect_multi_color(HDC dc, short x, short y, unsigned short w,
     unsigned short h, struct nk_color left, struct nk_color top,
     struct nk_color right, struct nk_color bottom)
 {
-    BLENDFUNCTION alphaFunction;
-    GRADIENT_RECT gRect;
-    GRADIENT_TRIANGLE gTri[2];
-    TRIVERTEX vt[4];
-    alphaFunction.BlendOp = AC_SRC_OVER;
-    alphaFunction.BlendFlags = 0;
-    alphaFunction.SourceConstantAlpha = 0;
-    alphaFunction.AlphaFormat = AC_SRC_ALPHA;
+    /* nuklear corner order: tl=left, tr=top, br=right, bl=bottom */
+    struct nk_color tl = left, tr = top, br = right, bl = bottom;
+    struct nk_color *edge_l, *edge_r;
+    struct nk_color pixel;
+    RECT clip;
+    int i, j, cx0, cy0, cx1, cy1;
 
-    /* TODO: This Case Needs Repair.*/
-    /* Top Left Corner */
-    vt[0].x     = x;
-    vt[0].y     = y;
-    nk_gdi_set_vertexColor(&vt[0], left);
-    /* Top Right Corner */
-    vt[1].x     = x+w;
-    vt[1].y     = y;
-    nk_gdi_set_vertexColor(&vt[1], top);
-    /* Bottom Left Corner */
-    vt[2].x     = x;
-    vt[2].y     = y+h;
-    nk_gdi_set_vertexColor(&vt[2], right);
+    if (w < 1 || h < 1)
+        return;
 
-    /* Bottom Right Corner */
-    vt[3].x     = x+w;
-    vt[3].y     = y+h;
-    nk_gdi_set_vertexColor(&vt[3], bottom);
+    GdiFlush();
+    if (GetClipBox(dc, &clip) == NULLREGION)
+        return;
+    if (clip.right <= clip.left || clip.bottom <= clip.top)
+        return;
+    cx0 = clip.left;
+    cy0 = clip.top;
+    cx1 = clip.right;
+    cy1 = clip.bottom;
 
-    gTri[0].Vertex1 = 0;
-    gTri[0].Vertex2 = 1;
-    gTri[0].Vertex3 = 2;
-    gTri[1].Vertex1 = 2;
-    gTri[1].Vertex2 = 1;
-    gTri[1].Vertex3 = 3;
-    GdiGradientFill(dc, vt, 4, gTri, 2 , GRADIENT_FILL_TRIANGLE);
-    AlphaBlend(gdi.window_dc,  x, y, x+w, y+h,gdi.memory_dc, x, y, x+w, y+h,alphaFunction);
+    edge_l = (struct nk_color *)malloc((size_t)h * sizeof(struct nk_color));
+    edge_r = (struct nk_color *)malloc((size_t)h * sizeof(struct nk_color));
+    if (!edge_l || !edge_r) {
+        free(edge_l);
+        free(edge_r);
+        return;
+    }
 
+    for (i = 0; i < h; ++i) {
+        float t = (h > 1) ? (float)i / (float)(h - 1) : 0.0f;
+
+        edge_l[i].r = (unsigned char)((float)tl.r + (float)(bl.r - tl.r) * t + 0.5f);
+        edge_l[i].g = (unsigned char)((float)tl.g + (float)(bl.g - tl.g) * t + 0.5f);
+        edge_l[i].b = (unsigned char)((float)tl.b + (float)(bl.b - tl.b) * t + 0.5f);
+        edge_l[i].a = (unsigned char)((float)tl.a + (float)(bl.a - tl.a) * t + 0.5f);
+
+        edge_r[i].r = (unsigned char)((float)tr.r + (float)(br.r - tr.r) * t + 0.5f);
+        edge_r[i].g = (unsigned char)((float)tr.g + (float)(br.g - tr.g) * t + 0.5f);
+        edge_r[i].b = (unsigned char)((float)tr.b + (float)(br.b - tr.b) * t + 0.5f);
+        edge_r[i].a = (unsigned char)((float)tr.a + (float)(br.a - tr.a) * t + 0.5f);
+    }
+
+    for (i = 0; i < h; ++i) {
+        int py = (int)y + i;
+        if (py < cy0 || py >= cy1)
+            continue;
+        for (j = 0; j < w; ++j) {
+            int px = (int)x + j;
+            float s;
+
+            if (px < cx0 || px >= cx1)
+                continue;
+            s = (w > 1) ? (float)j / (float)(w - 1) : 0.0f;
+
+            pixel.r = (unsigned char)((float)edge_l[i].r + (float)(edge_r[i].r - edge_l[i].r) * s + 0.5f);
+            pixel.g = (unsigned char)((float)edge_l[i].g + (float)(edge_r[i].g - edge_l[i].g) * s + 0.5f);
+            pixel.b = (unsigned char)((float)edge_l[i].b + (float)(edge_r[i].b - edge_l[i].b) * s + 0.5f);
+            pixel.a = (unsigned char)((float)edge_l[i].a + (float)(edge_r[i].a - edge_l[i].a) * s + 0.5f);
+            nk_gdi_blend_pixel(px, py, pixel);
+        }
+    }
+
+    free(edge_l);
+    free(edge_r);
 }
 
 static BOOL
@@ -600,6 +702,32 @@ nk_gdifont_get_text_width(nk_handle handle, float height, const char *text, int 
     return -1.0f;
 }
 
+GdiFont*
+nk_gdifont_create_fixed(const char *name, int size)
+{
+    TEXTMETRICW metric;
+    GdiFont *font = (GdiFont*)calloc(1, sizeof(GdiFont));
+    if (!font)
+        return NULL;
+    font->dc = CreateCompatibleDC(0);
+    font->handle = CreateFontA(size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, name);
+    SelectObject(font->dc, font->handle);
+    GetTextMetricsW(font->dc, &metric);
+    font->height = metric.tmHeight;
+    font->nk.userdata = nk_handle_ptr(font);
+    font->nk.height = (float)font->height;
+    font->nk.width = nk_gdifont_get_text_width;
+    return font;
+}
+
+NK_API struct nk_user_font*
+nk_gdifont_get_nk(GdiFont *font)
+{
+    return font ? &font->nk : NULL;
+}
+
 void
 nk_gdifont_del(GdiFont *font)
 {
@@ -677,11 +805,12 @@ nk_gdi_init(GdiFont *gdifont, HDC window_dc, unsigned int width, unsigned int he
     font->height = (float)gdifont->height;
     font->width = nk_gdifont_get_text_width;
 
-    gdi.bitmap = CreateCompatibleBitmap(window_dc, width, height);
     gdi.window_dc = window_dc;
     gdi.memory_dc = CreateCompatibleDC(window_dc);
     gdi.width = width;
     gdi.height = height;
+    gdi.bitmap = nk_gdi_create_surface(window_dc, width, height,
+                                       &gdi.pixels, &gdi.pitch);
     SelectObject(gdi.memory_dc, gdi.bitmap);
 
     nk_init_default(&gdi.ctx, font);
@@ -713,7 +842,8 @@ nk_gdi_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
         if (width != gdi.width || height != gdi.height)
         {
             DeleteObject(gdi.bitmap);
-            gdi.bitmap = CreateCompatibleBitmap(gdi.window_dc, width, height);
+            gdi.bitmap = nk_gdi_create_surface(gdi.window_dc, width, height,
+                                               &gdi.pixels, &gdi.pitch);
             gdi.width = width;
             gdi.height = height;
             SelectObject(gdi.memory_dc, gdi.bitmap);
@@ -771,6 +901,14 @@ nk_gdi_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
                 nk_input_key(&gdi.ctx, NK_KEY_TEXT_WORD_RIGHT, down);
             else
                 nk_input_key(&gdi.ctx, NK_KEY_RIGHT, down);
+            return 1;
+
+        case VK_UP:
+            nk_input_key(&gdi.ctx, NK_KEY_UP, down);
+            return 1;
+
+        case VK_DOWN:
+            nk_input_key(&gdi.ctx, NK_KEY_DOWN, down);
             return 1;
 
         case VK_BACK:

@@ -21758,7 +21758,9 @@ nk_contextual_begin(struct nk_context *ctx, nk_flags flags, struct nk_vec2 size,
     is_open = (popup && win->popup.type == NK_PANEL_CONTEXTUAL);
     in = win->widgets_disabled ? 0 : &ctx->input;
     if (in) {
-        is_clicked = nk_input_mouse_clicked(in, NK_BUTTON_RIGHT, trigger_bounds);
+        is_clicked = nk_input_mouse_clicked(in, NK_BUTTON_RIGHT, trigger_bounds) ||
+            (nk_input_is_mouse_pressed(in, NK_BUTTON_RIGHT) &&
+             nk_input_is_mouse_hovering_rect(in, trigger_bounds));
         if (win->popup.active_con && win->popup.con_count != win->popup.active_con)
             return 0;
         if (!is_open && win->popup.active_con)
@@ -21768,7 +21770,7 @@ nk_contextual_begin(struct nk_context *ctx, nk_flags flags, struct nk_vec2 size,
 
         /* calculate contextual position on click */
         win->popup.active_con = win->popup.con_count;
-        if (is_clicked) {
+        if (is_clicked && !is_open) {
             body.x = in->mouse.pos.x;
             body.y = in->mouse.pos.y;
         } else {
@@ -31350,18 +31352,44 @@ nk_tooltip_offset(struct nk_context *ctx, const char *text, enum nk_tooltip_pos 
     style = &ctx->style;
     padding = style->window.padding;
 
-    /* calculate size of the text and tooltip */
+    /* calculate size of the text and tooltip: split on newlines so the
+       tooltip is as wide as its widest line and one row tall per line */
     text_len = nk_strlen(text);
-    text_width = style->font->width(style->font->userdata,
-                    style->font->height, text, text_len);
-    text_width += (4 * padding.x);
-    text_height = (style->font->height + 2 * padding.y);
+    {
+        const char *line = text;
+        const char *end = text + text_len;
+        float row_height = (style->font->height + 2 * padding.y);
+        float width = 0;
+        int line_count = 0;
 
-    /* execute tooltip and fill with text */
-    if (nk_tooltip_begin_offset(ctx, (float)text_width, position, offset)) {
-        nk_layout_row_dynamic(ctx, (float)text_height, 1);
-        nk_text(ctx, text, text_len, NK_TEXT_LEFT);
-        nk_tooltip_end(ctx);
+        while (line < end) {
+            const char *nl = line;
+            while (nl < end && *nl != '\n')
+                nl++;
+            width = NK_MAX(width, style->font->width(style->font->userdata,
+                style->font->height, line, (int)(nl - line)));
+            line_count++;
+            line = (nl < end) ? nl + 1 : end;
+        }
+        if (!line_count)
+            line_count = 1;
+
+        text_width = width + (4 * padding.x);
+        text_height = row_height * (float)line_count;
+
+        /* execute tooltip and fill with text */
+        if (nk_tooltip_begin_offset(ctx, text_width, position, offset)) {
+            line = text;
+            while (line < end) {
+                const char *nl = line;
+                while (nl < end && *nl != '\n')
+                    nl++;
+                nk_layout_row_dynamic(ctx, row_height, 1);
+                nk_text(ctx, line, (int)(nl - line), NK_TEXT_LEFT);
+                line = (nl < end) ? nl + 1 : end;
+            }
+            nk_tooltip_end(ctx);
+        }
     }
 }
 
