@@ -555,10 +555,11 @@ void DispatchQueuedEvents(Bool wait)
 
                 /* now, finally, deal with client requests */
                 result = ReadRequestFromClient(client);
-                if (result <= 0)
+                if (result == 0)
+                    break;
+                else if (result == -1)
                 {
-                    if (result < 0)
-                        CloseDownClient(client);
+                    CloseDownClient(client);
                     break;
                 }
 
@@ -583,7 +584,7 @@ void DispatchQueuedEvents(Bool wait)
                                           client->requestBuffer);
                 }
 #endif
-                if (result > (maxBigRequestSize << 2))
+                if (result < 0 || result > (maxBigRequestSize << 2))
                     result = BadLength;
                 else
                 {
