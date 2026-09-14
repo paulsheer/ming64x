@@ -570,7 +570,7 @@ doListFontsAndAliases(ClientPtr client, LFclosurePtr c)
     int err = Successful;
     FontNamesPtr names = NULL;
     char *name, *resolved = NULL;
-    int namelen, resolvedlen;
+    int namelen, resolvedlen = 0;
     int nnames;
     int stringLens;
     int i;
