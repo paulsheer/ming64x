@@ -4727,7 +4727,9 @@ CoreEnterLeaveEvent(DeviceIntPtr mouse,
 
     if ((type == EnterNotify) && (mask & KeymapStateMask)) {
         xKeymapEvent ke;
+#ifdef XACE
         ClientPtr client = grab ? rClient(grab) : wClient(pWin);
+#endif
         int rc;
 
         rc = XaceHookDeviceAccess(client, keybd, DixReadAccess);
@@ -4839,7 +4841,9 @@ CoreFocusEvent(DeviceIntPtr dev, int type, int mode, int detail, WindowPtr pWin)
     if ((type == FocusIn) &&
         ((pWin->eventMask | wOtherEventMasks(pWin)) & KeymapStateMask)) {
         xKeymapEvent ke;
+#ifdef XACE
         ClientPtr client = wClient(pWin);
+#endif
         int rc;
 
         rc = XaceHookDeviceAccess(client, dev, DixReadAccess);
