@@ -460,6 +460,7 @@ ChangeGCXIDs(ClientPtr client, GC * pGC, BITS32 mask, CARD32 *pC32)
         vals[i].val = pC32[i];
     for (i = 0; i < ARRAY_SIZE(xidfields); ++i) {
         int offset, rc;
+        XID id;
 
         if (!(mask & xidfields[i].mask))
             continue;
@@ -468,11 +469,13 @@ ChangeGCXIDs(ClientPtr client, GC * pGC, BITS32 mask, CARD32 *pC32)
             vals[offset].ptr = NullPixmap;
             continue;
         }
-        rc = dixLookupResourceByType(&vals[offset].ptr, vals[offset].val,
+        /* save the id, since dixLookupResourceByType overwrites &vals[offset] */
+        id = vals[offset].val;
+        rc = dixLookupResourceByType(&vals[offset].ptr, id,
                                      xidfields[i].type, client,
                                      xidfields[i].access_mode);
         if (rc != Success) {
-            client->errorValue = vals[offset].val;
+            client->errorValue = id;
             return rc;
         }
     }
