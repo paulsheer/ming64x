@@ -37,6 +37,7 @@ and Jim Haggerty of Metheus.
 #include "dix/cursor_priv.h"
 #include "dix/eventconvert.h"
 #include "os/client_priv.h"
+#include "os/osdep.h"
 
 #include "dixstruct.h"
 #include "extnsionst.h"
@@ -1298,6 +1299,13 @@ RecordSanityCheckRegisterClients(RecordContextPtr pContext, ClientPtr client,
     xRecordRange *pRange;
     int i;
     XID recordingClient;
+
+    /* LimitClients is 2048 at max, way less that MAXINT */
+    if (stuff->nClients > LimitClients)
+        return BadValue;
+
+    if (stuff->nRanges > (MAXINT - 4 * stuff->nClients) / SIZEOF(xRecordRange))
+        return BadValue;
 
     if (((client->req_len << 2) - SIZEOF(xRecordRegisterClientsReq)) !=
         4 * stuff->nClients + SIZEOF(xRecordRange) * stuff->nRanges)
