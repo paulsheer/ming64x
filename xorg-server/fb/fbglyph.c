@@ -93,7 +93,7 @@ fbPolyGlyphBlt(DrawablePtr pDrawable,
         pglyph = FONTGLYPHBITS(pglyphBase, pci);
         gWidth = GLYPHWIDTHPIXELS(pci);
         gHeight = GLYPHHEIGHTPIXELS(pci);
-        if (gWidth && gHeight) {
+        if (gWidth > 0 && gHeight > 0) {
             gx = x + pci->metrics.leftSideBearing;
             gy = y - pci->metrics.ascent;
             if (glyph && gWidth <= sizeof(FbStip) * 8 &&
@@ -195,7 +195,7 @@ fbImageGlyphBlt(DrawablePtr pDrawable,
         pglyph = FONTGLYPHBITS(pglyphBase, pci);
         gWidth = GLYPHWIDTHPIXELS(pci);
         gHeight = GLYPHHEIGHTPIXELS(pci);
-        if (gWidth && gHeight) {
+        if (gWidth > 0 && gHeight > 0) {
             gx = x + pci->metrics.leftSideBearing;
             gy = y - pci->metrics.ascent;
             if (glyph && gWidth <= sizeof(FbStip) * 8 &&
