@@ -3527,6 +3527,8 @@ ChangeWindowDeviceCursor(WindowPtr pWin, DeviceIntPtr pDev, CursorPtr pCursor)
             return Success;
 
         pNewNode = malloc(sizeof(DevCursNodeRec));
+        if (!pNewNode)
+            return BadAlloc;
         pNewNode->dev = pDev;
         pNewNode->next = pWin->optional->deviceCursors;
         pWin->optional->deviceCursors = pNewNode;
