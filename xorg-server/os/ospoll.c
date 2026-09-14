@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <X11/X.h>
 #include <X11/Xproto.h>
+#include <assert.h>
 
 #ifdef WIN32
 #define WIN32POLL       1
