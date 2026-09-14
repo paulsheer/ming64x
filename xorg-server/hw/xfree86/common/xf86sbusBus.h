@@ -102,6 +102,6 @@ extern _X_EXPORT int sparcPromGetBool(sbusPromNodePtr pnode, const char *prop);
 extern _X_EXPORT void sparcPromAssignNodes(void);
 extern _X_EXPORT char *sparcPromNode2Pathname(sbusPromNodePtr pnode);
 extern _X_EXPORT int sparcPromPathname2Node(const char *pathName);
-extern _X_EXPORT char *sparcDriverName(void);
+extern _X_EXPORT const char *sparcDriverName(void);
 
 #endif                          /* _XF86_SBUSBUS_H */
