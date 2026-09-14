@@ -150,6 +150,11 @@ BOOL
                                void **ppvDib, SIZE_T *pcbDib,
                                BOOL fV5);
 
+/* Append one line to debug.txt for image-conversion tracing (X11<->MSWIN).
+   Opens and closes the file on every call so traces survive a crash. */
+void
+ imgtrace(const char *fmt, ...) _X_ATTRIBUTE_PRINTF(1, 2);
+
 /*
  * winclipboardwndproc.c
  */

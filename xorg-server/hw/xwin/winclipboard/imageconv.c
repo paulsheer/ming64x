@@ -44,6 +44,8 @@
 
 #include "internal.h"
 #include <limits.h>
+#include <stdarg.h>
+#include <time.h>
 #include <objbase.h>
 #include "misc.h"
 #include "winmsg.h"
@@ -63,6 +65,55 @@
                                 (((unsigned int) (b)) << 16) | \
                                 (((unsigned int) (c)) << 8) | \
                                 (((unsigned int) (d)) << 0))
+
+/* Append one line to debug.txt (see declaration in internal.h). */
+void
+imgtrace(const char *fmt, ...)
+{
+    FILE *fp = fopen("debug.txt", "a");
+    va_list ap;
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+
+    if (!fp)
+        return;
+
+    if (tm)
+        fprintf(fp, "%02d:%02d:%02d ", tm->tm_hour, tm->tm_min, tm->tm_sec);
+
+    va_start(ap, fmt);
+    vfprintf(fp, fmt, ap);
+    va_end(ap);
+
+    fflush(fp);
+    fclose(fp);
+}
+
+static const char *
+imgTargetName(xcb_atom_t target, ClipboardAtoms *atoms)
+{
+    if (target == atoms->atomImageBmp)  return "image/bmp";
+    if (target == atoms->atomImagePng)  return "image/png";
+    if (target == atoms->atomImageJpeg) return "image/jpeg";
+    if (target == atoms->atomImageGif)  return "image/gif";
+    return "image/unknown";
+}
+
+static void
+imgTraceDib(const char *from, const BITMAPINFOHEADER *pbih)
+{
+    const char *comp;
+    switch (pbih->biCompression) {
+    case BI_RGB:       comp = "BI_RGB"; break;
+    case BI_BITFIELDS: comp = "BI_BITFIELDS"; break;
+    default:           comp = "other"; break;
+    }
+    imgtrace("[imgconv]   -> DIB (%s): biSize=%u %ldx%ld bpp=%u comp=%u(%s)\n",
+             from, (unsigned)pbih->biSize,
+             (long)pbih->biWidth, (long)pbih->biHeight,
+             (unsigned)pbih->biBitCount,
+             (unsigned)pbih->biCompression, comp);
+}
 
 /*
  * Size in bytes of everything in a packed DIB before the pixel data: the info
@@ -859,6 +910,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
     *ppvDib = NULL;
     *pcbDib = 0;
 
+    imgtrace("[imgconv] decode X11->MSWIN: target=%s len=%lu fV5=%d\n",
+             imgTargetName(target, atoms), (unsigned long)len, (int)fV5);
+
     if (target == atoms->atomImageBmp) {
         /* Strip the 14-byte BITMAPFILEHEADER, validate the BM signature */
         const BITMAPFILEHEADER *pbfh = (const BITMAPFILEHEADER *) data;
@@ -881,6 +935,7 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         memcpy(dst, src, len);
         *ppvDib = dst;
         *pcbDib = (SIZE_T) len;
+        imgTraceDib("image/bmp", (const BITMAPINFOHEADER *) dst);
         return TRUE;
     }
 
@@ -981,9 +1036,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
                 pV5->bV5CSType    = MAKE32('B','G','R','s');
             } else {
                 DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
-                masks[0] = 0x000000FF;  /* Blue  */
+                masks[0] = 0x00FF0000;  /* Red   */
                 masks[1] = 0x0000FF00;  /* Green */
-                masks[2] = 0x00FF0000;  /* Red   */
+                masks[2] = 0x000000FF;  /* Blue  */
             }
         }
 
@@ -1010,6 +1065,7 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         DGifCloseFile(gif, &error);
         *ppvDib = dib;
         *pcbDib = cbDib;
+        imgTraceDib("image/gif", pbih);
         return TRUE;
     }
 
@@ -1075,9 +1131,9 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
                     pV5->bV5CSType    = MAKE32('B','G','R','s');
                 } else {
                     DWORD *masks = (DWORD *)(dib + sizeof(BITMAPINFOHEADER));
-                    masks[0] = 0x000000FF;  /* Blue  */
+                    masks[0] = 0x00FF0000;  /* Red   */
                     masks[1] = 0x0000FF00;  /* Green */
-                    masks[2] = 0x00FF0000;  /* Red   */
+                    masks[2] = 0x000000FF;  /* Blue  */
                 }
             }
 
@@ -1104,6 +1160,7 @@ winClipboardDecodeImageToDib(xcb_atom_t target, ClipboardAtoms *atoms,
         stbi_image_free(pixels);
         *ppvDib = dib;
         *pcbDib = cbDib;
+        imgTraceDib(imgTargetName(target, atoms), pbih);
         return TRUE;
     }
 

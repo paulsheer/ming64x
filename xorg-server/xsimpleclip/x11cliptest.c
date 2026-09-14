@@ -353,6 +353,101 @@ static int within_tolerance(int actual, int expected, int width)
     return (diff <= tolerance);
 }
 
+/* ---------- center-square RGB mean analysis ---------- */
+
+/* Reference means over the center 1/9th square of input/dalmatian.png,
+   computed once at startup. */
+static double ref_mean_r = 0.0;
+static double ref_mean_g = 0.0;
+static double ref_mean_b = 0.0;
+static int ref_valid = 0;
+
+/*
+ * Mean R, G, B over the center square (width/3 by height/3, i.e. 1/9th of
+ * the image area) of a 4-channel RGBA buffer.
+ */
+static void center_mean_rgb(const unsigned char *rgba, int w, int h,
+                            double *r, double *g, double *b)
+{
+    int x0 = w / 3, x1 = w - w / 3;
+    int y0 = h / 3, y1 = h - h / 3;
+    long long sr = 0, sg = 0, sb = 0, n = 0;
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            const unsigned char *p = rgba + ((size_t)y * w + x) * 4;
+            sr += p[0];
+            sg += p[1];
+            sb += p[2];
+            n++;
+        }
+    }
+    *r = n ? (double)sr / (double)n : 0.0;
+    *g = n ? (double)sg / (double)n : 0.0;
+    *b = n ? (double)sb / (double)n : 0.0;
+}
+
+/* True if `actual` is within 1% of `ref`. */
+static int within_2_percent(double actual, double ref)
+{
+    if (ref <= 0.0)
+        return fabs(actual - ref) < 1e-9;
+    return fabs(actual - ref) / ref <= 0.0175;
+}
+
+/* Load the reference image and record its center-square R/G/B means. */
+static void compute_reference(void)
+{
+    int w, h, ch;
+    unsigned char *pixels = stbi_load(INPUT_DIR "/dalmatian.png",
+                                      &w, &h, &ch, 4);
+    if (!pixels) {
+        log_msg("WARNING: cannot load " INPUT_DIR "/dalmatian.png "
+                "for reference color means\n");
+        ref_valid = 0;
+        return;
+    }
+    center_mean_rgb(pixels, w, h, &ref_mean_r, &ref_mean_g, &ref_mean_b);
+    stbi_image_free(pixels);
+    ref_valid = 1;
+    log_msg("Reference center means: R=%.4f G=%.4f B=%.4f\n",
+            ref_mean_r, ref_mean_g, ref_mean_b);
+}
+
+/* Compute center-square R/G/B means of any produced image file (DIB/DIBV5
+   or a standard format).  Returns 1 on success. */
+static int file_center_means(const char *path, double *r, double *g, double *b)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz <= 0) { fclose(fp); return 0; }
+
+    unsigned char *data = (unsigned char *)malloc((size_t)sz);
+    if (!data) { fclose(fp); return 0; }
+    size_t got = fread(data, 1, (size_t)sz, fp);
+    fclose(fp);
+    if (got != (size_t)sz) { free(data); return 0; }
+
+    int w, h;
+    unsigned char *rgba = dibimg_load(data, (size_t)sz, &w, &h);
+    free(data);
+    if (rgba) {
+        center_mean_rgb(rgba, w, h, r, g, b);
+        free(rgba);
+        return 1;
+    }
+
+    int ch;
+    unsigned char *pixels = stbi_load(path, &w, &h, &ch, 4);
+    if (!pixels) return 0;
+    center_mean_rgb(pixels, w, h, r, g, b);
+    stbi_image_free(pixels);
+    return 1;
+}
+
 /* ---------- md5sum ---------- */
 
 static int md5sum_file(const char *path, char *hash_out, size_t hash_sz)
@@ -894,6 +989,9 @@ static int run_tests(int sock_fd, xcb_connection_t *conn, xcb_window_t win,
 
     mkdir(OUTPUT_DIR, 0755);
 
+    /* Compute reference R/G/B means once at startup. */
+    compute_reference();
+
     /* Enable debug logging in VcXsrv by setting CLIPTEST_DBG_ON on its
        iWindow.  Find the window by querying the CLIPBOARD owner. */
     {
@@ -1025,7 +1123,7 @@ static int run_tests(int sock_fd, xcb_connection_t *conn, xcb_window_t win,
             int sock_done = 0;
             g_sel_delivered = 0;
             while (!sock_done && !timed_out(t_start)) {
-                int ev = wait_events(x11_fd, sock_fd, 1000);
+                int ev = wait_events(x11_fd, sock_fd, 5000);
                 if (ev == 1) {
                     process_x11(conn);
                 } else if (ev == 2) {
@@ -1366,38 +1464,58 @@ static int run_tests(int sock_fd, xcb_connection_t *conn, xcb_window_t win,
             }
         }
 
+        /* --- center-square RGB fidelity check (vs input/dalmatian.png) --- */
+        int color_ok = 0;
+        double color_r = 0.0, color_g = 0.0, color_b = 0.0;
+        if (wrote_file && ref_valid &&
+            file_center_means(output_path, &color_r, &color_g, &color_b)) {
+            color_ok = within_2_percent(color_r, ref_mean_r) &&
+                       within_2_percent(color_g, ref_mean_g) &&
+                       within_2_percent(color_b, ref_mean_b);
+        }
+
         if (md5_ok >= 0) {
-            log_msg(" - success=%" PRIu32 " wrote=%d md5sum=%s%s\n",
+            log_msg(" - success=%" PRIu32 " wrote=%d md5sum=%s%s "
+                    "color=%.2f/%.2f/%.2f%s\n",
                     success, wrote_file,
                     md5_ok ? "match" : "NO-MATCH",
-                    md5_ok ? " OK" : " FAIL");
+                    md5_ok ? " OK" : " FAIL",
+                    color_r, color_g, color_b,
+                    color_ok ? " OK" : " FAIL");
         } else {
-            log_msg(" - success=%" PRIu32 " wrote=%d %s=%d(expected %d)%s\n",
+            log_msg(" - success=%" PRIu32 " wrote=%d %s=%d(expected %d)%s "
+                    "color=%.2f/%.2f/%.2f%s\n",
                     success, wrote_file,
                     transp_gray_msg,
                     transp_count, transp_expected,
-                    transp_ok ? " OK" : " FAIL");
+                    transp_ok ? " OK" : " FAIL",
+                    color_r, color_g, color_b,
+                    color_ok ? " OK" : " FAIL");
         }
 
         if (md5_ok >= 0) {
             fprintf(results_fp, "%04d %s success=%" PRIu32 " wrote=%d "
-                    "md5sum=%s fmt=%s->%s size=%s\n",
+                    "md5sum=%s color_ok=%d R=%.2f G=%.2f B=%.2f "
+                    "fmt=%s->%s size=%s\n",
                     i, direction_name(ct->direction), success, wrote_file,
                     md5_ok ? "match" : "NO-MATCH",
+                    color_ok, color_r, color_g, color_b,
                     format_name(ct->from_format), format_name(ct->to_format),
                     size_name(ct->width));
-            if (md5_ok) passed++; else failed++;
+            if (md5_ok && color_ok) passed++; else failed++;
         } else {
             fprintf(results_fp, "%04d %s success=%" PRIu32 " wrote=%d "
                     "%s_actual=%d %s_expected=%d %s_ok=%d "
+                    "color_ok=%d R=%.2f G=%.2f B=%.2f "
                     "fmt=%s->%s size=%s\n",
                     i, direction_name(ct->direction), success, wrote_file,
                     transp_gray_msg, transp_count,
                     transp_gray_msg, transp_expected,
                     transp_gray_msg, transp_ok,
+                    color_ok, color_r, color_g, color_b,
                     format_name(ct->from_format), format_name(ct->to_format),
                     size_name(ct->width));
-            if (transp_ok) passed++; else failed++;
+            if (transp_ok && color_ok) passed++; else failed++;
         }
         free(resp_image);
     }

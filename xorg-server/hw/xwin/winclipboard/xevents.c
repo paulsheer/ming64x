@@ -373,6 +373,16 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
         SIZE_T cbDib = 0;
         BOOL fV5 = (data->requestedFmt == CF_DIBV5);
 
+        {
+            char *pszImgName = get_atom_name(conn, xtpText_encoding);
+            imgtrace("[imgconv] X11 offered %s: %lu bytes (requestedFmt=%u%s)\n",
+                     pszImgName ? pszImgName : "image/?",
+                     (unsigned long)xtpText_nitems,
+                     (unsigned)data->requestedFmt,
+                     fV5 ? " CF_DIBV5" : " CF_DIB");
+            free(pszImgName);
+        }
+
         if (winClipboardDecodeImageToDib(xtpText_encoding, atoms,
                                           xtpText_value, xtpText_nitems,
                                           &pvDib, &cbDib, fV5)
