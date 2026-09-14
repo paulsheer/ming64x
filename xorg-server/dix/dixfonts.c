@@ -872,7 +872,7 @@ doListFontsWithInfo(ClientPtr client, LFWIclosurePtr c)
     char *name;
     Bool fromDispatch = c->from_dispatch;
     Bool finished = FALSE;
-    int namelen;
+    int namelen = 0;
     int numFonts;
     FontInfoRec fontInfo, *pFontInfo;
     xListFontsWithInfoReply *reply;
