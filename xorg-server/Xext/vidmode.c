@@ -806,6 +806,8 @@ ProcVidModeModModeLine(ClientPtr client)
         return BadValue;
 
     modetmp = VidModeCreateMode();
+    if (modetmp == NULL)
+        return BadAlloc;
     VidModeCopyMode(mode, modetmp);
 
     VidModeSetModeValue(modetmp, VIDMODE_H_DISPLAY, stuff->hdisplay);
@@ -949,6 +951,8 @@ ProcVidModeValidateModeLine(ClientPtr client)
         return BadValue;
 
     modetmp = VidModeCreateMode();
+    if (modetmp == NULL)
+        return BadAlloc;
     VidModeCopyMode(mode, modetmp);
 
     VidModeSetModeValue(modetmp, VIDMODE_H_DISPLAY, stuff->hdisplay);
