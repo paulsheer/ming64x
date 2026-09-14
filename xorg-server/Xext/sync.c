@@ -1035,7 +1035,7 @@ SyncCreateSystemCounter(const char *name,
         psci = malloc(sizeof(SysCounterInfo));
         if (!psci) {
             FreeResource(pCounter->sync.id, X11_RESTYPE_NONE);
-            return pCounter;
+            return NULL;
         }
         pCounter->pSysCounterInfo = psci;
         psci->pCounter = pCounter;
