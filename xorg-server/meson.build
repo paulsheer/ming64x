@@ -684,7 +684,7 @@ if get_option('xselinux') != 'false'
     if get_option('xselinux') == 'true'
         build_xselinux = true
     else
-        build_xselinux = dep_selinux.found() and dep_audit.found()
+        build_xselinux = dep_selinux.found() and dep_audit.found() and build_xace
     endif
 
     if build_xselinux
@@ -692,6 +692,10 @@ if get_option('xselinux') != 'false'
         common_dep += dep_audit
     endif
 endif
+if build_xselinux and not build_xace
+    error('cannot build SELinux extension without X-ACE')
+endif
+
 
 socket_dep = []
 if host_machine.system() == 'windows'
