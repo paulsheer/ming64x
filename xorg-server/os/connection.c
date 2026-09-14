@@ -308,6 +308,7 @@ CreateWellKnownSockets(void)
         int fd = _XSERVTransGetConnectionNumber (ListenTransConns[i-1]);
 
         ListenTransFds[i-1] = fd;
+        _XSERVTransSetOption(ListenTransConns[i-1], TRANS_CLOSEONEXEC, 0);
         SetNotifyFd(fd, EstablishNewConnections_local, X_NOTIFY_READ, NULL);
 
         if (!_XSERVTransIsLocal (ListenTransConns[i-1]))
