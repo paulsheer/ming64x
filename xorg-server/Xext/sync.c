@@ -2835,8 +2835,10 @@ init_system_idle_counter(const char *name, int deviceid)
     if (idle_time_counter != NULL) {
         IdleCounterPriv *priv = malloc(sizeof(IdleCounterPriv));
 
-        priv->value_less = priv->value_greater = NULL;
-        priv->deviceid = deviceid;
+        if (priv) {
+            priv->value_less = priv->value_greater = NULL;
+            priv->deviceid = deviceid;
+        }
 
         idle_time_counter->pSysCounterInfo->private = priv;
     }
