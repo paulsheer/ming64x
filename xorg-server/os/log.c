@@ -685,7 +685,7 @@ static inline void writeLog(int verb, char *buf, int len)
     if (LOG_MSG_BUF_SIZE  - len == 1)
         buf[len - 1] = '\n';
 
-    LogSWrite(verb, buf, len, (buf[len - 1] == '\n'));
+    LogSWrite(verb, buf, len, (len > 0 && buf[len - 1] == '\n'));
 }
 
 /* signal safe */
