@@ -719,12 +719,14 @@ $(NUKLEAR_LIB): $(NUKLEAR_OBJ)
 # ---------------------------------------------------------------------------
 LAUNCHX_SRC := winconfig/launchx.c
 LAUNCHX_OBJ := $(OBJDIR)/winconfig/launchx.o
+LAUNCHX_RC  := winconfig/launchx.rc
+LAUNCHX_RES := $(OBJDIR)/winconfig/launchx-res.o
 TERMINAL_SRC := winconfig/terminal.c
 TERMINAL_OBJ := $(OBJDIR)/winconfig/terminal.o
 SSH_SRC := winconfig/ssh.c
 SSH_OBJ := $(OBJDIR)/winconfig/ssh.o
 
-$(LAUNCHX_OBJ): $(LAUNCHX_SRC) winconfig/terminal.h winconfig/ssh.h
+$(LAUNCHX_OBJ): $(LAUNCHX_SRC) winconfig/terminal.h winconfig/ssh.h winconfig/x_logo_rgb.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) -c -o $@ $<
@@ -780,9 +782,9 @@ LIBSSH2_OBJS := $(LIBSSH2_SRCS:winconfig/%.c=$(OBJDIR)/winconfig/%.o)
 $(LIBSSH2_OBJS): DEFINES := -DLIBSSH2_WINCNG
 $(LIBSSH2_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 
-$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS)
+$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
 	@echo "  LINK    $@"
-	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lbcrypt -lcrypt32
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lbcrypt -lcrypt32
 
 # ---------------------------------------------------------------------------
 # Create build directories
@@ -809,10 +811,15 @@ $(OBJDIR)/%.o: $(OBJDIR)/%.c
 # ---------------------------------------------------------------------------
 # Windows resource: .rc -> .o (via windres)
 # ---------------------------------------------------------------------------
-$(XWIN_RES): $(XWIN_RC) | $(FIXUP_HEADERS)
+$(XWIN_RES): $(XWIN_RC) hw/xwin/X.ico | $(FIXUP_HEADERS)
 	@mkdir -p $(dir $@)
 	@echo "  WINDRES $<"
 	@$(WINDRES) $(DEFINES) --include-dir $(OBJDIR)/include --include-dir . --include-dir $(TOPSRCDIR)/include --include-dir $(PROJECTROOT) --include-dir $(TOPSRCDIR)/hw/xwin -i $< -o $@
+
+$(LAUNCHX_RES): $(LAUNCHX_RC) hw/xwin/X.ico
+	@mkdir -p $(dir $@)
+	@echo "  WINDRES $<"
+	@$(WINDRES) --include-dir $(TOPSRCDIR)/hw/xwin -i $< -o $@
 
 # ---------------------------------------------------------------------------
 # Explicit rules for generated sources (override pattern rule priority)

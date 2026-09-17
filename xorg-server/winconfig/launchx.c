@@ -13,6 +13,10 @@
 
 #include <math.h>
 
+#include "x_logo_rgb.h"
+
+#define IDI_LAUNCHX 101
+
 /* nuklear_gdi.h calls nk_cos/nk_sin, which are internal (static) nuklear
    helpers not exported by libnuklear.a; provide local wrappers. */
 static float nk_cos(float x) { return cosf(x); }
@@ -20,6 +24,64 @@ static float nk_sin(float x) { return sinf(x); }
 
 #define NK_GDI_IMPLEMENTATION
 #include "../Nuklear/demo/gdi/nuklear_gdi.h"
+
+/* Build an HBITMAP-backed nk_image from the embedded RGB logo. The GDI
+   backend draws whatever HBITMAP is in handle.ptr, so this is the only
+   place image bytes touch the backend. */
+static struct nk_image
+launchx_make_logo_image(void)
+{
+    struct nk_image img;
+    BITMAPINFO bi;
+    HBITMAP hbm;
+    unsigned char *bits;
+    int stride, x, y;
+
+    memset(&img, 0, sizeof(img));
+    memset(&bi, 0, sizeof(bi));
+
+    stride = ((X_LOGO_W * 3 + 3) & ~3);
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = X_LOGO_W;
+    bi.bmiHeader.biHeight = -X_LOGO_H;   /* top-down DIB */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 24;
+    bi.bmiHeader.biCompression = BI_RGB;
+    bi.bmiHeader.biSizeImage = stride * X_LOGO_H;
+
+    hbm = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!hbm)
+        return img;
+
+    /* 24bpp DIBs store BGR, so swap the red/blue channels of the RGB source. */
+    for (y = 0; y < X_LOGO_H; ++y) {
+        const unsigned char *src = x_logo_rgb + y * X_LOGO_W * 3;
+        unsigned char *dst = bits + y * stride;
+        for (x = 0; x < X_LOGO_W; ++x) {
+            dst[x * 3 + 0] = src[x * 3 + 2];
+            dst[x * 3 + 1] = src[x * 3 + 1];
+            dst[x * 3 + 2] = src[x * 3 + 0];
+        }
+    }
+
+    img.handle.ptr = hbm;
+    img.w = X_LOGO_W;
+    img.h = X_LOGO_H;
+    img.region[0] = 0;
+    img.region[1] = 0;
+    img.region[2] = X_LOGO_W;
+    img.region[3] = X_LOGO_H;
+    return img;
+}
+
+static void
+launchx_free_logo_image(struct nk_image *img)
+{
+    if (img && img->handle.ptr) {
+        DeleteObject((HBITMAP)img->handle.ptr);
+        img->handle.ptr = NULL;
+    }
+}
 
 #define WINDOW_WIDTH  800
 #define WINDOW_HEIGHT 600
@@ -1856,6 +1918,7 @@ int main(void)
     struct options_ssh_login ssh_opt;
     terminal term;
     ssh_session ssh;
+    struct nk_image logo;
 
     reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
@@ -1881,7 +1944,7 @@ int main(void)
     wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandleW(0);
-    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hIcon = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_LAUNCHX));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"LaunchXWindowClass";
     RegisterClassW(&wc);
@@ -1900,6 +1963,7 @@ int main(void)
     g_bold_font->nk.height = (float)g_bold_font->height;
     g_bold_font->nk.width = nk_gdifont_get_text_width;
     ctx = nk_gdi_init(font, dc, WINDOW_WIDTH, WINDOW_HEIGHT);
+    logo = launchx_make_logo_image();
 
     while (running) {
         MSG msg;
@@ -2059,6 +2123,13 @@ int main(void)
                     }
                     nk_style_pop_float(ctx);
                     nk_style_pop_vec2(ctx);
+                    if (logo.handle.ptr) {
+                        float lh = TAB_WIDTH * (float)X_LOGO_H / (float)X_LOGO_W;
+                        nk_layout_row_dynamic(ctx, 20, 1);
+                        nk_spacing(ctx, 1);
+                        nk_layout_row_dynamic(ctx, lh, 1);
+                        nk_image(ctx, logo);
+                    }
                     nk_group_end(ctx);
                 }
 
@@ -2225,6 +2296,7 @@ int main(void)
     save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
 
+    launchx_free_logo_image(&logo);
     nk_gdifont_del(g_bold_font);
     nk_gdifont_del(font);
     ReleaseDC(wnd, dc);
