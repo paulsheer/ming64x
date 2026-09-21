@@ -1363,7 +1363,7 @@ AuthorizedClient(ClientPtr client)
     if (rc != Success)
         return rc;
 
-    return client->local ? Success : BadAccess;
+    return (client->local || client->in_cmdline_allow_list) ? Success : BadAccess;
 }
 
 /* Add a host to the access control list.  This is the external interface

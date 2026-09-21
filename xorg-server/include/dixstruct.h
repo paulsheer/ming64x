@@ -85,6 +85,7 @@ typedef struct _Client {
     unsigned char majorOp, minorOp;
     unsigned int swapped:1;
     unsigned int local:1;
+    unsigned int in_cmdline_allow_list:1;
     unsigned int big_requests:1; /* supports large requests */
     unsigned int clientGone:1;
     unsigned int closeDownMode:2;

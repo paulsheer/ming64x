@@ -572,6 +572,7 @@ ClientAuthorized(ClientPtr client,
 
             free(allow_from);
             if (allow_match) {
+                client->in_cmdline_allow_list = TRUE;
                 auth_id = (XID) 0L;
                 priv->auth_id = auth_id;
                 priv->conn_time = 0;
