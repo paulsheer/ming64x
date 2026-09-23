@@ -206,9 +206,15 @@ dix_main(int argc, char *argv[], char *envp[])
         /* Pulse gets a fresh argv (not the X server's), since its getopt_long
          * fails on unknown options such as ":0"; daemon.conf supplies defaults. */
         char *pulse_argv[] = { "pulseaudio", NULL };
-        char pulse_error[256];
-        if (start_pulseaudio_thread(1, pulse_argv, pulse_error, sizeof(pulse_error)) < 0)
-            ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
+        char pulse_error[256] = "";
+        if (start_pulseaudio_thread(1, pulse_argv, pulse_error, sizeof(pulse_error)) < 0) {
+            if (strstr (pulse_error, "pa_pid_file_create() failed.")) {
+                ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
+                FatalError("Another pulseaudio server is already running.\nDisable audio support and restart.\n");
+            } else {
+                FatalError("Failed to start PulseAudio: %s\n", pulse_error);
+            }
+        }
     }
 
     #ifdef WIN32
