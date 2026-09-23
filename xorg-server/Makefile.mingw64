@@ -21,10 +21,12 @@ CLANG_PREFIX ?= /opt/clang-mingw/bin
 ifneq ($(CLANG),1)
 CC         := $(CROSS)gcc
 AR         := $(CROSS)ar
+NM         := $(CROSS)nm
 WINDRES    := $(CROSS)windres
 else
 CC         := $(CLANG_PREFIX)/$(CROSS)clang
 AR         := $(CLANG_PREFIX)/$(CROSS)ar
+NM         := $(CLANG_PREFIX)/$(CROSS)nm
 WINDRES    := $(CLANG_PREFIX)/$(CROSS)windres
 # clang-only warnings (gcc does not emit these)
 CFLAGS     += -Wno-typedef-redefinition -Wno-deprecated-non-prototype
@@ -80,6 +82,107 @@ $(info )
 $(info )
 $(error Dependency check failed — see above for instructions)
 $(info )
+endif
+
+# Verify the pulseaudio source tree is present and at release v17.0.
+# Sentinel: pulseaudio/NEWS, whose first line must read "PulseAudio 17.0".
+PULSE_ROOT := $(PROJECTROOT)/pulseaudio
+PULSE_NEWS := $(PULSE_ROOT)/NEWS
+PULSE_WANT := PulseAudio 17.0 custom
+PULSE_HAVE := $(strip $(shell head -n 1 $(PULSE_NEWS) 2>/dev/null))
+
+PULSE_OK := 0
+ifneq ($(wildcard $(PULSE_NEWS)),)
+ifeq ($(PULSE_HAVE),$(PULSE_WANT))
+PULSE_OK := 1
+endif
+endif
+
+ifeq ($(PULSE_OK),0)
+$(info )
+$(info ========================================)
+$(info PulseAudio source tree missing or wrong version.)
+$(info   Expected first line of $(PULSE_NEWS):)
+$(info     "$(PULSE_WANT)")
+$(info   Found:)
+$(info     "$(if $(wildcard $(PULSE_NEWS)),$(PULSE_HAVE),<missing pulseaudio/NEWS>)")
+$(info )
+$(info To fix, clone pulseaudio and check out release v17.0-custom:)
+$(info )
+$(info   cd $(PROJECTROOT))
+$(info   git clone https://github.com/paulsheer/pulseaudio.git)
+$(info   cd pulseaudio && git checkout v17.0-custom)
+$(info ========================================)
+$(info )
+$(error PulseAudio check failed - see above for instructions)
+endif
+
+# Verify the libltdl source tree (GNU libtool's libltdl) is present and correct.
+# Sentinels: ltdl.c/ltdl.h + the Windows LoadLibrary loader + lt__argz.c (the
+# latter identifies libtool >= 2.5.0, where argz.c was renamed to lt__argz.c).
+LTDLL_ROOT := $(PROJECTROOT)/libltdl
+LTDLL_WANT := libtool 2.5.4
+LTDLL_FILES := ltdl.c ltdl.h loaders/loadlibrary.c loaders/preopen.c lt__argz.c
+LTDLL_MISSING := $(strip $(foreach f,$(LTDLL_FILES),$(if $(wildcard $(LTDLL_ROOT)/$(f)),,$(f))))
+
+ifneq ($(LTDLL_MISSING),)
+$(info )
+$(info ========================================)
+$(info libltdl source tree missing or wrong version.)
+$(info   Expected $(LTDLL_WANT) unpacked at:)
+$(info     $(LTDLL_ROOT)/)
+$(info )
+$(foreach f,$(LTDLL_MISSING),$(info   Missing: libltdl/$(f)))
+$(info )
+$(info To fix, download libtool and unpack its libltdl/ subdirectory:)
+$(info )
+$(info   cd $(PROJECTROOT))
+$(info   curl -LO https://ftp.gnu.org/gnu/libtool/libtool-2.5.4.tar.xz)
+$(info   tar -xJf libtool-2.5.4.tar.xz)
+$(info   rm -rf libltdl && mkdir -p libltdl)
+$(info   cp -a libtool-2.5.4/libltdl/. libltdl/)
+$(info   rm -rf libtool-2.5.4 libtool-2.5.4.tar.xz)
+$(info ========================================)
+$(info )
+$(error libltdl check failed - see above for instructions)
+endif
+
+# Verify the libsndfile source tree is present and at release 1.2.2.
+SNDFILE_ROOT := $(PROJECTROOT)/libsndfile
+SNDFILE_WANT := 1.2.2
+SNDFILE_FILES := src/sndfile.c include/sndfile.h src/common.h src/config.h.in
+SNDFILE_MISSING := $(strip $(foreach f,$(SNDFILE_FILES),$(if $(wildcard $(SNDFILE_ROOT)/$(f)),,$(f))))
+SNDFILE_HAVE := $(strip $(shell sed -n 's/^AC_INIT.*\[\([0-9.]*\)\].*/\1/p' $(SNDFILE_ROOT)/configure.ac 2>/dev/null))
+
+SNDFILE_OK := 0
+ifneq ($(wildcard $(SNDFILE_ROOT)/configure.ac),)
+ifeq ($(SNDFILE_MISSING),)
+ifeq ($(SNDFILE_HAVE),$(SNDFILE_WANT))
+SNDFILE_OK := 1
+endif
+endif
+endif
+
+ifeq ($(SNDFILE_OK),0)
+$(info )
+$(info ========================================)
+$(info libsndfile source tree missing or wrong version.)
+$(info   Expected version $(SNDFILE_WANT) unpacked at:)
+$(info     $(SNDFILE_ROOT)/)
+$(info )
+$(foreach f,$(SNDFILE_MISSING),$(info   Missing: libsndfile/$(f)))
+$(info   Found version: $(if $(SNDFILE_HAVE),$(SNDFILE_HAVE),<missing>))
+$(info )
+$(info To fix, download libsndfile and unpack it:)
+$(info )
+$(info   cd $(PROJECTROOT))
+$(info   curl -LO https://github.com/libsndfile/libsndfile/releases/download/1.2.2/libsndfile-1.2.2.tar.xz)
+$(info   tar -xJf libsndfile-1.2.2.tar.xz)
+$(info   rm -rf libsndfile && mv libsndfile-1.2.2 libsndfile)
+$(info   rm -f libsndfile-1.2.2.tar.xz)
+$(info ========================================)
+$(info )
+$(error libsndfile check failed - see above for instructions)
 endif
 
 # ---------------------------------------------------------------------------
@@ -175,7 +278,7 @@ LIBS := \
 	-lopengl32 \
 	-lws2_32 -lgdi32 -lcomdlg32 -lole32 -lshlwapi -lshell32 \
 	-ladvapi32 -luser32 -lkernel32 -lwinmm -lsetupapi -lcomctl32 \
-	-luuid -loleaut32 -lodbc32 -lodbccp32 -ldwmapi \
+	-luuid -loleaut32 -lodbc32 -lodbccp32 -ldwmapi -lksuser \
 	-Wl,--end-group
 
 # ---------------------------------------------------------------------------
@@ -541,7 +644,7 @@ help:
 	@echo ""
 	@echo "================================================================================"
 
-all: $(TARGET) $(XKBCOMP_TARGET) $(NUKLEAR_LIB) $(LAUNCHX_TARGET)
+all: $(TARGET) $(XKBCOMP_TARGET) $(NUKLEAR_LIB) $(LAUNCHX_TARGET) $(LTDLL_LIB) $(SNDFILE_LIB) $(REGEX_LIB) $(PULSE_LIB)
 
 install: all
 	mkdir -p ../install/ming64x/
@@ -785,6 +888,338 @@ $(LIBSSH2_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 $(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
 	@echo "  LINK    $@"
 	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lbcrypt -lcrypt32
+
+# ---------------------------------------------------------------------------
+# libltdl (GNU libtool's dlopen wrapper) — static library for pulseaudio
+# ---------------------------------------------------------------------------
+# Loaders: preopen (static preload) + loadlibrary (Win32 LoadLibrary). The
+# latter is registered via lt_dlpreload.c's lt_libltdl_LTX_preloaded_symbols.
+LTDLL_DIR := $(PROJECTROOT)/libltdl
+LTDLL_SRCS := ltdl.c lt__alloc.c lt__argz.c lt__dirent.c lt__strl.c \
+	lt_dlloader.c lt_error.c slist.c lt_dlpreload.c \
+	loaders/preopen.c loaders/loadlibrary.c
+LTDLL_OBJS := $(LTDLL_SRCS:%.c=$(OBJDIR)/libltdl/%.o)
+LTDLL_LIB := $(OBJDIR)/libltdl.a
+
+# libltdl must not inherit the Xserver's -DHAVE_CONFIG_H or server defines;
+# it uses its own hand-crafted config.h.
+$(LTDLL_OBJS): DEFINES := -DLT_CONFIG_H='<config.h>' -DLTDL -DHAVE_LIBDLLOADER -DLTDLOPEN=libltdl
+$(LTDLL_OBJS): INCLUDES := -I$(LTDLL_DIR) -I$(LTDLL_DIR)/libltdl -I$(OBJDIR)/libltdl
+
+# lt__argz.h is generated from lt__argz_.h (libtool does the same in ltdl.mk).
+$(OBJDIR)/libltdl/lt__argz.h: $(LTDLL_DIR)/libltdl/lt__argz_.h
+	@mkdir -p $(dir $@)
+	@echo "  COPY    $< -> $@"
+	@cp $< $@
+
+$(OBJDIR)/libltdl/%.o: $(LTDLL_DIR)/%.c | $(OBJDIR)/libltdl/lt__argz.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(LTDLL_LIB): $(LTDLL_OBJS)
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $^
+
+# ---------------------------------------------------------------------------
+# libsndfile — static library for pulseaudio (built-in codecs only)
+# ---------------------------------------------------------------------------
+# External codecs (FLAC/Ogg/Vorbis/Opus/Speex/MPEG) are disabled via config.h;
+# flac.c/ogg.c/mpeg.c self-stub to SFE_UNIMPLEMENTED. Internal codecs (gsm610,
+# g72x, the adpcm family, alac) are compiled unconditionally because sndfile.c's
+# dispatch switch references every *_open() without guards.
+SNDFILE_DIR := $(PROJECTROOT)/libsndfile
+SNDFILE_SRCS := \
+	common.c file_io.c command.c pcm.c ulaw.c alaw.c float32.c double64.c \
+	ima_adpcm.c ms_adpcm.c gsm610.c dwvw.c vox_adpcm.c interleave.c strings.c \
+	dither.c cart.c broadcast.c audio_detect.c ima_oki_adpcm.c alac.c chunk.c \
+	ogg.c chanmap.c id3.c windows.c sndfile.c aiff.c au.c avr.c caf.c dwd.c \
+	flac.c g72x.c htk.c ircam.c macos.c mat4.c mat5.c nist.c paf.c pvf.c \
+	raw.c rx2.c sd2.c sds.c svx.c txw.c voc.c wve.c w64.c wavlike.c wav.c \
+	xi.c mpc2k.c rf64.c ogg_vorbis.c ogg_speex.c ogg_pcm.c ogg_opus.c \
+	ogg_vcomment.c nms_adpcm.c mpeg.c mpeg_decode.c mpeg_l3_encode.c \
+	GSM610/add.c GSM610/code.c GSM610/decode.c GSM610/gsm_create.c \
+	GSM610/gsm_decode.c GSM610/gsm_destroy.c GSM610/gsm_encode.c \
+	GSM610/gsm_option.c GSM610/long_term.c GSM610/lpc.c GSM610/preprocess.c \
+	GSM610/rpe.c GSM610/short_term.c GSM610/table.c \
+	G72x/g721.c G72x/g723_16.c G72x/g723_24.c G72x/g723_40.c G72x/g72x.c \
+	ALAC/ALACBitUtilities.c ALAC/ag_dec.c ALAC/ag_enc.c ALAC/dp_dec.c \
+	ALAC/dp_enc.c ALAC/matrix_dec.c ALAC/matrix_enc.c ALAC/alac_decoder.c \
+	ALAC/alac_encoder.c
+SNDFILE_OBJS := $(SNDFILE_SRCS:%.c=$(OBJDIR)/libsndfile/%.o)
+SNDFILE_LIB := $(OBJDIR)/libsndfile.a
+
+# libsndfile must not inherit the Xserver's -DHAVE_CONFIG_H or server defines;
+# it always includes its own src/config.h via sfconfig.h.
+$(SNDFILE_OBJS): DEFINES := -D__USE_MINGW_ANSI_STDIO=1
+$(SNDFILE_OBJS): INCLUDES := -I$(SNDFILE_DIR)/src -I$(SNDFILE_DIR)/include
+
+$(OBJDIR)/libsndfile/%.o: $(SNDFILE_DIR)/src/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(SNDFILE_LIB): $(SNDFILE_OBJS)
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $^
+
+# ---------------------------------------------------------------------------
+# libregex (glibc-compatible regex for pulseaudio) — replaces pcreposix
+# ---------------------------------------------------------------------------
+# regex.c is a gnulib combined translation unit (pulls in regex_internal.c,
+# regcomp.c, regexec.c); nl_langinfo.c is the langinfo shim. Uses the local
+# regex.h/langinfo.h and src/config.h.
+REGEX_DIR := $(PROJECTROOT)/libregex
+REGEX_SRCS := regex.c nl_langinfo.c
+REGEX_OBJS := $(REGEX_SRCS:%.c=$(OBJDIR)/libregex/%.o)
+REGEX_LIB := $(OBJDIR)/libregex.a
+
+# libregex must not inherit the Xserver's -DHAVE_CONFIG_H or server defines;
+# it includes its own src/config.h via regex_internal.h.
+$(REGEX_OBJS): DEFINES := -D__USE_GNU
+$(REGEX_OBJS): INCLUDES := -I$(REGEX_DIR)/include -I$(REGEX_DIR)/src
+
+$(OBJDIR)/libregex/%.o: $(REGEX_DIR)/src/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(REGEX_LIB): $(REGEX_OBJS)
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $^
+
+# ---------------------------------------------------------------------------
+# PulseAudio (v17.0) — server-only daemon embedded into ming64x.exe
+# ---------------------------------------------------------------------------
+# Compiled into a static archive (libpulseaudio-embedded.a) and linked into the
+# X server; start_pulseaudio_thread() is called from ming64x.exe. Optional deps
+# are all disabled via pulseaudio/config.h; the only external libs are libltdl,
+# libsndfile and libregex (all built above).
+#
+# Modules are compiled with -DPA_MODULE_NAME=<name> (meson's name.underscorify())
+# so each module's pa__init/pa__done/pa__get_* symbols are renamed to a unique
+# <name>_LTX_pa__*. That uniqueness is what lets every module live in one static
+# archive and be resolved through libltdl's preopen loader (see gen-pulse-preload.sh).
+PULSE_SRC   := $(PULSE_ROOT)/src
+PULSE_OBJ   := $(OBJDIR)/pulseaudio
+PULSE_LIB   := $(OBJDIR)/libpulseaudio-embedded.a
+PULSE_MAJOR := 17
+PULSE_MINOR := 0
+PULSE_API   := 12
+PULSE_PROTO := 35
+
+# pa_c_args (-DHAVE_CONFIG_H -D_GNU_SOURCE) + embedding/CRT additions. -std=gnu11
+# overrides the global -std=gnu99 (meson builds pulseaudio with c_std=gnu11; the
+# flag sits after CFLAGS on the command line so the last -std= wins).
+# __INCLUDED_FROM_PULSE_AUDIO is meson's server_c_args. It is only defined for
+# server-side code (pulsecore core, protocol, modules); it must NOT be defined
+# for the client-side files (pulse/*, the libpulsecommon pulsecore set, daemon)
+# because pulse/introspect.c needs the client pa_port_available enum that
+# pulse/def.h hides when the macro is set.
+PULSE_DEFINES        := -DHAVE_CONFIG_H -D_GNU_SOURCE -DEMBEDDED -D__USE_MINGW_ANSI_STDIO=1 -std=gnu11
+PULSE_SERVER_DEFINES := $(PULSE_DEFINES) -D__INCLUDED_FROM_PULSE_AUDIO
+
+PULSE_INCLUDES := -I$(PULSE_ROOT) -I$(PULSE_SRC) -I$(PULSE_SRC)/modules \
+	-I$(PULSE_OBJ) -I$(REGEX_DIR)/include -I$(SNDFILE_DIR)/include -I$(LTDLL_DIR)
+
+# --- source lists -----------------------------------------------------------
+# pulse/*: union of libpulse (25) and the pulse/ files of libpulsecommon (14);
+# they overlap on 12 files, so the union is 27.
+PULSE_PULSE_SRCS := \
+	pulse/channelmap.c pulse/client-conf.c pulse/context.c pulse/direction.c \
+	pulse/error.c pulse/ext-device-manager.c pulse/ext-device-restore.c \
+	pulse/ext-stream-restore.c pulse/fork-detect.c pulse/format.c \
+	pulse/introspect.c pulse/mainloop-api.c pulse/mainloop-signal.c \
+	pulse/mainloop.c pulse/operation.c pulse/proplist.c pulse/rtclock.c \
+	pulse/sample.c pulse/scache.c pulse/stream.c pulse/subscribe.c \
+	pulse/thread-mainloop.c pulse/timeval.c pulse/utf8.c pulse/util.c \
+	pulse/volume.c pulse/xmalloc.c
+
+# pulsecore/* shared client+server files (libpulsecommon).
+PULSE_COMMON_SRCS := \
+	pulsecore/arpa-inet.c pulsecore/aupdate.c pulsecore/authkey.c \
+	pulsecore/bitset.c pulsecore/conf-parser.c pulsecore/core-error.c \
+	pulsecore/core-format.c pulsecore/core-rtclock.c pulsecore/core-util.c \
+	pulsecore/dynarray.c pulsecore/fdsem.c pulsecore/flist.c pulsecore/g711.c \
+	pulsecore/hashmap.c pulsecore/i18n.c pulsecore/idxset.c \
+	pulsecore/iochannel.c pulsecore/ioline.c pulsecore/ipacl.c pulsecore/json.c \
+	pulsecore/lock-autospawn.c pulsecore/log.c pulsecore/mcalign.c \
+	pulsecore/memblock.c pulsecore/memblockq.c pulsecore/memchunk.c \
+	pulsecore/memtrap.c pulsecore/native-common.c pulsecore/once.c \
+	pulsecore/packet.c pulsecore/parseaddr.c pulsecore/pdispatch.c \
+	pulsecore/pid.c pulsecore/pipe.c pulsecore/proplist-util.c \
+	pulsecore/pstream.c pulsecore/pstream-util.c pulsecore/queue.c \
+	pulsecore/random.c pulsecore/ratelimit.c pulsecore/sample-util.c \
+	pulsecore/shm.c pulsecore/sndfile-util.c pulsecore/socket-client.c \
+	pulsecore/socket-util.c pulsecore/srbchannel.c pulsecore/strbuf.c \
+	pulsecore/strlist.c pulsecore/tagstruct.c pulsecore/time-smoother.c \
+	pulsecore/time-smoother_2.c pulsecore/tokenizer.c pulsecore/usergroup.c
+
+# Win32 thread/socket shims; present in BOTH libpulsecommon and libpulsecore,
+# so they are compiled exactly once here.
+PULSE_WIN32_SRCS := \
+	pulsecore/mutex-win32.c pulsecore/poll-win32.c \
+	pulsecore/semaphore-win32.c pulsecore/thread-win32.c
+
+# pulsecore/* server-side files (libpulsecore) + database-simple + the SIMD
+# variants that are not already in the base list (remap_mmx/remap_sse/sconv_sse).
+PULSE_CORE_SRCS := \
+	pulsecore/asyncmsgq.c pulsecore/asyncq.c pulsecore/auth-cookie.c \
+	pulsecore/card.c pulsecore/cli-command.c pulsecore/cli-text.c \
+	pulsecore/client.c pulsecore/core.c pulsecore/core-scache.c \
+	pulsecore/core-subscribe.c pulsecore/cpu.c pulsecore/cpu-arm.c \
+	pulsecore/cpu-orc.c pulsecore/cpu-x86.c pulsecore/database.c \
+	pulsecore/database-simple.c pulsecore/device-port.c \
+	pulsecore/ffmpeg/resample2.c pulsecore/filter/biquad.c \
+	pulsecore/filter/crossover.c pulsecore/filter/lfe-filter.c \
+	pulsecore/hook-list.c pulsecore/ltdl-helper.c \
+	pulsecore/message-handler.c pulsecore/mix.c pulsecore/modargs.c \
+	pulsecore/modinfo.c pulsecore/module.c pulsecore/msgobject.c \
+	pulsecore/namereg.c pulsecore/object.c pulsecore/play-memblockq.c \
+	pulsecore/play-memchunk.c pulsecore/remap.c pulsecore/remap_mmx.c \
+	pulsecore/remap_sse.c pulsecore/resampler.c pulsecore/resampler/ffmpeg.c \
+	pulsecore/resampler/peaks.c pulsecore/resampler/trivial.c pulsecore/rtpoll.c \
+	pulsecore/sconv.c pulsecore/sconv-s16be.c pulsecore/sconv-s16le.c \
+	pulsecore/sconv_sse.c pulsecore/shared.c pulsecore/sink.c \
+	pulsecore/sink-input.c pulsecore/sioman.c pulsecore/socket-server.c \
+	pulsecore/sound-file.c pulsecore/sound-file-stream.c pulsecore/source.c \
+	pulsecore/source-output.c pulsecore/start-child.c pulsecore/stream-util.c \
+	pulsecore/svolume_arm.c pulsecore/svolume_c.c pulsecore/svolume_mmx.c \
+	pulsecore/svolume_sse.c pulsecore/thread-mq.c
+
+# Protocol implementations (cli + the four protocol-* + mime-type).
+PULSE_PROTOCOL_SRCS := \
+	pulsecore/cli.c pulsecore/protocol-cli.c pulsecore/protocol-http.c \
+	pulsecore/mime-type.c pulsecore/protocol-native.c pulsecore/protocol-simple.c
+
+# The daemon proper.
+PULSE_DAEMON_SRCS := \
+	daemon/caps.c daemon/cmdline.c daemon/cpulimit.c daemon/daemon-conf.c \
+	daemon/dumpmodules.c daemon/ltdl-bind-now.c daemon/main.c
+
+# Shared module helper files (define no pa__* symbols; compiled once).
+PULSE_HELPER_SRCS := \
+	modules/restart-module.c modules/stream-interaction.c \
+	modules/echo-cancel/null.c
+
+# --- object lists -----------------------------------------------------------
+PULSE_PULSE_OBJS    := $(PULSE_PULSE_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_COMMON_OBJS   := $(PULSE_COMMON_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_WIN32_OBJS    := $(PULSE_WIN32_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_CORE_OBJS     := $(PULSE_CORE_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_PROTOCOL_OBJS := $(PULSE_PROTOCOL_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_DAEMON_OBJS   := $(PULSE_DAEMON_SRCS:%.c=$(PULSE_OBJ)/%.o)
+PULSE_HELPER_OBJS   := $(PULSE_HELPER_SRCS:%.c=$(PULSE_OBJ)/%.o)
+
+PULSE_OBJS := $(PULSE_PULSE_OBJS) $(PULSE_COMMON_OBJS) $(PULSE_WIN32_OBJS) \
+	$(PULSE_CORE_OBJS) $(PULSE_PROTOCOL_OBJS) $(PULSE_DAEMON_OBJS)
+
+# Per-group DEFINES (see note above about __INCLUDED_FROM_PULSE_AUDIO).
+$(PULSE_PULSE_OBJS):    DEFINES := $(PULSE_DEFINES)
+$(PULSE_COMMON_OBJS):   DEFINES := $(PULSE_DEFINES)
+$(PULSE_WIN32_OBJS):    DEFINES := $(PULSE_DEFINES)
+$(PULSE_DAEMON_OBJS):   DEFINES := $(PULSE_DEFINES)
+$(PULSE_CORE_OBJS):     DEFINES := $(PULSE_SERVER_DEFINES)
+$(PULSE_PROTOCOL_OBJS): DEFINES := $(PULSE_SERVER_DEFINES)
+$(PULSE_HELPER_OBJS):   DEFINES := $(PULSE_SERVER_DEFINES)
+
+$(PULSE_OBJS) $(PULSE_HELPER_OBJS): INCLUDES := $(PULSE_INCLUDES)
+
+# SIMD objects (meson's simd_variants: mmx / sse).
+$(PULSE_OBJ)/pulsecore/remap_mmx.o:   CFLAGS += -mmmx
+$(PULSE_OBJ)/pulsecore/svolume_mmx.o: CFLAGS += -mmmx
+$(PULSE_OBJ)/pulsecore/remap_sse.o:   CFLAGS += -msse2
+$(PULSE_OBJ)/pulsecore/svolume_sse.o: CFLAGS += -msse2
+$(PULSE_OBJ)/pulsecore/sconv_sse.o:   CFLAGS += -msse2
+
+# Generated header: version.h (included by context.c, daemon-conf.c, protocol-native.c).
+$(PULSE_OBJ)/pulse/version.h: $(PULSE_SRC)/pulse/version.h.in
+	@mkdir -p $(dir $@)
+	@echo "  GEN     $@"
+	@sed -e 's/@PA_MAJOR@/$(PULSE_MAJOR)/g' \
+	     -e 's/@PA_MINOR@/$(PULSE_MINOR)/g' \
+	     -e 's/@PA_API_VERSION@/$(PULSE_API)/g' \
+	     -e 's/@PA_PROTOCOL_VERSION@/$(PULSE_PROTO)/g' $< > $@
+
+# Shared compile rule for all non-module pulse objects.
+$(PULSE_OBJ)/%.o: $(PULSE_SRC)/%.c | $(PULSE_OBJ)/pulse/version.h
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+# --- modules ----------------------------------------------------------------
+# Normal modules: one source file modules/<name>.c, -DPA_MODULE_NAME=<name>
+# with '-' -> '_' (meson's name.underscorify()).
+define PULSE_MODULE_RULE
+PULSE_MODULE_OBJS += $(PULSE_OBJ)/modules/$(1).o
+$(PULSE_OBJ)/modules/$(1).o: DEFINES := $(PULSE_SERVER_DEFINES) -DPA_MODULE_NAME=$(subst -,_,$(1))
+$(PULSE_OBJ)/modules/$(1).o: INCLUDES := $(PULSE_INCLUDES)
+endef
+
+# Protocol-stub modules: all compile modules/module-protocol-stub.c but with a
+# distinct -DPA_MODULE_NAME and USE_PROTOCOL_*/USE_*_SOCKETS flag set.
+define PULSE_PROTOSTUB_RULE
+PULSE_MODULE_OBJS += $(PULSE_OBJ)/modules/$(1).o
+$(PULSE_OBJ)/modules/$(1).o: $(PULSE_SRC)/modules/module-protocol-stub.c | $(PULSE_OBJ)/pulse/version.h
+	@mkdir -p $(dir $$@)
+	@echo "  CC      $$<"
+	@$(CC) $(CFLAGS) $(PULSE_SERVER_DEFINES) -DPA_MODULE_NAME=$(subst -,_,$(1)) $(2) $(PULSE_INCLUDES) -c -o $$@ $$<
+endef
+
+PULSE_MODULE_NAMES := \
+	module-allow-passthrough module-always-sink module-always-source \
+	module-augment-properties module-card-restore module-cli module-combine \
+	module-combine-sink module-default-device-restore module-detect \
+	module-device-manager module-device-restore module-filter-apply \
+	module-filter-heuristics module-intended-roles module-loopback module-match \
+	module-native-protocol-fd module-null-sink module-null-source \
+	module-position-event-sounds module-remap-sink module-remap-source \
+	module-rescue-streams module-role-cork module-role-ducking module-sine \
+	module-sine-source module-stream-restore module-suspend-on-idle \
+	module-switch-on-connect module-switch-on-port-available \
+	module-tunnel-sink-new module-tunnel-source-new module-virtual-sink \
+	module-virtual-source module-volume-restore module-waveout
+
+$(foreach m,$(PULSE_MODULE_NAMES),$(eval $(call PULSE_MODULE_RULE,$(m))))
+
+$(eval $(call PULSE_PROTOSTUB_RULE,module-cli-protocol-tcp,-DUSE_PROTOCOL_CLI -DUSE_TCP_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-cli-protocol-unix,-DUSE_PROTOCOL_CLI -DUSE_UNIX_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-http-protocol-tcp,-DUSE_PROTOCOL_HTTP -DUSE_TCP_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-http-protocol-unix,-DUSE_PROTOCOL_HTTP -DUSE_UNIX_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-native-protocol-tcp,-DUSE_PROTOCOL_NATIVE -DUSE_TCP_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-native-protocol-unix,-DUSE_PROTOCOL_NATIVE -DUSE_UNIX_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-simple-protocol-tcp,-DUSE_PROTOCOL_SIMPLE -DUSE_TCP_SOCKETS))
+$(eval $(call PULSE_PROTOSTUB_RULE,module-simple-protocol-unix,-DUSE_PROTOCOL_SIMPLE -DUSE_UNIX_SOCKETS))
+
+# module-echo-cancel: multi-file (module-echo-cancel.c + null.c, the latter
+# already in PULSE_HELPER_SRCS); compiled via the shared pattern rule.
+PULSE_MODULE_OBJS += $(PULSE_OBJ)/modules/echo-cancel/module-echo-cancel.o
+$(PULSE_OBJ)/modules/echo-cancel/module-echo-cancel.o: DEFINES := $(PULSE_SERVER_DEFINES) -DPA_MODULE_NAME=module_echo_cancel
+$(PULSE_OBJ)/modules/echo-cancel/module-echo-cancel.o: INCLUDES := $(PULSE_INCLUDES)
+
+# --- preload table ----------------------------------------------------------
+# Scans the module objects for their <name>_LTX_pa__* symbols and emits the
+# lt__PROGRAM__LTX_preloaded_symbols table libltdl needs to resolve modules from
+# inside the static archive.
+$(PULSE_OBJ)/pulse_preload.c: $(PULSE_MODULE_OBJS) $(TOPSRCDIR)/gen-pulse-preload.sh
+	@mkdir -p $(dir $@)
+	@echo "  GEN     $@"
+	@$(NM) -g --defined-only $(PULSE_MODULE_OBJS) | sh $(TOPSRCDIR)/gen-pulse-preload.sh > $@
+
+$(PULSE_OBJ)/pulse_preload.o: $(PULSE_OBJ)/pulse_preload.c
+	@mkdir -p $(dir $@)
+	@echo "  CC      $<"
+	@$(CC) $(CFLAGS) $(PULSE_DEFINES) $(PULSE_INCLUDES) -c -o $@ $<
+
+# --- static archive ---------------------------------------------------------
+$(PULSE_LIB): $(PULSE_OBJS) $(PULSE_HELPER_OBJS) $(PULSE_MODULE_OBJS) $(PULSE_OBJ)/pulse_preload.o
+	@echo "  AR      $@"
+	@$(AR) rcs $@ $^
+
+# Link the embedded PulseAudio daemon and its hard deps into ming64x.exe.
+# Declared as prerequisites so $(TARGET)'s $^ carries them in dependency order:
+# pulse -> ltdl -> sndfile -> regex (each consumer precedes its provider).
+$(TARGET): $(PULSE_LIB) $(LTDLL_LIB) $(SNDFILE_LIB) $(REGEX_LIB)
 
 # ---------------------------------------------------------------------------
 # Create build directories

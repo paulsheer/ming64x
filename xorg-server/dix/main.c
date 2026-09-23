@@ -136,6 +136,11 @@ Equipment Corporation.
 
 extern void Dispatch(void);
 
+/* Embedded PulseAudio daemon (libpulseaudio-embedded.a). Blocks until the
+ * daemon has bound its sockets, then returns 0 (daemon thread keeps running)
+ * or -1 with a description in error[]. */
+int start_pulseaudio_thread(int argc, char *argv[], char *error, size_t error_len);
+
 CallbackListPtr RootWindowFinalizeCallback = NULL;
 
 int
@@ -196,6 +201,15 @@ dix_main(int argc, char *argv[], char *envp[])
     CheckUserAuthorization();
 
     ProcessCommandLine(argc, argv);
+
+    {
+        /* Pulse gets a fresh argv (not the X server's), since its getopt_long
+         * fails on unknown options such as ":0"; daemon.conf supplies defaults. */
+        char *pulse_argv[] = { "pulseaudio", NULL };
+        char pulse_error[256];
+        if (start_pulseaudio_thread(1, pulse_argv, pulse_error, sizeof(pulse_error)) < 0)
+            ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
+    }
 
     #ifdef WIN32
     OsVendorPreInit(argc, argv);
