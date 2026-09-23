@@ -141,6 +141,18 @@ extern void Dispatch(void);
  * or -1 with a description in error[]. */
 int start_pulseaudio_thread(int argc, char *argv[], char *error, size_t error_len);
 
+void stop_pulseaudio_thread(void);
+
+void pa_set_external_logging(void (*callback)(const char *text));
+
+extern Bool g_fAudioEnabled;
+
+static void
+pulseaudio_external_log(const char *text)
+{
+    ErrorF("pulseaudio: %s\n", text);
+}
+
 CallbackListPtr RootWindowFinalizeCallback = NULL;
 
 int
@@ -202,14 +214,16 @@ dix_main(int argc, char *argv[], char *envp[])
 
     ProcessCommandLine(argc, argv);
 
-    {
+    if (g_fAudioEnabled) {
         /* Pulse gets a fresh argv (not the X server's), since its getopt_long
          * fails on unknown options such as ":0"; daemon.conf supplies defaults. */
         char *pulse_argv[] = { "pulseaudio", NULL };
         char pulse_error[256] = "";
+        pa_set_external_logging(pulseaudio_external_log);
         if (start_pulseaudio_thread(1, pulse_argv, pulse_error, sizeof(pulse_error)) < 0) {
+            ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
+            ErrorF("Exitting\n");
             if (strstr (pulse_error, "pa_pid_file_create() failed.")) {
-                ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
                 FatalError("Another pulseaudio server is already running.\nDisable audio support and restart.\n");
             } else {
                 FatalError("Failed to start PulseAudio: %s\n", pulse_error);
@@ -361,6 +375,9 @@ dix_main(int argc, char *argv[], char *envp[])
         InputThreadInit();
 
         Dispatch();
+
+        if (g_fAudioEnabled)
+            stop_pulseaudio_thread();
 
         UnrefCursor(rootCursor);
 

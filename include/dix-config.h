@@ -407,7 +407,7 @@
 #define DBE 1
 
 /* Vendor name */
-#define XVENDORNAME "The VcXsrv Project"
+#define XVENDORNAME "Ming64x"
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS

@@ -33,11 +33,11 @@
 #include "winresource.h"
 #include "xwin-config.h"
 
-#define VER_FILEVERSION             21,1,16,1
-#define VER_FILEVERSION_STR         "21.1.16.1"
+#define VER_FILEVERSION             1,22,0,0
+#define VER_FILEVERSION_STR         "1.22.0.0"
 
-#define VER_PRODUCTVERSION          21,1,16,1
-#define VER_PRODUCTVERSION_STR      "21.1.16.1"
+#define VER_PRODUCTVERSION          1,22,0,0
+#define VER_PRODUCTVERSION_STR      "1.22.0.0"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION    VER_FILEVERSION
@@ -48,12 +48,12 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "FileDescription",  "VcXsrv windows xserver\0"
+            VALUE "FileDescription",  "Ming64x X Window Server\0"
             VALUE "FileVersion",      VER_FILEVERSION_STR"\0"
-            VALUE "InternalName",     "VcXsrv\0"
-            VALUE "LegalCopyright",   "https://github.com/marchaesen\0"
-            VALUE "OriginalFilename", "vcxsrv.exe\0"
-            VALUE "ProductName",      "VcXsrv\0"
+            VALUE "InternalName",     "Ming64x\0"
+            VALUE "LegalCopyright",   "https://github.com/paulsheer/ming64x/blob/coolx11/COPYING\0"
+            VALUE "OriginalFilename", "ming64x.exe\0"
+            VALUE "ProductName",      "Ming64x\0"
             VALUE "ProductVersion",   VER_PRODUCTVERSION_STR"\0"
         END
     END
@@ -77,14 +77,15 @@ END
 /* About */
 ABOUT_BOX DIALOGEX 32, 32, 260, 95
 STYLE WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | WS_TABSTOP  | DS_CENTERMOUSE
-CAPTION "About "XVENDORNAMESHORT
+CAPTION "About Ming64x"
 FONT 8, "MS Shell Dlg 2"
 BEGIN
   CONTROL			IDI_XWIN, IDC_STATIC, "Static", SS_ICON, 8, 8, 32, 32
-  LTEXT			"VcXsrv X Server ", IDC_STATIC, 36, 8, 220, 8
-  LTEXT			"https://github.com/marchaesen/vcxsrv", IDC_STATIC, 36, 18, 220, 8
-  LTEXT			"Version "VER_PRODUCTVERSION_STR" (10 Mar 2025)", IDC_STATIC, 36, 28, 220, 8
-  DEFPUSHBUTTON		"OK", IDOK, 105, 60, 50, 15
+  LTEXT			"Ming64x X Window Server ", IDC_STATIC, 36, 8, 220, 8
+  LTEXT			"https://github.com/paulsheer/ming64x", IDC_STATIC, 36, 18, 220, 8
+  LTEXT			"Version "VER_PRODUCTVERSION_STR" (22 Sep 2026)", IDC_STATIC, 36, 28, 220, 8
+  LTEXT			"Base on VcXsrv by Marc Haesen", IDC_STATIC, 36, 44, 220, 8
+  DEFPUSHBUTTON		"OK", IDOK, 105, 70, 50, 15
 END
 
 
@@ -93,12 +94,12 @@ END
 DEPTH_CHANGE_BOX DIALOGEX	32, 32, 180, 100
 STYLE WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | DS_CENTERMOUSE
 FONT 8, "MS Shell Dlg 2"
-CAPTION XVENDORNAMESHORT
+CAPTION "Ming64x"
 BEGIN
   DEFPUSHBUTTON		"Dismiss", IDOK, 66, 80, 50, 14
-  CTEXT			XVENDORNAMESHORT, IDC_STATIC, 40, 12, 100, 8
+  CTEXT			"Ming64x", IDC_STATIC, 40, 12, 100, 8
   CTEXT			"Disruptive screen configuration change.", IDC_STATIC, 7, 40, 166, 8
-  CTEXT			"Restore previous resolution to use "XVENDORNAMESHORT".", IDC_STATIC, 7, 52, 166, 8
+  CTEXT			"Restore previous resolution to use Ming64x.", IDC_STATIC, 7, 52, 166, 8
 END
 
 
@@ -107,7 +108,7 @@ END
 EXIT_DIALOG DIALOGEX	32, 32, 180, 78
 STYLE WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | WS_TABSTOP | DS_CENTERMOUSE
 FONT 8, "MS Shell Dlg 2"
-CAPTION "Exit "XVENDORNAMESHORT"?"
+CAPTION "Exit Ming64x?"
 BEGIN
   PUSHBUTTON "E&xit", IDOK, 55, 56, 30, 14
   DEFPUSHBUTTON "&Cancel", IDCANCEL, 95, 56, 30, 14

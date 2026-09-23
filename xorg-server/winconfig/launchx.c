@@ -87,12 +87,13 @@ launchx_free_logo_image(struct nk_image *img)
 #define WINDOW_HEIGHT 600
 #define TAB_WIDTH     260
 
-static const char *tab_names[11] = {
+static const char *tab_names[12] = {
     "SSH login",
     "Networking & access control", "XDMCP", "Screen & windowing modes",
     "Pointer & keyboard input", "XKB keyboard layout", "AccessX key sequences",
     "Windows desktop integration", "OpenGL / GLX",
-    "Fonts, rendering & appearance", "Logging, scheduling & extensions"
+    "Fonts, rendering & appearance", "Logging, scheduling & extensions",
+    "Audio"
 };
 
 static const char *maxclients_items[] = {"64", "128", "256", "512", "1024", "2048"};
@@ -1038,6 +1039,19 @@ tab_logging_extensions(struct nk_context *ctx,
     }
 }
 
+struct options_audio {
+    int audio_enabled;
+};
+
+static void
+tab_audio(struct nk_context *ctx, struct options_audio *opt)
+{
+    heading(ctx, "Audio");
+
+    checkbox_option(ctx, "Enable PulseAudio server", &opt->audio_enabled,
+        "Start the embedded PulseAudio sound server when the X server launches.\nDisable with -noaudio.");
+}
+
 static void
 reset_all_options(struct options_ssh_login *ssh_opt,
     struct options_network_and_access_control *net_opt,
@@ -1049,7 +1063,8 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     struct options_desktop_integration *desktop_opt,
     struct options_glx *glx_opt,
     struct options_fonts_rendering *fonts_opt,
-    struct options_logging_extensions *logging_opt)
+    struct options_logging_extensions *logging_opt,
+    struct options_audio *audio_opt)
 {
     *ssh_opt = (struct options_ssh_login) {0};
 
@@ -1188,6 +1203,9 @@ reset_all_options(struct options_ssh_login *ssh_opt,
             1, 1, 1, 1,  /* RECORD, DPMS, X-Resource, GLX */
         },
     };
+    *audio_opt = (struct options_audio) {
+        .audio_enabled = 1,
+    };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1232,7 +1250,8 @@ cf_build(struct cfentry *e,
     struct options_desktop_integration *desktop,
     struct options_glx *glx,
     struct options_fonts_rendering *fonts,
-    struct options_logging_extensions *logging)
+    struct options_logging_extensions *logging,
+    struct options_audio *audio)
 {
     int n = 0, i;
 
@@ -1340,6 +1359,8 @@ cf_build(struct cfentry *e,
     for (i = 0; i < NUM_EXTENSIONS; ++i)
         e[n++] = CF_BOOL("loggingschedulingextensions", extension_keys[i], logging->extension_enabled[i]);
 
+    e[n++] = CF_BOOL("audio", "enablepulseaudioserver", audio->audio_enabled);
+
     return n;
 }
 
@@ -1364,10 +1385,11 @@ save_config(struct options_ssh_login *ssh,
     struct options_desktop_integration *desktop,
     struct options_glx *glx,
     struct options_fonts_rendering *fonts,
-    struct options_logging_extensions *logging)
+    struct options_logging_extensions *logging,
+    struct options_audio *audio)
 {
     struct cfentry e[160];
-    int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging);
+    int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging, audio);
     char dir[512], path[512], tmp[512];
     FILE *f;
     int i;
@@ -1404,10 +1426,11 @@ load_config(struct options_ssh_login *ssh,
     struct options_desktop_integration *desktop,
     struct options_glx *glx,
     struct options_fonts_rendering *fonts,
-    struct options_logging_extensions *logging)
+    struct options_logging_extensions *logging,
+    struct options_audio *audio)
 {
     struct cfentry e[160];
-    int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging);
+    int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging, audio);
     char dir[512], path[512], line[4096];
     FILE *f;
     int i;
@@ -1572,7 +1595,8 @@ build_server_cmdline(struct cmdline *c,
     struct options_desktop_integration *desktop,
     struct options_glx *glx,
     struct options_fonts_rendering *fonts,
-    struct options_logging_extensions *logging)
+    struct options_logging_extensions *logging,
+    struct options_audio *audio)
 {
     char tmp[32];
 
@@ -1763,6 +1787,10 @@ build_server_cmdline(struct cmdline *c,
         cl_arg(c, "-nocompositealpha");
     cl_opt(c, "-clipupdates", desktop->clipupdates, "0");
 
+    /* Audio */
+    if (!audio->audio_enabled)
+        cl_arg(c, "-noaudio");
+
     /* OpenGL / GLX */
     if (!glx->wgl_enabled)
         cl_arg(c, "-nowgl");
@@ -1915,15 +1943,18 @@ int main(void)
     struct options_glx glx_opt;
     struct options_fonts_rendering fonts_opt;
     struct options_logging_extensions logging_opt;
+    struct options_audio audio_opt;
     struct options_ssh_login ssh_opt;
     terminal term;
     ssh_session ssh;
     struct nk_image logo;
 
     reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
-        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
+        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
+        &audio_opt);
     load_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
-        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
+        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
+        &audio_opt);
     if (ssh_opt.host[0] == '\0')
         g_focus_idx = 0;
     else if (ssh_opt.username[0] == '\0')
@@ -2091,6 +2122,7 @@ int main(void)
             RECT client;
             struct nk_rect cr;
             float W, H;
+            float logo_y = 0.0f;
 
             GetClientRect(wnd, &client);
             if (nk_begin(ctx, "LaunchX",
@@ -2104,12 +2136,12 @@ int main(void)
 
                 nk_layout_space_begin(ctx, NK_STATIC, H, 3);
 
-                /* single column of 11 tabs, pinned to the left */
+                /* single column of 12 tabs, pinned to the left */
                 nk_layout_space_push(ctx, nk_rect(0, 0, TAB_WIDTH, H - 45));
                 if (nk_group_begin(ctx, "tabs", NK_WINDOW_NO_SCROLLBAR)) {
                     nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(0,0));
                     nk_style_push_float(ctx, &ctx->style.button.rounding, 0);
-                    for (row = 0; row < 11; ++row) {
+                    for (row = 0; row < 12; ++row) {
                         nk_layout_row_dynamic(ctx, 30, 1);
                         if (current_tab == row) {
                             struct nk_style_item normal = ctx->style.button.normal;
@@ -2124,13 +2156,17 @@ int main(void)
                     nk_style_pop_float(ctx);
                     nk_style_pop_vec2(ctx);
                     if (logo.handle.ptr) {
-                        float lh = TAB_WIDTH * (float)X_LOGO_H / (float)X_LOGO_W;
                         nk_layout_row_dynamic(ctx, 20, 1);
                         nk_spacing(ctx, 1);
-                        nk_layout_row_dynamic(ctx, lh, 1);
-                        nk_image(ctx, logo);
+                        nk_layout_row_dynamic(ctx, (float)X_LOGO_H, 1);
+                        logo_y = nk_layout_widget_bounds(ctx).y;
                     }
                     nk_group_end(ctx);
+                    if (logo.handle.ptr) {
+                        nk_draw_image(nk_window_get_canvas(ctx),
+                            nk_rect(cr.x, logo_y, (float)X_LOGO_W, (float)X_LOGO_H),
+                            &logo, nk_rgb(255,255,255));
+                    }
                 }
 
                 /* tab body: canvas flush with the top, to the right of tabs */
@@ -2167,6 +2203,8 @@ int main(void)
                         tab_fonts_rendering(ctx, &fonts_opt);
                     } else if (current_tab == 10) {
                         tab_logging_extensions(ctx, &logging_opt);
+                    } else if (current_tab == 11) {
+                        tab_audio(ctx, &audio_opt);
                     }
                     nk_group_end(ctx);
                 }
@@ -2184,13 +2222,13 @@ int main(void)
                     if (nk_button_label(ctx, "Start")) {
                         save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
                             &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt);
+                            &fonts_opt, &logging_opt, &audio_opt);
                         {
                             struct cmdline c;
                             build_server_cmdline(&c, &ssh_opt, &ssh, &net_opt,
                                 &xdmcp_opt, &screen_opt, &pointer_opt,
                                 &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt,
-                                &logging_opt);
+                                &logging_opt, &audio_opt);
                             write_commandline_file(c.buf);
                             launch_ming64x(c.buf);
                         }
@@ -2198,7 +2236,7 @@ int main(void)
                     if (nk_button_label(ctx, "Exit")) {
                         save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
                             &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt);
+                            &fonts_opt, &logging_opt, &audio_opt);
                         running = 0;
                     }
                     nk_group_end(ctx);
@@ -2272,10 +2310,11 @@ int main(void)
                             ssh_session_stop(&ssh);
                         terminal_clear(&term);
                         reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
-                            &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
+                            &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
+                            &audio_opt);
                         save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
                             &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt);
+                            &fonts_opt, &logging_opt, &audio_opt);
                         g_confirm_reset = 0;
                     }
                 }
@@ -2294,7 +2333,8 @@ int main(void)
     }
 
     save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
-        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt);
+        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
+        &audio_opt);
 
     launchx_free_logo_image(&logo);
     nk_gdifont_del(g_bold_font);

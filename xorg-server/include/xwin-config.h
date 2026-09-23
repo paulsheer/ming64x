@@ -21,7 +21,7 @@
 /* #undef _XSERVER64 */
 
 /* Short vendor name */
-#define XVENDORNAMESHORT "VcXsrv"
+#define XVENDORNAMESHORT "Ming64x"
 
 /* Vendor web address for support */
 #define __VENDORDWEBSUPPORT__ "http://www.hc-consult.be/"

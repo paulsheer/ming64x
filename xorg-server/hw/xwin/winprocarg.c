@@ -719,6 +719,26 @@ ddxProcessArgument(int argc, char *argv[], int i)
     }
 
     /*
+     * Look for the '-audio' argument
+     */
+    if (IS_OPTION("-audio")) {
+        g_fAudioEnabled = TRUE;
+
+        /* Indicate that we have processed this argument */
+        return 1;
+    }
+
+    /*
+     * Look for the '-noaudio' argument
+     */
+    if (IS_OPTION("-noaudio")) {
+        g_fAudioEnabled = FALSE;
+
+        /* Indicate that we have processed this argument */
+        return 1;
+    }
+
+    /*
      * Look for the '-primary' argument
      */
     if (IS_OPTION("-primary")) {

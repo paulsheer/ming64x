@@ -743,6 +743,9 @@ winUseMsg(void)
     ErrorF(EXECUTABLE_NAME " Device Dependent Usage:\n");
     ErrorF("\n");
 
+    ErrorF("-[no]audio\n"
+           "\tEnable [disable] the PulseAudio sound server. Default is enabled.\n");
+
     ErrorF("-[no]clipboard\n"
            "\tEnable [disable] the clipboard integration. Default is enabled.\n");
 

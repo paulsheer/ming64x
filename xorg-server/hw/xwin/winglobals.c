@@ -80,6 +80,7 @@ Bool g_fSoftwareCursor = FALSE;
 Bool g_fNativeGl = TRUE;
 Bool g_fswrastwgl = FALSE;
 Bool g_fHostInTitle = TRUE;
+Bool g_fAudioEnabled = TRUE;
 pthread_mutex_t g_pmTerminating = PTHREAD_MUTEX_INITIALIZER;
 
 /*
