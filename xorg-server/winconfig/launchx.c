@@ -156,6 +156,7 @@ static int g_focus_on = 0;          /* focus nav active (SSH login tab, not conn
 static int g_unfocus_edits = 0;     /* Tab pressed: clear edit focus this frame */
 static int g_activate_pressed = 0;  /* Enter/Space pressed: activate focused button */
 static int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal) */
+static char g_notice[512];          /* cross-tab conflict explanation (modal) */
 
 /* PuTTY's Ctrl-key method: translate the keydown ourselves with the Ctrl
    state intact so Ctrl-C/D/etc. become the raw control byte (0x03, 0x04, ...)
@@ -306,6 +307,15 @@ button_option(struct nk_context *ctx, const char *label)
             clicked = 1;
     }
     return clicked;
+}
+
+static int
+dialog_button(struct nk_context *ctx, const char *label)
+{
+    struct nk_rect b = nk_widget_bounds(ctx);
+    nk_button_label(ctx, label);
+    return nk_input_has_mouse_click_in_button_rect(&ctx->input, NK_BUTTON_LEFT, b) &&
+           nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT);
 }
 
 static void
@@ -560,6 +570,7 @@ tab_network_and_access_control(struct nk_context *ctx,
 }
 
 struct options_xdmcp {
+    int xdmcp_enabled;
     char query_host[256];
     int broadcast_enabled;
     char indirect_host[256];
@@ -576,6 +587,12 @@ static void
 tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
 {
     heading(ctx, "XDMCP");
+
+    checkbox_option(ctx, "Enable XDMCP", &opt->xdmcp_enabled,
+        "Enable the XDMCP protocol so the server contacts a display manager.\nAll XDMCP settings below are disabled while this is off.");
+
+    if (!opt->xdmcp_enabled)
+        nk_widget_disable_begin(ctx);
 
     text_option(ctx, "Query host (-query)", opt->query_host, (int)sizeof(opt->query_host), "Enable XDMCP and send Query packets to this host.");
 
@@ -596,6 +613,9 @@ tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
     text_option(ctx, "Magic cookie (-cookie)", opt->cookie, (int)sizeof(opt->cookie), "Private key shared with the display manager for XDM-AUTHORIZATION-1.");
 
     text_option(ctx, "Display ID (-displayID)", opt->display_id, (int)sizeof(opt->display_id), "Identifier the display manager uses to locate this display's\nshared key.");
+
+    if (!opt->xdmcp_enabled)
+        nk_widget_disable_end(ctx);
 }
 
 struct options_screen_windowing {
@@ -620,25 +640,62 @@ static void
 tab_screen_and_windowing(struct nk_context *ctx,
     struct options_screen_windowing *opt)
 {
+    int fs, rl, mw, nd, lp, resize_scrollbars;
+
     heading(ctx, "Screen & windowing modes");
+
+    fs = opt->fullscreen_enabled;
+    rl = opt->rootless_enabled;
+    mw = opt->multiwindow_enabled;
+    nd = opt->nodecoration_enabled;
+    lp = opt->lesspointer_enabled;
+    resize_scrollbars = (opt->resize_sel == 1);
 
     text_option(ctx, "Screen geometry (-screen)", opt->screen_geometry, (int)sizeof(opt->screen_geometry), "Create screen <n> with optional size and position. Add @<monitor> to\nplace it on a monitor. Examples: 0 800x600+100+100@2 ; 0 @1");
 
+    if (mw || rl || nd || lp || resize_scrollbars)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Run in fullscreen mode (-fullscreen)", &opt->fullscreen_enabled, "Make the X server window fill the entire Windows desktop.");
+    if (mw || rl || nd || lp || resize_scrollbars)
+        nk_widget_disable_end(ctx);
 
+    if (mw || fs || nd)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Transparent root window (-rootless)", &opt->rootless_enabled, "Run rootless: the root window is hidden and only top-level X windows\nshow. Needs an external window manager; not with -multiwindow or\n-fullscreen.");
+    if (mw || fs || nd)
+        nk_widget_disable_end(ctx);
 
+    if (rl || fs || nd)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Run in multiwindow mode (-multiwindow)", &opt->multiwindow_enabled, "Run multiwindow: each top-level X window becomes its own Windows\nwindow with a built-in window manager. Not with -rootless or\n-fullscreen.");
+    if (rl || fs || nd)
+        nk_widget_disable_end(ctx);
 
+    if (mw || rl || fs)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "No window border/titlebar (-nodecoration)", &opt->nodecoration_enabled, "Show the X window with no Windows border or title bar. Ignored when\n-fullscreen is set.");
+    if (mw || rl || fs)
+        nk_widget_disable_end(ctx);
 
     checkbox_option(ctx, "Use entire virtual screen (-multimonitors)", &opt->multimonitors_enabled, "Create one screen covering all monitors, with fake XINERAMA data\ndescribing each monitor.");
 
+    if (fs)
+        nk_widget_disable_begin(ctx);
     combobox_option(ctx, "Resize mode (-resize)", resize_items, RESIZE_COUNT, &opt->resize_sel, "How the X screen resizes: scrollbars adds window scrollbars, randr\nuses the RANDR extension. Default is randr.");
+    if (fs)
+        nk_widget_disable_end(ctx);
 
+    if (!fs)
+        nk_widget_disable_begin(ctx);
     combobox_option(ctx, "Bit depth (-depth)", depth_items, DEPTH_COUNT, &opt->depth_sel, "Color depth in bits per pixel for fullscreen mode with a DirectDraw\nengine. Ignored without -fullscreen.");
+    if (!fs)
+        nk_widget_disable_end(ctx);
 
+    if (!fs)
+        nk_widget_disable_begin(ctx);
     text_option(ctx, "Refresh rate (-refresh)", opt->refresh, (int)sizeof(opt->refresh), "Refresh rate (Hz) for fullscreen mode with a DirectDraw engine.\nIgnored without -fullscreen.");
+    if (!fs)
+        nk_widget_disable_end(ctx);
 
     combobox_option(ctx, "Engine (-engine)", engine_items, ENGINE_COUNT, &opt->engine_sel, "Override the automatically selected drawing engine: 1 = Shadow GDI,\n4 = Shadow DirectDraw4 Non-Locking.");
 
@@ -648,7 +705,11 @@ tab_screen_and_windowing(struct nk_context *ctx,
 
     checkbox_option(ctx, "Disable XINERAMA extension (-disablexineramaextension)", &opt->disablexinerama_enabled, "Disable the XINERAMA extension.");
 
+    if (fs)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Hide Windows pointer (-lesspointer)", &opt->lesspointer_enabled, "Also hide the Windows pointer over inactive X windows, preventing a\nghost cursor. Only applies with -swcursor.");
+    if (fs)
+        nk_widget_disable_end(ctx);
 
     checkbox_option(ctx, "X11 software cursor (-swcursor)", &opt->swcursor_enabled, "Use the X11 software cursor instead of the Windows cursor.");
 }
@@ -1078,6 +1139,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .listeningport_sel = 0,   /* :0 (default) */
     };
     *xdmcp_opt = (struct options_xdmcp) {
+        .xdmcp_enabled = 0,
         .query_host = {0},
         .broadcast_enabled = 0,
         .indirect_host = {0},
@@ -1267,6 +1329,7 @@ cf_build(struct cfentry *e,
     e[n++] = CF_INT("networkingaccesscontrol", "maxbigreqsize", net->maxbigreqsize, 1, 127);
     e[n++] = CF_INT("networkingaccesscontrol", "listeningport", net->listeningport_sel, 0, (int)LISTENINGPORT_COUNT - 1);
 
+    e[n++] = CF_BOOL("xdmcp", "enablexdmcp", xdmcp->xdmcp_enabled);
     e[n++] = CF_STR("xdmcp", "queryhost", xdmcp->query_host);
     e[n++] = CF_BOOL("xdmcp", "broadcastforxdmcp", xdmcp->broadcast_enabled);
     e[n++] = CF_STR("xdmcp", "indirecthost", xdmcp->indirect_host);
@@ -1481,6 +1544,74 @@ load_config(struct options_ssh_login *ssh,
 }
 
 /* ------------------------------------------------------------------ */
+/* Sanity-check the loaded configuration.  A hand-edited launchx.cnf    */
+/* can set options that are mutually exclusive on the server command   */
+/* line (see winValidateArgs).  Coerce such combinations to a valid    */
+/* state, keeping the primary screen mode and dropping the modifier.    */
+/* Returns non-zero if anything was changed.                            */
+/* ------------------------------------------------------------------ */
+static int
+sanitize_options(struct options_xdmcp *xdmcp,
+    struct options_screen_windowing *screen)
+{
+    int changed = 0;
+
+    /* -multiwindow, -rootless and -fullscreen are mutually exclusive. */
+    if (screen->multiwindow_enabled && screen->rootless_enabled) {
+        screen->rootless_enabled = 0;
+        changed = 1;
+    }
+    if (screen->multiwindow_enabled && screen->fullscreen_enabled) {
+        screen->fullscreen_enabled = 0;
+        changed = 1;
+    }
+    if (screen->rootless_enabled && screen->fullscreen_enabled) {
+        screen->fullscreen_enabled = 0;
+        changed = 1;
+    }
+
+    /* -nodecoration is invalid with any of the exclusive screen modes. */
+    if (screen->nodecoration_enabled &&
+        (screen->multiwindow_enabled || screen->rootless_enabled ||
+         screen->fullscreen_enabled)) {
+        screen->nodecoration_enabled = 0;
+        changed = 1;
+    }
+
+    /* -fullscreen is invalid with -lesspointer and a non-none resize. */
+    if (screen->fullscreen_enabled) {
+        if (screen->lesspointer_enabled) {
+            screen->lesspointer_enabled = 0;
+            changed = 1;
+        }
+        if (screen->resize_sel == 1) {           /* scrollbars */
+            screen->resize_sel = 2;              /* randr (server default) */
+            changed = 1;
+        }
+    }
+
+    /* -depth and -refresh are only valid with -fullscreen. */
+    if (!screen->fullscreen_enabled) {
+        if (screen->depth_sel != 0) {            /* not Auto */
+            screen->depth_sel = 0;               /* Auto */
+            changed = 1;
+        }
+        if (screen->refresh[0] != '\0') {
+            screen->refresh[0] = '\0';
+            changed = 1;
+        }
+    }
+
+    /* XDMCP is invalid with -multiwindow. */
+    if (screen->multiwindow_enabled && xdmcp->xdmcp_enabled) {
+        xdmcp->xdmcp_enabled = 0;
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/* ------------------------------------------------------------------ */
 /* Command-line construction for ming64x.exe.                          */
 /*                                                                     */
 /* Builds the server command line from the option structs, emitting a  */
@@ -1640,16 +1771,18 @@ build_server_cmdline(struct cmdline *c,
     }
 
     /* XDMCP */
-    cl_opt(c, "-query", xdmcp->query_host, NULL);
-    cl_if(c, xdmcp->broadcast_enabled, "-broadcast");
-    cl_opt(c, "-indirect", xdmcp->indirect_host, NULL);
-    cl_if(c, xdmcp->multicast_enabled, "-multicast");
-    cl_opt(c, "-port", xdmcp->port_string, "177");
-    cl_opt(c, "-from", xdmcp->from_address, NULL);
-    cl_if(c, xdmcp->once_enabled, "-once");
-    cl_opt(c, "-class", xdmcp->display_class, "MIT-unspecified");
-    cl_opt(c, "-cookie", xdmcp->cookie, NULL);
-    cl_opt(c, "-displayID", xdmcp->display_id, NULL);
+    if (xdmcp->xdmcp_enabled) {
+        cl_opt(c, "-query", xdmcp->query_host, NULL);
+        cl_if(c, xdmcp->broadcast_enabled, "-broadcast");
+        cl_opt(c, "-indirect", xdmcp->indirect_host, NULL);
+        cl_if(c, xdmcp->multicast_enabled, "-multicast");
+        cl_opt(c, "-port", xdmcp->port_string, "177");
+        cl_opt(c, "-from", xdmcp->from_address, NULL);
+        cl_if(c, xdmcp->once_enabled, "-once");
+        cl_opt(c, "-class", xdmcp->display_class, "MIT-unspecified");
+        cl_opt(c, "-cookie", xdmcp->cookie, NULL);
+        cl_opt(c, "-displayID", xdmcp->display_id, NULL);
+    }
 
     /* Screen & windowing modes */
     if (screen->screen_geometry[0]) {
@@ -1955,6 +2088,12 @@ int main(void)
     load_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
         &audio_opt);
+    if (sanitize_options(&xdmcp_opt, &screen_opt)) {
+        strcpy(g_notice,
+            "Your saved launchx.cnf contained conflicting options.\n"
+            "They were reset to a valid combination. Review the\n"
+            "settings before starting the server.");
+    }
     if (ssh_opt.host[0] == '\0')
         g_focus_idx = 0;
     else if (ssh_opt.username[0] == '\0')
@@ -2123,12 +2262,17 @@ int main(void)
             struct nk_rect cr;
             float W, H;
             float logo_y = 0.0f;
+            int prev_multiwindow, prev_xdmcp;
+
+            /* Snapshot cross-tab state so we can tell which option changed */
+            prev_multiwindow = screen_opt.multiwindow_enabled;
+            prev_xdmcp = xdmcp_opt.xdmcp_enabled;
 
             GetClientRect(wnd, &client);
             if (nk_begin(ctx, "LaunchX",
                 nk_rect(0, 0, (float)client.right, (float)client.bottom),
                 NK_WINDOW_NO_SCROLLBAR |
-                (g_confirm_reset ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
+                ((g_confirm_reset || g_notice[0]) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
             {
                 cr = nk_window_get_content_region(ctx);
                 W = cr.w;
@@ -2208,6 +2352,23 @@ int main(void)
                     }
                     nk_group_end(ctx);
                 }
+
+                /* Cross-tab conflict: XDMCP is invalid with -multiwindow.  Revert
+                   whichever option was just enabled and explain why. */
+                if (screen_opt.multiwindow_enabled && xdmcp_opt.xdmcp_enabled) {
+                    if (screen_opt.multiwindow_enabled != prev_multiwindow) {
+                        screen_opt.multiwindow_enabled = 0;
+                        strcpy(g_notice,
+                            "Cannot enable -multiwindow while XDMCP is enabled.\n"
+                            "Disable XDMCP first.");
+                    } else if (xdmcp_opt.xdmcp_enabled != prev_xdmcp) {
+                        xdmcp_opt.xdmcp_enabled = 0;
+                        strcpy(g_notice,
+                            "Cannot enable XDMCP while -multiwindow mode is active.\n"
+                            "Disable -multiwindow first.");
+                    }
+                }
+
                 g_focus_count = g_focus_seq;
 
                 /* OK / Exit, gravity South */
@@ -2273,9 +2434,9 @@ int main(void)
                 nk_label(ctx, "Are you sure you want to continue connecting?",
                     NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ctx, 34, 2);
-                if (nk_button_label(ctx, "Yes"))
+                if (dialog_button(ctx, "Yes"))
                     ssh_hostkey_answer(&ssh, 1);
-                if (nk_button_label(ctx, "No"))
+                if (dialog_button(ctx, "No"))
                     ssh_hostkey_answer(&ssh, 0);
             }
             nk_end(ctx);
@@ -2301,30 +2462,41 @@ int main(void)
                 nk_layout_row_dynamic(ctx, 35, 1);
                 nk_label_wrap(ctx, msg);
                 nk_layout_row_dynamic(ctx, 34, 2);
-                {
-                    struct nk_rect b = nk_widget_bounds(ctx);
-                    nk_button_label(ctx, "Yes");
-                    if (nk_input_has_mouse_click_in_button_rect(&ctx->input, NK_BUTTON_LEFT, b) &&
-                        nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT)) {
-                        if (ssh_session_is_active(&ssh))
-                            ssh_session_stop(&ssh);
-                        terminal_clear(&term);
-                        reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
-                            &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
-                            &audio_opt);
-                        save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
-                            &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt, &audio_opt);
-                        g_confirm_reset = 0;
-                    }
+                if (dialog_button(ctx, "Yes")) {
+                    if (ssh_session_is_active(&ssh))
+                        ssh_session_stop(&ssh);
+                    terminal_clear(&term);
+                    reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
+                        &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
+                        &audio_opt);
+                    save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
+                        &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
+                        &fonts_opt, &logging_opt, &audio_opt);
+                    g_confirm_reset = 0;
                 }
-                {
-                    struct nk_rect b = nk_widget_bounds(ctx);
-                    nk_button_label(ctx, "No");
-                    if (nk_input_has_mouse_click_in_button_rect(&ctx->input, NK_BUTTON_LEFT, b) &&
-                        nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT))
-                        g_confirm_reset = 0;
-                }
+                if (dialog_button(ctx, "No"))
+                    g_confirm_reset = 0;
+            }
+            nk_end(ctx);
+        }
+
+        if (g_notice[0]) {
+            RECT rc;
+            struct nk_rect pr;
+
+            GetClientRect(wnd, &rc);
+            pr = nk_rect((rc.right - 640.0f) / 2.0f,
+                         (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
+
+            if (nk_begin(ctx, "Invalid option combination", pr,
+                    NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+                nk_layout_row_dynamic(ctx, 15, 1);
+                nk_label_wrap(ctx, " ");
+                nk_layout_row_dynamic(ctx, 55, 1);
+                nk_label_wrap(ctx, g_notice);
+                nk_layout_row_dynamic(ctx, 34, 1);
+                if (dialog_button(ctx, "OK"))
+                    g_notice[0] = '\0';
             }
             nk_end(ctx);
         }
