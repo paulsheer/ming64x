@@ -1,0 +1,5 @@
+#include <windows.h>
+
+#define IDI_LAUNCHX 101
+
+IDI_LAUNCHX ICON "X.ico"
