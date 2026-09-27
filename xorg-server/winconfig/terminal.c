@@ -151,6 +151,38 @@ terminal_resize(terminal *t, const int nrows, const int ncols)
     t->scroll_bottom = nrows - 1;
 }
 
+/* Shift the selection endpoints to track content when the scroll region
+   moves.  Scroll up: rows in (top, bottom] move up one; scroll down: rows in
+   [top, bottom) move down one.  A selection endpoint that scrolls off the
+   top of the region clears the selection. */
+static void
+selection_scroll_up(terminal *t, const int top, const int bottom)
+{
+    if (!t->select_active)
+        return;
+
+    if (t->select_point1_row == top || t->select_point2_row == top) {
+        t->select_active = 0;
+        return;
+    }
+
+    if (t->select_point1_row > top && t->select_point1_row <= bottom)
+        t->select_point1_row--;
+    if (t->select_point2_row > top && t->select_point2_row <= bottom)
+        t->select_point2_row--;
+}
+
+static void
+selection_scroll_down(terminal *t, const int top, const int bottom)
+{
+    if (!t->select_active)
+        return;
+    if (t->select_point1_row >= top && t->select_point1_row < bottom)
+        t->select_point1_row++;
+    if (t->select_point2_row >= top && t->select_point2_row < bottom)
+        t->select_point2_row++;
+}
+
 void
 terminal_scroll(terminal *t)
 {
@@ -168,6 +200,8 @@ terminal_scroll(terminal *t)
 
     if (t->cursor_row > 0)
         t->cursor_row--;
+
+    selection_scroll_up(t, 0, t->nrows - 1);
 }
 
 /* xterm 16-color palette, packed 0xRRGGBB */
@@ -300,6 +334,8 @@ scroll_region_up(terminal *t)
     for (c = 0; c < t->ncols; ++c)
         t->rows[bottom][c] = L'\0';
     t->rows[bottom][t->ncols] = L'\n';
+
+    selection_scroll_up(t, top, bottom);
 }
 
 static void
@@ -317,6 +353,8 @@ scroll_region_down(terminal *t)
     for (c = 0; c < t->ncols; ++c)
         t->rows[top][c] = L'\0';
     t->rows[top][t->ncols] = L'\n';
+
+    selection_scroll_down(t, top, bottom);
 }
 
 static void
