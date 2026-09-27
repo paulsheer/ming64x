@@ -1111,6 +1111,7 @@ tab_logging_extensions(struct nk_context *ctx,
 
 struct options_audio {
     int audio_enabled;
+    char pulseport[16];
 };
 
 static void
@@ -1120,6 +1121,13 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
 
     checkbox_option(ctx, "Enable PulseAudio server", &opt->audio_enabled,
         "Start the embedded PulseAudio sound server when the X server launches.\nDisable with -noaudio.");
+
+    if (!opt->audio_enabled)
+        nk_widget_disable_begin(ctx);
+    text_option(ctx, "PulseAudio listen port", opt->pulseport, sizeof(opt->pulseport),
+        "TCP port the embedded PulseAudio server listens on (default 4713).");
+    if (!opt->audio_enabled)
+        nk_widget_disable_end(ctx);
 }
 
 static void
@@ -1278,6 +1286,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     };
     *audio_opt = (struct options_audio) {
         .audio_enabled = 1,
+        .pulseport = "4713",
     };
 }
 
@@ -1435,6 +1444,7 @@ cf_build(struct cfentry *e,
         e[n++] = CF_BOOL("loggingschedulingextensions", extension_keys[i], logging->extension_enabled[i]);
 
     e[n++] = CF_BOOL("audio", "enablepulseaudioserver", audio->audio_enabled);
+    e[n++] = CF_STR("audio", "pulseaudiolistenport", audio->pulseport);
 
     return n;
 }
@@ -2018,6 +2028,24 @@ write_commandline_file(const char *cmdline)
     fclose(f);
 }
 
+static void
+write_default_pa(const char *port)
+{
+    char dir[512], path[512];
+    FILE *f;
+
+    if (config_dir(dir, sizeof dir))
+        return;
+    CreateDirectoryA(dir, NULL);
+    snprintf(path, sizeof path, "%s\\default.pa", dir);
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    fprintf(f, "load-module module-native-protocol-tcp port=%s auth-anonymous=1\r\n",
+        port[0] ? port : "4713");
+    fclose(f);
+}
+
 /* Set the working directory to the launcher's own folder, verify
    ming64x.exe is present there (else show an error with the full path),
    and start it with the given command line.  Returns 1 on success. */
@@ -2403,6 +2431,8 @@ int main(void)
                                 &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt,
                                 &logging_opt, &audio_opt);
                             write_commandline_file(c.buf);
+                            if (audio_opt.audio_enabled)
+                                write_default_pa(audio_opt.pulseport);
                             launch_ming64x(c.buf);
                         }
                     }
