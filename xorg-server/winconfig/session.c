@@ -219,7 +219,7 @@ static void session_banner_send(LIBSSH2_SESSION *session)
  * is copied from the libcurl sources with permission.
  */
 static int session_nonblock(libssh2_socket_t sockfd,   /* operate on this */
-                            int nonblock /* TRUE or FALSE */ )
+                            const int nonblock /* TRUE or FALSE */ )
 {
 #ifdef HAVE_O_NONBLOCK  /* most recent unix versions */
     int flags = fcntl(sockfd, F_GETFL, 0);
@@ -368,7 +368,6 @@ LIBSSH2_SESSION *libssh2_session_init_ex(LIBSSH2_ALLOC_FUNC(*my_alloc),
         session->api_timeout_ms = 0; /* timeout-free API by default */
         session->api_block_mode = 1; /* blocking API by default */
         session->state = SSH2_STATE_INITIAL_KEX;
-        session->fullpacket_required_type = 0;
         session->packet_read_timeout =
             ssh2_sec_to_timediff(SSH2_DEFAULT_READ_TIMEOUT);
         session->flag.quote_paths = 1; /* default behavior is to quote paths
@@ -390,7 +389,7 @@ LIBSSH2_SESSION *libssh2_session_init_ex(LIBSSH2_ALLOC_FUNC(*my_alloc),
 #pragma clang diagnostic ignored "-Wcast-function-type"
 #endif
 libssh2_cb_generic *libssh2_session_callback_set2(LIBSSH2_SESSION *session,
-                                                  int cbtype,
+                                                  const int cbtype,
                                                   libssh2_cb_generic *callback)
 {
     libssh2_cb_generic *oldcb;
@@ -478,7 +477,7 @@ libssh2_cb_generic *libssh2_session_callback_set2(LIBSSH2_SESSION *session,
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 void *libssh2_session_callback_set(LIBSSH2_SESSION *session,
-                                   int cbtype, void *callback)
+                                   const int cbtype, void *callback)
 {
     return (void *)libssh2_session_callback_set2(session, cbtype,
                                                (libssh2_cb_generic *)callback);
@@ -798,7 +797,7 @@ void libssh2_session_free(LIBSSH2_SESSION *session)
     END();
 }
 
-static void session_disconnect(LIBSSH2_SESSION *session, int reason,
+static void session_disconnect(LIBSSH2_SESSION *session, const int reason,
                                const char *description,
                                const char *lang)
 {
@@ -854,7 +853,7 @@ static void session_disconnect(LIBSSH2_SESSION *session, int reason,
     END();
 }
 
-void libssh2_session_disconnect_ex(LIBSSH2_SESSION *session, int reason,
+void libssh2_session_disconnect_ex(LIBSSH2_SESSION *session, const int reason,
                                    const char *description, const char *lang)
 {
     struct corout_item *state = session->corout_state;
@@ -873,7 +872,7 @@ void libssh2_session_disconnect_ex(LIBSSH2_SESSION *session, int reason,
  * NOTE: Currently lang_cs and lang_sc are ALWAYS set to empty string
  * regardless of actual negotiation Strings should NOT be freed
  */
-const char *libssh2_session_methods(LIBSSH2_SESSION *session, int method_type)
+const char *libssh2_session_methods(LIBSSH2_SESSION *session, const int method_type)
 {
     /* All methods have char *name as their first element */
     const struct kex_method *method = NULL;
@@ -951,7 +950,7 @@ void **libssh2_session_abstract(LIBSSH2_SESSION *session)
  * program. Otherwise it is assumed to be owned by libssh2
  */
 int libssh2_session_last_error(LIBSSH2_SESSION *session, char **errmsg,
-                               int *errmsg_len, int want_buf)
+                               int *errmsg_len, const int want_buf)
 {
     size_t msglen = 0;
 
@@ -1016,7 +1015,7 @@ int libssh2_session_last_errno(LIBSSH2_SESSION *session)
  * features while still relying on its error reporting mechanism.
  */
 int libssh2_session_set_last_error(LIBSSH2_SESSION *session,
-                                   int errcode, const char *errmsg)
+                                   const int errcode, const char *errmsg)
 {
     return ssh2_err_flags(session, errcode, errmsg, SSH2_ERR_FLAG_DUP);
 }
@@ -1026,7 +1025,7 @@ int libssh2_session_set_last_error(LIBSSH2_SESSION *session,
  *
  * Return error code.
  */
-int libssh2_session_flag(LIBSSH2_SESSION *session, int flag, int value)
+int libssh2_session_flag(LIBSSH2_SESSION *session, const int flag, const int value)
 {
     if(!session)
         return LIBSSH2_ERROR_BAD_USE;
@@ -1053,7 +1052,7 @@ int libssh2_session_flag(LIBSSH2_SESSION *session, int flag, int value)
  * this function is called. Note this function does not alter the state of the
  * actual socket involved.
  */
-int ssh2_session_set_blocking(LIBSSH2_SESSION *session, int blocking)
+int ssh2_session_set_blocking(LIBSSH2_SESSION *session, const int blocking)
 {
     int bl = session->api_block_mode;
     ssh2_deb((session, LIBSSH2_TRACE_CONN, "Setting blocking mode %s",
@@ -1067,7 +1066,7 @@ int ssh2_session_set_blocking(LIBSSH2_SESSION *session, int blocking)
  * Set a channel's blocking mode on or off, similar to a socket's
  * fcntl(fd, F_SETFL, O_NONBLOCK); type command
  */
-void libssh2_session_set_blocking(LIBSSH2_SESSION *session, int blocking)
+void libssh2_session_set_blocking(LIBSSH2_SESSION *session, const int blocking)
 {
     if(!session)
         return;
@@ -1090,7 +1089,7 @@ int libssh2_session_get_blocking(LIBSSH2_SESSION *session)
  * Set a session's timeout (in msec) for blocking mode,
  * or 0 to disable timeouts.
  */
-void libssh2_session_set_timeout(LIBSSH2_SESSION *session, long timeout_ms)
+void libssh2_session_set_timeout(LIBSSH2_SESSION *session, const long timeout_ms)
 {
     if(!session)
         return;

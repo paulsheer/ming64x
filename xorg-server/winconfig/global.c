@@ -36,7 +36,7 @@
 static int ssh2_s_initialized = 0;
 static int ssh2_s_init_flags = 0;
 
-int libssh2_init(int flags)
+int libssh2_init(const int flags)
 {
     if(ssh2_s_initialized == 0 && !(flags & LIBSSH2_INIT_NO_CRYPTO))
         ssh2_crypto_init();

@@ -51,7 +51,7 @@ static int comp_method_none_comp(LIBSSH2_SESSION *session,
                                  unsigned char *dest,
                                  size_t *dest_len,
                                  const unsigned char *src,
-                                 size_t src_len,
+                                 const size_t src_len,
                                  void **abstract)
 {
     (void)session;
@@ -70,9 +70,9 @@ static int comp_method_none_comp(LIBSSH2_SESSION *session,
 static int comp_method_none_decomp(LIBSSH2_SESSION *session,
                                    unsigned char **dest,
                                    size_t *dest_len,
-                                   size_t payload_limit,
+                                   const size_t payload_limit,
                                    const unsigned char *src,
-                                   size_t src_len, void **abstract)
+                                   const size_t src_len, void **abstract)
 {
     (void)session;
     (void)dest;
@@ -105,7 +105,7 @@ static const struct comp_method comp_method_none = {
  * Deal...
  */
 
-static voidpf comp_method_zlib_alloc(voidpf opaque, uInt items, uInt size)
+static voidpf comp_method_zlib_alloc(voidpf opaque, const uInt items, const uInt size)
 {
     LIBSSH2_SESSION *session = (LIBSSH2_SESSION *)opaque;
 
@@ -126,7 +126,7 @@ static void comp_method_zlib_free(voidpf opaque, voidpf address)
 /*
  * All your bandwidth are belong to us (so save some)
  */
-static int comp_method_zlib_init(LIBSSH2_SESSION *session, int compr,
+static int comp_method_zlib_init(LIBSSH2_SESSION *session, const int compr,
                                  void **abstract)
 {
     z_stream *strm;
@@ -167,7 +167,7 @@ static int comp_method_zlib_comp(LIBSSH2_SESSION *session,
                                     actual size used */
                                  size_t *dest_len,
                                  const unsigned char *src,
-                                 size_t src_len,
+                                 const size_t src_len,
                                  void **abstract)
 {
     z_stream *strm = *abstract;
@@ -198,9 +198,9 @@ static int comp_method_zlib_comp(LIBSSH2_SESSION *session,
 static int comp_method_zlib_decomp(LIBSSH2_SESSION *session,
                                    unsigned char **dest,
                                    size_t *dest_len,
-                                   size_t payload_limit,
+                                   const size_t payload_limit,
                                    const unsigned char *src,
-                                   size_t src_len, void **abstract)
+                                   const size_t src_len, void **abstract)
 {
     z_stream *strm = *abstract;
     /* A short-term alloc of a full data chunk is better than a series of
@@ -300,7 +300,7 @@ static int comp_method_zlib_decomp(LIBSSH2_SESSION *session,
 /*
  * All done, no more compression for you
  */
-static int comp_method_zlib_dtor(LIBSSH2_SESSION *session, int compr,
+static int comp_method_zlib_dtor(LIBSSH2_SESSION *session, const int compr,
                                  void **abstract)
 {
     z_stream *strm = *abstract;

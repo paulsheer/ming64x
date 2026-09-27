@@ -178,6 +178,7 @@ void corout_buffer_free(struct buffer *p);
 struct tiny_frame {
     int line_no;
     int fullpacket_packet_type; /* <=== this is the only local variable which is as risk of overwriting due to re-entrance */
+    unsigned char msg;
 };
 
 #ifndef COROUT_C

@@ -33,8 +33,9 @@
 
 #include "libssh2_priv.h"
 
-static int pem_readline(char *line, size_t line_size,
-                        const char *blob, size_t blob_len, size_t *blob_offset)
+static int pem_readline(char *line, const size_t line_size,
+                        const char *blob, const size_t blob_len,
+                        size_t *blob_offset)
 {
     size_t off, len;
 
@@ -61,7 +62,7 @@ static int pem_readline(char *line, size_t line_size,
     return *blob_offset > off ? 0 : -1;
 }
 
-static unsigned char pem_hex_decode(char digit)
+static unsigned char pem_hex_decode(const char digit)
 {
     return (unsigned char)
         ((digit >= 'A') ? (0xA + (digit - 'A')) : (digit - '0'));
@@ -385,7 +386,7 @@ out:
 
 static int pem_parse_data_openssh(LIBSSH2_SESSION *session,
                                   const char *passphrase,
-                                  const char *b64data, size_t b64datalen,
+                                  const char *b64data, const size_t b64datalen,
                                   struct string_buf **decrypted_buf)
 {
     const struct crypt_method *method = NULL;
@@ -801,7 +802,7 @@ out:
 }
 
 static int pem_read_asn1_length(const unsigned char *data,
-                                size_t datalen, size_t *len)
+                                const size_t datalen, size_t *len)
 {
     unsigned int lenlen;
     int nextpos;
@@ -891,7 +892,8 @@ int ssh2_pem_decode_integer(unsigned char **data, size_t *datalen,
 /*
  * returns 0 for success, key curve type that maps to ssh2_curve_type
  */
-int ssh2_pem_ecdsa_curve_type_from_name(const char *name, size_t name_len,
+int ssh2_pem_ecdsa_curve_type_from_name(const char *name,
+                                        const size_t name_len,
                                         ssh2_curve_type *out_curve)
 {
     ssh2_curve_type curve;

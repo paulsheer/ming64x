@@ -59,7 +59,7 @@ static int hostkey_method_ssh_rsa_dtor(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_rsa_init(LIBSSH2_SESSION *session,
                                        const unsigned char *hostkey_data,
-                                       size_t hostkey_data_len,
+                                       const size_t hostkey_data_len,
                                        void **abstract)
 {
     ssh2_rsa_ctx *rsa;
@@ -113,7 +113,7 @@ static int hostkey_method_ssh_rsa_init(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_rsa_initPEM(LIBSSH2_SESSION *session,
                                           const char *privkeyfile,
                                           const char *privkeyblob,
-                                          size_t privkeyblob_len,
+                                          const size_t privkeyblob_len,
                                           const char *passphrase,
                                           void **abstract)
 {
@@ -142,7 +142,7 @@ static int hostkey_method_ssh_rsa_sig_verify(LIBSSH2_SESSION *session,
                                              const unsigned char *sig,
                                              size_t sig_len,
                                              const unsigned char *m,
-                                             size_t m_len, void **abstract)
+                                             const size_t m_len, void **abstract)
 {
     ssh2_rsa_ctx *rsa = (ssh2_rsa_ctx *)(*abstract);
 
@@ -161,7 +161,7 @@ static int hostkey_method_ssh_rsa_sig_verify(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_rsa_signv(LIBSSH2_SESSION *session,
                                         unsigned char **signature,
                                         size_t *signature_len,
-                                        int veccount,
+                                        const int veccount,
                                         const struct iovec datavec[],
                                         void **abstract)
 {
@@ -203,7 +203,7 @@ static int hostkey_method_ssh_rsa_sha2_256_sig_verify(
     const unsigned char *sig,
     size_t sig_len,
     const unsigned char *m,
-    size_t m_len, void **abstract)
+    const size_t m_len, void **abstract)
 {
     ssh2_rsa_ctx *rsa = (ssh2_rsa_ctx *)(*abstract);
 
@@ -224,7 +224,7 @@ static int hostkey_method_ssh_rsa_sha2_256_sig_verify(
 static int hostkey_method_ssh_rsa_sha2_256_signv(LIBSSH2_SESSION *session,
                                                  unsigned char **signature,
                                                  size_t *signature_len,
-                                                 int veccount,
+                                                 const int veccount,
                                                  const struct iovec datavec[],
                                                  void **abstract)
 {
@@ -264,7 +264,7 @@ static int hostkey_method_ssh_rsa_sha2_512_sig_verify(
     const unsigned char *sig,
     size_t sig_len,
     const unsigned char *m,
-    size_t m_len, void **abstract)
+    const size_t m_len, void **abstract)
 {
     ssh2_rsa_ctx *rsa = (ssh2_rsa_ctx *)(*abstract);
     (void)session;
@@ -286,7 +286,7 @@ static int hostkey_method_ssh_rsa_sha2_512_sig_verify(
 static int hostkey_method_ssh_rsa_sha2_512_signv(LIBSSH2_SESSION *session,
                                                  unsigned char **signature,
                                                  size_t *signature_len,
-                                                 int veccount,
+                                                 const int veccount,
                                                  const struct iovec datavec[],
                                                  void **abstract)
 {
@@ -373,7 +373,7 @@ static const struct hostkey_method hostkey_method_ssh_rsa_sha2_512 = {
  */
 static int hostkey_method_ssh_rsa_init_cert(LIBSSH2_SESSION *session,
                                             const unsigned char *hostkey_data,
-                                            size_t hostkey_data_len,
+                                            const size_t hostkey_data_len,
                                             void **abstract)
 {
     ssh2_rsa_ctx *rsa;
@@ -485,7 +485,7 @@ static int hostkey_method_ssh_dss_dtor(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_dss_init(LIBSSH2_SESSION *session,
                                        const unsigned char *hostkey_data,
-                                       size_t hostkey_data_len,
+                                       const size_t hostkey_data_len,
                                        void **abstract)
 {
     ssh2_dsa_ctx *dsa;
@@ -530,7 +530,7 @@ static int hostkey_method_ssh_dss_init(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_dss_initPEM(LIBSSH2_SESSION *session,
                                           const char *privkeyfile,
                                           const char *privkeyblob,
-                                          size_t privkeyblob_len,
+                                          const size_t privkeyblob_len,
                                           const char *passphrase,
                                           void **abstract)
 {
@@ -556,9 +556,9 @@ static int hostkey_method_ssh_dss_initPEM(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_dss_sig_verify(LIBSSH2_SESSION *session,
                                              const unsigned char *sig,
-                                             size_t sig_len,
+                                             const size_t sig_len,
                                              const unsigned char *m,
-                                             size_t m_len, void **abstract)
+                                             const size_t m_len, void **abstract)
 {
     ssh2_dsa_ctx *dsa = (ssh2_dsa_ctx *)(*abstract);
 
@@ -578,7 +578,7 @@ static int hostkey_method_ssh_dss_sig_verify(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_dss_signv(LIBSSH2_SESSION *session,
                                         unsigned char **signature,
                                         size_t *signature_len,
-                                        int veccount,
+                                        const int veccount,
                                         const struct iovec datavec[],
                                         void **abstract)
 {
@@ -658,7 +658,7 @@ static int hostkey_method_ssh_ecdsa_dtor(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_ecdsa_init(LIBSSH2_SESSION *session,
                                          const unsigned char *hostkey_data,
-                                         size_t hostkey_data_len,
+                                         const size_t hostkey_data_len,
                                          void **abstract)
 {
     ssh2_ecdsa_ctx *ec_ctx = NULL;
@@ -730,7 +730,7 @@ static int hostkey_method_ssh_ecdsa_init(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_ecdsa_initPEM(LIBSSH2_SESSION *session,
                                             const char *privkeyfile,
                                             const char *privkeyblob,
-                                            size_t privkeyblob_len,
+                                            const size_t privkeyblob_len,
                                             const char *passphrase,
                                             void **abstract)
 {
@@ -757,9 +757,9 @@ static int hostkey_method_ssh_ecdsa_initPEM(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_ecdsa_sig_verify(LIBSSH2_SESSION *session,
                                                const unsigned char *sig,
-                                               size_t sig_len,
+                                               const size_t sig_len,
                                                const unsigned char *m,
-                                               size_t m_len, void **abstract)
+                                               const size_t m_len, void **abstract)
 {
     unsigned char *r, *s, *name;
     size_t r_len, s_len, name_len;
@@ -797,7 +797,7 @@ static int hostkey_method_ssh_ecdsa_sig_verify(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_ecdsa_signv(LIBSSH2_SESSION *session,
                                           unsigned char **signature,
                                           size_t *signature_len,
-                                          int veccount,
+                                          const int veccount,
                                           const struct iovec datavec[],
                                           void **abstract)
 {
@@ -891,7 +891,7 @@ static const struct hostkey_method hostkey_method_ecdsa_ssh_nistp521 = {
 static int hostkey_method_ssh_ecdsa_init_cert(
     LIBSSH2_SESSION *session,
     const unsigned char *hostkey_data,
-    size_t hostkey_data_len,
+    const size_t hostkey_data_len,
     void **abstract)
 {
     ssh2_ecdsa_ctx *ec_ctx = NULL;
@@ -1033,7 +1033,7 @@ static int hostkey_method_ssh_ed25519_dtor(LIBSSH2_SESSION *session,
  */
 static int hostkey_method_ssh_ed25519_init(LIBSSH2_SESSION *session,
                                            const unsigned char *hostkey_data,
-                                           size_t hostkey_data_len,
+                                           const size_t hostkey_data_len,
                                            void **abstract)
 {
     size_t key_len;
@@ -1079,7 +1079,7 @@ static int hostkey_method_ssh_ed25519_init(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_ed25519_init_cert(
     LIBSSH2_SESSION *session,
     const unsigned char *hostkey_data,
-    size_t hostkey_data_len,
+    const size_t hostkey_data_len,
     void **abstract)
 {
     size_t key_len, nonce_len;
@@ -1133,7 +1133,7 @@ static int hostkey_method_ssh_ed25519_init_cert(
 static int hostkey_method_ssh_ed25519_initPEM(LIBSSH2_SESSION *session,
                                               const char *privkeyfile,
                                               const char *privkeyblob,
-                                              size_t privkeyblob_len,
+                                              const size_t privkeyblob_len,
                                               const char *passphrase,
                                               void **abstract)
 {
@@ -1161,7 +1161,7 @@ static int hostkey_method_ssh_ed25519_sig_verify(LIBSSH2_SESSION *session,
                                                  const unsigned char *sig,
                                                  size_t sig_len,
                                                  const unsigned char *m,
-                                                 size_t m_len, void **abstract)
+                                                 const size_t m_len, void **abstract)
 {
     ssh2_ed25519_ctx *ed_ctx = (ssh2_ed25519_ctx *)(*abstract);
     (void)session;
@@ -1186,7 +1186,7 @@ static int hostkey_method_ssh_ed25519_sig_verify(LIBSSH2_SESSION *session,
 static int hostkey_method_ssh_ed25519_signv(LIBSSH2_SESSION *session,
                                             unsigned char **signature,
                                             size_t *signature_len,
-                                            int veccount,
+                                            const int veccount,
                                             const struct iovec datavec[],
                                             void **abstract)
 {
@@ -1277,7 +1277,7 @@ const struct hostkey_method **ssh2_hostkey_methods(void)
  * Length of buffer is determined by hash type
  * i.e. MD5 == 16, SHA1 == 20, SHA256 == 32
  */
-const char *libssh2_hostkey_hash(LIBSSH2_SESSION *session, int hash_type)
+const char *libssh2_hostkey_hash(LIBSSH2_SESSION *session, const int hash_type)
 {
     if(!session)
         return NULL;
@@ -1299,7 +1299,7 @@ const char *libssh2_hostkey_hash(LIBSSH2_SESSION *session, int hash_type)
     }
 }
 
-static int hostkey_type(const unsigned char *hostkey, size_t len)
+static int hostkey_type(const unsigned char *hostkey, const size_t len)
 {
     static const unsigned char rsa[] = {
         0, 0, 0, 0x07, 's', 's', 'h', '-', 'r', 's', 'a'

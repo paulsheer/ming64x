@@ -504,11 +504,11 @@ void libssh2_publickey_init(LIBSSH2_SESSION *session)
  */
 void libssh2_publickey_add_ex(LIBSSH2_PUBLICKEY *pkey,
                               const unsigned char *name,
-                              unsigned long name_len,
+                              const unsigned long name_len,
                               const unsigned char *blob,
-                              unsigned long blob_len,
-                              char overwrite,
-                              unsigned long num_attrs,
+                              const unsigned long blob_len,
+                              const char overwrite,
+                              const unsigned long num_attrs,
                               const libssh2_publickey_attribute attrs[])
 {
     LIBSSH2_CHANNEL *channel;
@@ -694,9 +694,9 @@ void libssh2_publickey_add_ex(LIBSSH2_PUBLICKEY *pkey,
  */
 void libssh2_publickey_remove_ex(LIBSSH2_PUBLICKEY *pkey,
                                  const unsigned char *name,
-                                 unsigned long name_len,
+                                 const unsigned long name_len,
                                  const unsigned char *blob,
-                                 unsigned long blob_len)
+                                 const unsigned long blob_len)
 {
     LIBSSH2_CHANNEL *channel;
     LIBSSH2_SESSION *session;

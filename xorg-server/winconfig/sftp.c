@@ -107,7 +107,7 @@
  * Returns NULL if ID not in list.
  */
 static struct sftp_zombie_requests *sftp_zombie_request_find(
-    LIBSSH2_SFTP *sftp, uint32_t request_id)
+    LIBSSH2_SFTP *sftp, const uint32_t request_id)
 {
     struct sftp_zombie_requests *zombie =
         ssh2_list_first(&sftp->zombie_requests);
@@ -122,7 +122,8 @@ static struct sftp_zombie_requests *sftp_zombie_request_find(
     return zombie;
 }
 
-static void sftp_zombie_request_remove(LIBSSH2_SFTP *sftp, uint32_t request_id)
+static void sftp_zombie_request_remove(LIBSSH2_SFTP *sftp,
+                                       const uint32_t request_id)
 {
     LIBSSH2_SESSION *session = sftp->channel->session;
 
@@ -138,7 +139,8 @@ static void sftp_zombie_request_remove(LIBSSH2_SFTP *sftp, uint32_t request_id)
     }
 }
 
-static int sftp_zombie_request_add(LIBSSH2_SFTP *sftp, uint32_t request_id)
+static int sftp_zombie_request_add(LIBSSH2_SFTP *sftp,
+                                   const uint32_t request_id)
 {
     LIBSSH2_SESSION *session = sftp->channel->session;
 
@@ -163,7 +165,7 @@ static int sftp_zombie_request_add(LIBSSH2_SFTP *sftp, uint32_t request_id)
  * Add a packet to the SFTP packet brigade
  */
 static int sftp_packet_add(LIBSSH2_SFTP *sftp,
-                           unsigned char *data, size_t data_len)
+                           unsigned char *data, const size_t data_len)
 {
     LIBSSH2_SESSION *session = sftp->channel->session;
     struct sftp_packet *packet;
@@ -392,8 +394,8 @@ static void sftp_packet_read(LIBSSH2_SFTP *sftp)
 /*
  * Checks if there is a matching SFTP packet available.
  */
-static int sftp_packet_ask(LIBSSH2_SFTP *sftp, unsigned char packet_type,
-                           uint32_t request_id,
+static int sftp_packet_ask(LIBSSH2_SFTP *sftp, const unsigned char packet_type,
+                           const uint32_t request_id,
                            unsigned char **data, size_t *data_len)
 {
     LIBSSH2_SESSION *session = sftp->channel->session;
@@ -428,10 +430,11 @@ static int sftp_packet_ask(LIBSSH2_SFTP *sftp, unsigned char packet_type,
 /*
  * A la ssh2_packet_require()
  */
-static void sftp_packet_require(LIBSSH2_SFTP *sftp, unsigned char packet_type,
-                                uint32_t request_id,
+static void sftp_packet_require(LIBSSH2_SFTP *sftp,
+                                const unsigned char packet_type,
+                                const uint32_t request_id,
                                 unsigned char **data, size_t *data_len,
-                                size_t required_size)
+                                const size_t required_size)
 {
     LIBSSH2_SESSION *session = sftp->channel->session;
     struct corout_item *state = session->corout_state;
@@ -478,11 +481,12 @@ static void sftp_packet_require(LIBSSH2_SFTP *sftp, unsigned char packet_type,
 /*
  * Require one of N possible responses
  */
-static void sftp_packet_requirev(LIBSSH2_SFTP *sftp, int num_valid_responses,
+static void sftp_packet_requirev(LIBSSH2_SFTP *sftp,
+                                 const int num_valid_responses,
                                  const unsigned char *valid_responses,
-                                 uint32_t request_id,
+                                 const uint32_t request_id,
                                  unsigned char **data, size_t *data_len,
-                                 size_t required_size)
+                                 const size_t required_size)
 {
     int i;
     LIBSSH2_SESSION *session = sftp->channel->session;
@@ -564,7 +568,7 @@ static void sftp_packetlist_flush(LIBSSH2_SFTP_HANDLE *handle)
 /*
  * Size that attr with this flagset occupies when turned into a bin struct
  */
-static int sftp_attrsize(unsigned long flags)
+static int sftp_attrsize(const unsigned long flags)
 {
     return 4 +                                 /* flags(4) */
            ((flags & LIBSSH2_SFTP_ATTR_SIZE) ? 8 : 0) +
@@ -617,7 +621,7 @@ static ssize_t sftp_attr2bin(unsigned char *p,
 }
 
 static ssize_t sftp_bin2attr(LIBSSH2_SFTP_ATTRIBUTES *attrs,
-                             const unsigned char *p, size_t data_len)
+                             const unsigned char *p, const size_t data_len)
 {
     struct string_buf buf;
     uint32_t flags = 0;
@@ -1013,9 +1017,9 @@ void libssh2_sftp_shutdown(LIBSSH2_SFTP *sftp)
 
 static void sftp_open(LIBSSH2_SFTP *sftp,
                       const char *filename,
-                      size_t filename_len,
-                      uint32_t flags, long mode,
-                      int open_type,
+                      const size_t filename_len,
+                      const uint32_t flags, const long mode,
+                      const int open_type,
                       LIBSSH2_SFTP_ATTRIBUTES *attrs_in)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
@@ -1199,9 +1203,9 @@ static void sftp_open(LIBSSH2_SFTP *sftp,
 
 void libssh2_sftp_open_ex(LIBSSH2_SFTP *sftp,
                           const char *filename,
-                          unsigned int filename_len,
-                          unsigned long flags, long mode,
-                          int open_type)
+                          const unsigned int filename_len,
+                          const unsigned long flags, const long mode,
+                          const int open_type)
 {
     struct corout_item *state;
 
@@ -1217,9 +1221,9 @@ void libssh2_sftp_open_ex(LIBSSH2_SFTP *sftp,
 
 void libssh2_sftp_open_ex_r(LIBSSH2_SFTP *sftp,
                             const char *filename,
-                            size_t filename_len,
-                            unsigned long flags, long mode,
-                            int open_type,
+                            const size_t filename_len,
+                            const unsigned long flags, const long mode,
+                            const int open_type,
                             LIBSSH2_SFTP_ATTRIBUTES *attrs)
 {
     struct corout_item *state;
@@ -1238,7 +1242,7 @@ void libssh2_sftp_open_ex_r(LIBSSH2_SFTP *sftp,
  * Read from an SFTP file handle
  */
 static void sftp_read(LIBSSH2_SFTP_HANDLE *handle,
-                      char *buffer, size_t buffer_size)
+                      char *buffer, const size_t buffer_size)
 {
     static const unsigned char read_responses[2] = {
         SSH_FXP_DATA, SSH_FXP_STATUS
@@ -1529,7 +1533,7 @@ static void sftp_read(LIBSSH2_SFTP_HANDLE *handle,
  * Read from an SFTP file handle
  */
 void libssh2_sftp_read(LIBSSH2_SFTP_HANDLE *handle,
-                       char *buffer, size_t buffer_maxlen)
+                       char *buffer, const size_t buffer_maxlen)
 {
     struct corout_item *state;
 
@@ -1546,8 +1550,8 @@ void libssh2_sftp_read(LIBSSH2_SFTP_HANDLE *handle,
  * Read from an SFTP directory handle
  */
 static void sftp_readdir(LIBSSH2_SFTP_HANDLE *handle, char *buffer,
-                         size_t buffer_maxlen, char *longentry,
-                         size_t longentry_maxlen,
+                         const size_t buffer_maxlen, char *longentry,
+                         const size_t longentry_maxlen,
                          LIBSSH2_SFTP_ATTRIBUTES *attrs)
 {
     static const unsigned char read_responses[2] = {
@@ -1771,8 +1775,8 @@ end:
  * Read from an SFTP directory handle
  */
 void libssh2_sftp_readdir_ex(LIBSSH2_SFTP_HANDLE *handle,
-                             char *buffer, size_t buffer_maxlen,
-                             char *longentry, size_t longentry_maxlen,
+                             char *buffer, const size_t buffer_maxlen,
+                             char *longentry, const size_t longentry_maxlen,
                              LIBSSH2_SFTP_ATTRIBUTES *attrs)
 {
     struct corout_item *state;
@@ -2022,7 +2026,7 @@ static void sftp_write(LIBSSH2_SFTP_HANDLE *handle, const char *buffer,
  * Write data to a file handle
  */
 void libssh2_sftp_write(LIBSSH2_SFTP_HANDLE *handle,
-                        const char *buffer, size_t count)
+                        const char *buffer, const size_t count)
 {
     struct corout_item *state;
 
@@ -2123,7 +2127,7 @@ void libssh2_sftp_fsync(LIBSSH2_SFTP_HANDLE *handle)
  * Get or Set stat on a file
  */
 static void sftp_fstat(LIBSSH2_SFTP_HANDLE *handle,
-                       LIBSSH2_SFTP_ATTRIBUTES *attrs, int setstat)
+                       LIBSSH2_SFTP_ATTRIBUTES *attrs, const int setstat)
 {
     static const unsigned char fstat_responses[2] = {
         SSH_FXP_ATTRS, SSH_FXP_STATUS
@@ -2220,7 +2224,8 @@ static void sftp_fstat(LIBSSH2_SFTP_HANDLE *handle,
  * Get or Set stat on a file
  */
 void libssh2_sftp_fstat_ex(LIBSSH2_SFTP_HANDLE *handle,
-                           LIBSSH2_SFTP_ATTRIBUTES *attrs, int setstat)
+                           LIBSSH2_SFTP_ATTRIBUTES *attrs,
+                           const int setstat)
 {
     struct corout_item *state;
 
@@ -2236,7 +2241,8 @@ void libssh2_sftp_fstat_ex(LIBSSH2_SFTP_HANDLE *handle,
 /*
  * Set the read/write pointer to an arbitrary position within the file
  */
-void libssh2_sftp_seek64(LIBSSH2_SFTP_HANDLE *handle, libssh2_uint64_t offset)
+void libssh2_sftp_seek64(LIBSSH2_SFTP_HANDLE *handle,
+                         const libssh2_uint64_t offset)
 {
     if(!handle)
         return;
@@ -2263,7 +2269,7 @@ void libssh2_sftp_seek64(LIBSSH2_SFTP_HANDLE *handle, libssh2_uint64_t offset)
  *
  * Set the read/write pointer to an arbitrary position within the file
  */
-void libssh2_sftp_seek(LIBSSH2_SFTP_HANDLE *handle, size_t offset)
+void libssh2_sftp_seek(LIBSSH2_SFTP_HANDLE *handle, const size_t offset)
 {
     libssh2_sftp_seek64(handle, (libssh2_uint64_t)offset);
 }
@@ -2405,7 +2411,7 @@ void libssh2_sftp_close_handle(LIBSSH2_SFTP_HANDLE *handle)
  * Delete a file from the remote server
  */
 static void sftp_unlink(LIBSSH2_SFTP *sftp,
-                        const char *filename, size_t filename_len)
+                        const char *filename, const size_t filename_len)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
     LIBSSH2_SESSION *session = channel->session;
@@ -2485,7 +2491,8 @@ static void sftp_unlink(LIBSSH2_SFTP *sftp,
  * Delete a file from the remote server
  */
 void libssh2_sftp_unlink_ex(LIBSSH2_SFTP *sftp,
-                            const char *filename, unsigned int filename_len)
+                            const char *filename,
+                            const unsigned int filename_len)
 {
     struct corout_item *state;
 
@@ -2503,9 +2510,10 @@ void libssh2_sftp_unlink_ex(LIBSSH2_SFTP *sftp,
  */
 static void sftp_rename(LIBSSH2_SFTP *sftp,
                         const char *source_filename,
-                        unsigned int source_filename_len,
+                        const unsigned int source_filename_len,
                         const char *dest_filename,
-                        unsigned int dest_filename_len, long flags)
+                        const unsigned int dest_filename_len,
+                        const long flags)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
     LIBSSH2_SESSION *session = channel->session;
@@ -2628,9 +2636,10 @@ static void sftp_rename(LIBSSH2_SFTP *sftp,
  */
 void libssh2_sftp_rename_ex(LIBSSH2_SFTP *sftp,
                             const char *source_filename,
-                            unsigned int source_filename_len,
+                            const unsigned int source_filename_len,
                             const char *dest_filename,
-                            unsigned int dest_filename_len, long flags)
+                            const unsigned int dest_filename_len,
+                            const long flags)
 {
     struct corout_item *state;
 
@@ -2645,9 +2654,9 @@ void libssh2_sftp_rename_ex(LIBSSH2_SFTP *sftp,
 }
 
 static void sftp_posix_rename(LIBSSH2_SFTP *sftp, const char *source_filename,
-                              size_t source_filename_len,
+                              const size_t source_filename_len,
                               const char *dest_filename,
-                              size_t dest_filename_len)
+                              const size_t dest_filename_len)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
     LIBSSH2_SESSION *session = channel->session;
@@ -2750,9 +2759,9 @@ static void sftp_posix_rename(LIBSSH2_SFTP *sftp, const char *source_filename,
  */
 void libssh2_sftp_posix_rename_ex(LIBSSH2_SFTP *sftp,
                                   const char *source_filename,
-                                  size_t source_filename_len,
+                                  const size_t source_filename_len,
                                   const char *dest_filename,
-                                  size_t dest_filename_len)
+                                  const size_t dest_filename_len)
 {
     struct corout_item *state;
 
@@ -2901,7 +2910,7 @@ void libssh2_sftp_fstatvfs(LIBSSH2_SFTP_HANDLE *handle,
  * Get file system statistics
  */
 static void sftp_statvfs(LIBSSH2_SFTP *sftp,
-                         const char *path, unsigned int path_len,
+                         const char *path, const unsigned int path_len,
                          LIBSSH2_SFTP_STATVFS *st)
 {
     static const unsigned char responses[2] = {
@@ -3016,7 +3025,7 @@ static void sftp_statvfs(LIBSSH2_SFTP *sftp,
  * support on the server)
  */
 void libssh2_sftp_statvfs(LIBSSH2_SFTP *sftp,
-                          const char *path, size_t path_len,
+                          const char *path, const size_t path_len,
                           LIBSSH2_SFTP_STATVFS *st)
 {
     struct corout_item *state;
@@ -3034,7 +3043,8 @@ void libssh2_sftp_statvfs(LIBSSH2_SFTP *sftp,
  * Create an SFTP directory
  */
 static void sftp_mkdir(LIBSSH2_SFTP *sftp,
-                       const char *path, unsigned int path_len, long mode)
+                       const char *path, const unsigned int path_len,
+                       const long mode)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
     LIBSSH2_SESSION *session = channel->session;
@@ -3129,7 +3139,8 @@ static void sftp_mkdir(LIBSSH2_SFTP *sftp,
  * Create an SFTP directory
  */
 void libssh2_sftp_mkdir_ex(LIBSSH2_SFTP *sftp,
-                           const char *path, unsigned int path_len, long mode)
+                           const char *path, const unsigned int path_len,
+                           const long mode)
 {
     struct corout_item *state;
 
@@ -3146,7 +3157,7 @@ void libssh2_sftp_mkdir_ex(LIBSSH2_SFTP *sftp,
  * Remove a directory
  */
 static void sftp_rmdir(LIBSSH2_SFTP *sftp, const char *path,
-                       unsigned int path_len)
+                       const unsigned int path_len)
 {
     LIBSSH2_CHANNEL *channel = sftp->channel;
     LIBSSH2_SESSION *session = channel->session;
@@ -3225,7 +3236,7 @@ static void sftp_rmdir(LIBSSH2_SFTP *sftp, const char *path,
  * Remove a directory
  */
 void libssh2_sftp_rmdir_ex(LIBSSH2_SFTP *sftp,
-                           const char *path, unsigned int path_len)
+                           const char *path, const unsigned int path_len)
 {
     struct corout_item *state;
 
@@ -3242,8 +3253,8 @@ void libssh2_sftp_rmdir_ex(LIBSSH2_SFTP *sftp,
  * Stat a file or symbolic link
  */
 static void sftp_stat(LIBSSH2_SFTP *sftp,
-                      const char *path, unsigned int path_len,
-                      int stat_type, LIBSSH2_SFTP_ATTRIBUTES *attrs)
+                      const char *path, const unsigned int path_len,
+                      const int stat_type, LIBSSH2_SFTP_ATTRIBUTES *attrs)
 {
     static const unsigned char stat_responses[2] = {
         SSH_FXP_ATTRS, SSH_FXP_STATUS
@@ -3364,8 +3375,8 @@ static void sftp_stat(LIBSSH2_SFTP *sftp,
  * Stat a file or symbolic link
  */
 void libssh2_sftp_stat_ex(LIBSSH2_SFTP *sftp,
-                          const char *path, unsigned int path_len,
-                          int stat_type, LIBSSH2_SFTP_ATTRIBUTES *attrs)
+                          const char *path, const unsigned int path_len,
+                          const int stat_type, LIBSSH2_SFTP_ATTRIBUTES *attrs)
 {
     struct corout_item *state;
 
@@ -3382,9 +3393,9 @@ void libssh2_sftp_stat_ex(LIBSSH2_SFTP *sftp,
  * Read or set a symlink
  */
 static void sftp_symlink(LIBSSH2_SFTP *sftp,
-                         const char *path, unsigned int path_len,
-                         char *target, unsigned int target_len,
-                         int link_type)
+                         const char *path, const unsigned int path_len,
+                         char *target, const unsigned int target_len,
+                         const int link_type)
 {
     static const unsigned char link_responses[2] = {
         SSH_FXP_NAME, SSH_FXP_STATUS
@@ -3574,9 +3585,9 @@ static void sftp_symlink(LIBSSH2_SFTP *sftp,
  * Read or set a symlink
  */
 void libssh2_sftp_symlink_ex(LIBSSH2_SFTP *sftp,
-                             const char *path, unsigned int path_len,
-                             char *target, unsigned int target_len,
-                             int link_type)
+                             const char *path, const unsigned int path_len,
+                             char *target, const unsigned int target_len,
+                             const int link_type)
 {
     struct corout_item *state;
 

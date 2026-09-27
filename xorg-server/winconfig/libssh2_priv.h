@@ -558,6 +558,9 @@ struct _LIBSSH2_CHANNEL {
     ssh2_NB_states close_state;
     unsigned char close_packet[5];
 
+    /* packet buffer for channel_send_eof() */
+    unsigned char eof_packet[5];
+
     /* State variables used in channel_wait_eof() */
     ssh2_NB_states wait_eof_state;
 
@@ -1010,7 +1013,6 @@ struct _LIBSSH2_SESSION {
     ssh2_NB_states fullpacket_state;
     int fullpacket_macstate;
     size_t fullpacket_payload_len;
-    uint32_t fullpacket_required_type;
     uint32_t fullpacket_seq;    /* incoming packet seqno (captured before the
                                    post-MAC increment, survives the
                                    ssh2_packet_add() yield) */
@@ -1055,6 +1057,7 @@ struct _LIBSSH2_SESSION {
     ssh2_timediff_t keepalive_interval;
     int keepalive_want_reply;
     ssh2_time_t keepalive_last_sent;
+    unsigned char keepalive_packet[28];
 
     /* Configurable timeout for packets. Replaces LIBSSH2_READ_TIMEOUT */
     ssh2_timediff_t packet_read_timeout;

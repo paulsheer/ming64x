@@ -125,10 +125,10 @@ static struct libssh2_knownhost *knownhost_to_external(struct known_host *node)
 
 static int knownhost_add(LIBSSH2_KNOWNHOSTS *hosts,
                          const char *host, const char *salt,
-                         const char *key_type_name, size_t key_type_len,
-                         const char *key, size_t keylen,
-                         const char *comment, size_t commentlen,
-                         int typemask, struct libssh2_knownhost **store)
+                         const char *key_type_name, const size_t key_type_len,
+                         const char *key, const size_t keylen,
+                         const char *comment, const size_t commentlen,
+                         const int typemask, struct libssh2_knownhost **store)
 {
     struct known_host *entry;
     size_t hostlen;
@@ -320,8 +320,8 @@ error:
  */
 int libssh2_knownhost_add(LIBSSH2_KNOWNHOSTS *hosts,
                           const char *host, const char *salt,
-                          const char *key, size_t keylen,
-                          int typemask, struct libssh2_knownhost **store)
+                          const char *key, const size_t keylen,
+                          const int typemask, struct libssh2_knownhost **store)
 {
     return knownhost_add(hosts, host, salt, NULL, 0, key, keylen, NULL,
                          0, typemask, store);
@@ -351,9 +351,9 @@ int libssh2_knownhost_add(LIBSSH2_KNOWNHOSTS *hosts,
  */
 int libssh2_knownhost_addc(LIBSSH2_KNOWNHOSTS *hosts,
                            const char *host, const char *salt,
-                           const char *key, size_t keylen,
-                           const char *comment, size_t commentlen,
-                           int typemask, struct libssh2_knownhost **store)
+                           const char *key, const size_t keylen,
+                           const char *comment, const size_t commentlen,
+                           const int typemask, struct libssh2_knownhost **store)
 {
     return knownhost_add(hosts, host, salt, NULL, 0, key, keylen,
                          comment, commentlen, typemask, store);
@@ -375,7 +375,7 @@ int libssh2_knownhost_addc(LIBSSH2_KNOWNHOSTS *hosts,
  * LIBSSH2_KNOWNHOST_CHECK_MATCH
  * LIBSSH2_KNOWNHOST_CHECK_MISMATCH
  */
-static int knownhost_hex_value(char c)
+static int knownhost_hex_value(const char c)
 {
     if(c >= '0' && c <= '9')
         return c - '0';
@@ -419,7 +419,7 @@ static int knownhost_parse_ipv4(const char *src, const char *end,
     return 1;
 }
 
-static int knownhost_parse_ipv6(const char *src, size_t len,
+static int knownhost_parse_ipv6(const char *src, const size_t len,
                                 unsigned char result[16])
 {
     unsigned short words[8];
@@ -575,9 +575,9 @@ static int knownhost_plain_match(const char *host, const char *known)
 }
 
 static int knownhost_check(LIBSSH2_KNOWNHOSTS *hosts,
-                           const char *hostp, int port,
-                           const char *key, size_t keylen,
-                           int typemask,
+                           const char *hostp, const int port,
+                           const char *key, const size_t keylen,
+                           const int typemask,
                            struct libssh2_knownhost **store)
 {
     struct known_host *node;
@@ -749,8 +749,8 @@ static int knownhost_check(LIBSSH2_KNOWNHOSTS *hosts,
  * LIBSSH2_KNOWNHOST_CHECK_MISMATCH
  */
 int libssh2_knownhost_check(LIBSSH2_KNOWNHOSTS *hosts,
-                            const char *host, const char *key, size_t keylen,
-                            int typemask,
+                            const char *host, const char *key, const size_t keylen,
+                            const int typemask,
                             struct libssh2_knownhost **store)
 {
     return knownhost_check(hosts, host, -1, key, keylen, typemask, store);
@@ -778,9 +778,9 @@ int libssh2_knownhost_check(LIBSSH2_KNOWNHOSTS *hosts,
  * LIBSSH2_KNOWNHOST_CHECK_MISMATCH
  */
 int libssh2_knownhost_checkp(LIBSSH2_KNOWNHOSTS *hosts,
-                             const char *host, int port,
-                             const char *key, size_t keylen,
-                             int typemask,
+                             const char *host, const int port,
+                             const char *key, const size_t keylen,
+                             const int typemask,
                              struct libssh2_knownhost **store)
 {
     return knownhost_check(hosts, host, port, key, keylen, typemask, store);
@@ -842,12 +842,12 @@ void libssh2_knownhost_free(LIBSSH2_KNOWNHOSTS *hosts)
  * key
  */
 static int knownhost_line_legacy(LIBSSH2_KNOWNHOSTS *hosts,
-                                 const char *host, size_t hostlen,
+                                 const char *host, const size_t hostlen,
                                  const char *key_type_name,
-                                 size_t key_type_len,
-                                 const char *key, size_t keylen,
-                                 int key_type,
-                                 const char *comment, size_t commentlen)
+                                 const size_t key_type_len,
+                                 const char *key, const size_t keylen,
+                                 const int key_type,
+                                 const char *comment, const size_t commentlen)
 {
     int rc = 0;
     size_t namelen = 0;
@@ -901,10 +901,10 @@ static int knownhost_line_legacy(LIBSSH2_KNOWNHOSTS *hosts,
 static int knownhost_line_hashed(LIBSSH2_KNOWNHOSTS *hosts,
                                  const char *host, size_t hostlen,
                                  const char *key_type_name,
-                                 size_t key_type_len,
-                                 const char *key, size_t keylen,
-                                 int key_type,
-                                 const char *comment, size_t commentlen)
+                                 const size_t key_type_len,
+                                 const char *key, const size_t keylen,
+                                 const int key_type,
+                                 const char *comment, const size_t commentlen)
 {
     const char *p;
     char saltbuf[32];
@@ -964,7 +964,7 @@ static int knownhost_line_hashed(LIBSSH2_KNOWNHOSTS *hosts,
  * The function assumes new-lines have already been removed from the arguments.
  */
 static int knownhost_line(LIBSSH2_KNOWNHOSTS *hosts,
-                          const char *host, size_t hostlen,
+                          const char *host, const size_t hostlen,
                           const char *key, size_t keylen)
 {
     const char *comment = NULL;
@@ -1100,7 +1100,7 @@ static int knownhost_line(LIBSSH2_KNOWNHOSTS *hosts,
  *
  */
 int libssh2_knownhost_readline(LIBSSH2_KNOWNHOSTS *hosts,
-                               const char *line, size_t len, int type)
+                               const char *line, size_t len, const int type)
 {
     const char *cp;
     const char *hostp;
@@ -1175,7 +1175,7 @@ int libssh2_knownhost_readline(LIBSSH2_KNOWNHOSTS *hosts,
  * Returns a negative value for error or number of successfully added hosts.
  */
 int libssh2_knownhost_readfile(LIBSSH2_KNOWNHOSTS *hosts,
-                               const char *filename, int type)
+                               const char *filename, const int type)
 {
     FILE *fp;
     int num = 0;
@@ -1217,8 +1217,8 @@ int libssh2_knownhost_readfile(LIBSSH2_KNOWNHOSTS *hosts,
  */
 static int knownhost_writeline(LIBSSH2_KNOWNHOSTS *hosts,
                                struct known_host *node,
-                               char *buf, size_t buflen,
-                               size_t *outlen, int type)
+                               char *buf, const size_t buflen,
+                               size_t *outlen, const int type)
 {
     size_t required_size;
 
@@ -1385,9 +1385,9 @@ static int knownhost_writeline(LIBSSH2_KNOWNHOSTS *hosts,
  */
 int libssh2_knownhost_writeline(LIBSSH2_KNOWNHOSTS *hosts,
                                 struct libssh2_knownhost *known,
-                                char *buffer, size_t buflen,
+                                char *buffer, const size_t buflen,
                                 size_t *outlen, /* amount of written data */
-                                int type)
+                                const int type)
 {
     struct known_host *node;
 
@@ -1407,7 +1407,7 @@ int libssh2_knownhost_writeline(LIBSSH2_KNOWNHOSTS *hosts,
  * Write hosts+key pairs to the given file.
  */
 int libssh2_knownhost_writefile(LIBSSH2_KNOWNHOSTS *hosts,
-                                const char *filename, int type)
+                                const char *filename, const int type)
 {
     struct known_host *node;
     FILE *fp;

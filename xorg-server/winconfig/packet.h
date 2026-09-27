@@ -51,6 +51,7 @@ void ssh2_packet_requirev(LIBSSH2_SESSION *session,
                           size_t match_len);
 void ssh2_packet_burn(LIBSSH2_SESSION *session);
 void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
-                     size_t datalen, int macstate, uint32_t seq);
+                     size_t datalen, int macstate, uint32_t seq,
+                     const uint32_t fullpacket_required_type);
 
 #endif /* LIBSSH2_PACKET_H */

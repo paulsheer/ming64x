@@ -59,7 +59,7 @@
  *
  * Returns SCP_C_FIELDS_OK, SCP_C_FIELDS_INCOMPLETE, or SCP_C_FIELDS_MALFORMED.
  */
-int ssh2_scp_parse_c_fields(const char *buf, size_t len,
+int ssh2_scp_parse_c_fields(const char *buf, const size_t len,
                             long *mode_out, libssh2_int64_t *size_out)
 {
     size_t i;
@@ -189,7 +189,7 @@ int ssh2_scp_parse_c_fields(const char *buf, size_t len,
    until then it is kept static and in this source file.
  */
 static size_t scp_shell_quotearg(const char *path,
-                                 char *buf, size_t bufsize)
+                                 char *buf, const size_t bufsize)
 {
     const char *src;
     char *dst, *endp;
@@ -786,9 +786,9 @@ void libssh2_scp_recv2(LIBSSH2_SESSION *session, const char *path,
  * Send a file using SCP
  */
 static void scp_send(LIBSSH2_SESSION *session,
-                     const char *path, int mode,
-                     libssh2_int64_t size,
-                     time_t mtime, time_t atime)
+                     const char *path, const int mode,
+                     const libssh2_int64_t size,
+                     const time_t mtime, const time_t atime)
 {
     struct corout_item *state = session->corout_state;
     size_t cmd_len;
@@ -985,9 +985,9 @@ scp_send_error:
  * Send a file using SCP. Old API.
  */
 void libssh2_scp_send_ex(LIBSSH2_SESSION *session,
-                         const char *path, int mode,
-                         size_t size,
-                         long mtime, long atime)
+                         const char *path, const int mode,
+                         const size_t size,
+                         const long mtime, const long atime)
 {
     struct corout_item *state;
 
@@ -1006,9 +1006,9 @@ void libssh2_scp_send_ex(LIBSSH2_SESSION *session,
  * Send a file using SCP
  */
 void libssh2_scp_send64(LIBSSH2_SESSION *session,
-                        const char *path, int mode,
-                        libssh2_int64_t size,
-                        time_t mtime, time_t atime)
+                        const char *path, const int mode,
+                        const libssh2_int64_t size,
+                        const time_t mtime, const time_t atime)
 {
     struct corout_item *state;
 

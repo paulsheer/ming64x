@@ -66,7 +66,7 @@
  * username should be NULL, or a null-terminated string
  */
 static void userauth_list(LIBSSH2_SESSION *session, const char *username,
-                          unsigned int username_len)
+                          const unsigned int username_len)
 {
     struct corout_item *state = session->corout_state;
     static const unsigned char reply_codes[4] = {
@@ -232,7 +232,7 @@ static void userauth_list(LIBSSH2_SESSION *session, const char *username,
  * username should be NULL, or a null-terminated string
  */
 void libssh2_userauth_list(LIBSSH2_SESSION *session,
-                           const char *username, unsigned int username_len)
+                           const char *username, const unsigned int username_len)
 {
     struct corout_item *state;
 
@@ -282,9 +282,9 @@ int libssh2_userauth_authenticated(LIBSSH2_SESSION *session)
  */
 static void userauth_password(LIBSSH2_SESSION *session,
                               const char *username,
-                              unsigned int username_len,
+                              const unsigned int username_len,
                               const char *password,
-                              unsigned int password_len,
+                              const unsigned int password_len,
                               LIBSSH2_PASSWD_CHANGEREQ_FUNC(*passwd_change_cb))
 {
     struct corout_item *state = session->corout_state;
@@ -458,8 +458,8 @@ static void userauth_password(LIBSSH2_SESSION *session,
  */
 void libssh2_userauth_password_ex(
     LIBSSH2_SESSION *session,
-    const char *username, unsigned int username_len,
-    const char *password, unsigned int password_len,
+    const char *username, const unsigned int username_len,
+    const char *password, const unsigned int password_len,
     LIBSSH2_PASSWD_CHANGEREQ_FUNC(*passwd_change_cb))
 {
     struct corout_item *state;
@@ -486,7 +486,7 @@ static int userauth_read_pubkey(LIBSSH2_SESSION *session, char **method,
                                 unsigned char **pubkeydata,
                                 size_t *pubkeydata_len,
                                 const char *pubkeyfile,
-                                const char *pubkeyblob, size_t pubkeyblob_len)
+                                const char *pubkeyblob, const size_t pubkeyblob_len)
 {
     char *pubkey = NULL, *sp1, *sp2, *tmp;
     size_t pubkey_len, method_len;
@@ -615,7 +615,7 @@ static int userauth_read_privkey(
     const struct hostkey_method **hostkey_method, void **hostkey_abstract,
     const char *method,
     const char *privkeyfile,
-    const char *privkeyblob, size_t privkeyblob_len,
+    const char *privkeyblob, const size_t privkeyblob_len,
     const char *passphrase)
 {
     const struct hostkey_method **hostkey_methods_avail =
@@ -656,7 +656,7 @@ static int userauth_read_privkey(
 
 static int userauth_sign(LIBSSH2_SESSION *session,
                          unsigned char **sig, size_t *sig_len,
-                         const unsigned char *data, size_t data_len,
+                         const unsigned char *data, const size_t data_len,
                          void **abstract)
 {
     struct privkey_info *pk_info = (struct privkey_info *)(*abstract);
@@ -694,7 +694,7 @@ static int userauth_sign(LIBSSH2_SESSION *session,
 
 int libssh2_sign_sk(LIBSSH2_SESSION *session,
                     unsigned char **sig, size_t *sig_len,
-                    const unsigned char *data, size_t data_len,
+                    const unsigned char *data, const size_t data_len,
                     void **abstract)
 {
     int rc = LIBSSH2_ERROR_DECRYPT;
@@ -799,14 +799,14 @@ int libssh2_sign_sk(LIBSSH2_SESSION *session,
  */
 static void userauth_hostbased_fromfile(LIBSSH2_SESSION *session,
                                         const char *username,
-                                        size_t username_len,
+                                        const size_t username_len,
                                         const char *pubkeyfile,
                                         const char *privkeyfile,
                                         const char *passphrase,
                                         const char *hostname,
-                                        size_t hostname_len,
+                                        const size_t hostname_len,
                                         const char *local_username,
-                                        size_t local_username_len)
+                                        const size_t local_username_len)
 {
     struct corout_item *state = session->corout_state;
     int rc;
@@ -1011,14 +1011,14 @@ static void userauth_hostbased_fromfile(LIBSSH2_SESSION *session,
  */
 void libssh2_userauth_hostbased_fromfile_ex(LIBSSH2_SESSION *session,
                                             const char *username,
-                                            unsigned int username_len,
+                                            const unsigned int username_len,
                                             const char *pubkeyfile,
                                             const char *privkeyfile,
                                             const char *passphrase,
                                             const char *hostname,
-                                            unsigned int hostname_len,
+                                            const unsigned int hostname_len,
                                             const char *local_username,
-                                            unsigned int local_username_len)
+                                            const unsigned int local_username_len)
 {
     struct corout_item *state;
 
@@ -1269,8 +1269,8 @@ static int userauth_key_sign_algs(LIBSSH2_SESSION *session, char **method)
 
 void ssh2_userauth_publickey(
     LIBSSH2_SESSION *session,
-    const char *username, size_t username_len,
-    const unsigned char *pubkeydata, size_t pubkeydata_len,
+    const char *username, const size_t username_len,
+    const unsigned char *pubkeydata, const size_t pubkeydata_len,
     LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC(*sign_callback),
     void *abstract)
 {
@@ -1640,11 +1640,11 @@ void ssh2_userauth_publickey(
  * Authenticate using a keypair from file or blob
  */
 static void userauth_publickey(LIBSSH2_SESSION *session,
-                               const char *username,  size_t username_len,
+                               const char *username,  const size_t username_len,
                                const char *pubkeyfile,
-                               const char *pubkeyblob, size_t pubkeyblob_len,
+                               const char *pubkeyblob, const size_t pubkeyblob_len,
                                const char *privkeyfile,
-                               const char *privkeyblob, size_t privkeyblob_len,
+                               const char *privkeyblob, const size_t privkeyblob_len,
                                const char *passphrase)
 {
     struct corout_item *state = session->corout_state;
@@ -1699,11 +1699,11 @@ static void userauth_publickey(LIBSSH2_SESSION *session,
  */
 void libssh2_userauth_publickey_frommemory(LIBSSH2_SESSION *session,
                                            const char *username,
-                                           size_t username_len,
+                                           const size_t username_len,
                                            const char *pubkeyblob,
-                                           size_t pubkeyblob_len,
+                                           const size_t pubkeyblob_len,
                                            const char *privkeyblob,
-                                           size_t privkeyblob_len,
+                                           const size_t privkeyblob_len,
                                            const char *passphrase)
 {
     struct corout_item *state;
@@ -1731,7 +1731,7 @@ void libssh2_userauth_publickey_frommemory(LIBSSH2_SESSION *session,
  */
 void libssh2_userauth_publickey_fromfile_ex(LIBSSH2_SESSION *session,
                                             const char *username,
-                                            unsigned int username_len,
+                                            const unsigned int username_len,
                                             const char *pubkeyfile,
                                             const char *privkeyfile,
                                             const char *passphrase)
@@ -1762,7 +1762,7 @@ void libssh2_userauth_publickey_fromfile_ex(LIBSSH2_SESSION *session,
 void libssh2_userauth_publickey(
     LIBSSH2_SESSION *session,
     const char *username,
-    const unsigned char *pubkeydata, size_t pubkeydata_len,
+    const unsigned char *pubkeydata, const size_t pubkeydata_len,
     LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC(*sign_callback),
     void **abstract)
 {
@@ -1785,7 +1785,7 @@ void libssh2_userauth_publickey(
  */
 static void userauth_keyboard_interactive(
     LIBSSH2_SESSION *session,
-    const char *username, unsigned int username_len,
+    const char *username, const unsigned int username_len,
     LIBSSH2_USERAUTH_KBDINT_RESPONSE_FUNC(*response_callback))
 {
     struct corout_item *state = session->corout_state;
@@ -2013,7 +2013,7 @@ cleanup:
  */
 void libssh2_userauth_keyboard_interactive_ex(
     LIBSSH2_SESSION *session,
-    const char *username, unsigned int username_len,
+    const char *username, const unsigned int username_len,
     LIBSSH2_USERAUTH_KBDINT_RESPONSE_FUNC(*response_callback))
 {
     struct corout_item *state;
@@ -2033,9 +2033,9 @@ void libssh2_userauth_keyboard_interactive_ex(
  */
 void libssh2_userauth_publickey_sk(
     LIBSSH2_SESSION *session,
-    const char *username, size_t username_len,
-    const unsigned char *publickeydata, size_t publickeydata_len,
-    const char *privkeyblob, size_t privkeyblob_len,
+    const char *username, const size_t username_len,
+    const unsigned char *publickeydata, const size_t publickeydata_len,
+    const char *privkeyblob, const size_t privkeyblob_len,
     const char *passphrase,
     LIBSSH2_USERAUTH_SK_SIGN_FUNC(*sign_callback),
     void **abstract)

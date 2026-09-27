@@ -55,7 +55,8 @@
 #if _MSC_VER < 1800  /* for VS2010, VS2012 */
 #define va_copy(dest, src) ((dest) = (src))
 #endif
-int ssh2_vsnprintf(char *buf, size_t buf_len, const char *fmt, va_list args)
+int ssh2_vsnprintf(char *buf, const size_t buf_len, const char *fmt,
+                   va_list args)
 {
     if(buf && buf_len) {
         int ret;
@@ -69,7 +70,7 @@ int ssh2_vsnprintf(char *buf, size_t buf_len, const char *fmt, va_list args)
     return _vscprintf(fmt, args);
 }
 
-int ssh2_snprintf(char *buf, size_t buf_len, const char *fmt, ...)
+int ssh2_snprintf(char *buf, const size_t buf_len, const char *fmt, ...)
 {
     int ret;
     va_list args;
@@ -80,8 +81,8 @@ int ssh2_snprintf(char *buf, size_t buf_len, const char *fmt, ...)
 }
 #endif
 
-int ssh2_err_flags(LIBSSH2_SESSION *session, int errcode,
-                   const char *errmsg, int errflags)
+int ssh2_err_flags(LIBSSH2_SESSION *session, const int errcode,
+                   const char *errmsg, const int errflags)
 {
     if(!session) {
         ssh2_deb((session, LIBSSH2_TRACE_ERROR,
@@ -123,7 +124,7 @@ int ssh2_err_flags(LIBSSH2_SESSION *session, int errcode,
     return errcode;
 }
 
-int ssh2_err(LIBSSH2_SESSION *session, int errcode, const char *errmsg)
+int ssh2_err(LIBSSH2_SESSION *session, const int errcode, const char *errmsg)
 {
     return ssh2_err_flags(session, errcode, errmsg, 0);
 }
@@ -149,7 +150,7 @@ int ssh2_wsa2errno(void)
 }
 #endif
 
-void ssh2_swap_bytes(unsigned char *buf, size_t len)
+void ssh2_swap_bytes(unsigned char *buf, const size_t len)
 {
 #if !defined(WORDS_BIGENDIAN) || !WORDS_BIGENDIAN
     if(buf && len >= 2) {
@@ -191,7 +192,7 @@ libssh2_uint64_t ssh2_ntohu64(const unsigned char *buf)
         ((libssh2_uint64_t)buf[7]);
 }
 
-void ssh2_htonu32(unsigned char *buf, uint32_t value)
+void ssh2_htonu32(unsigned char *buf, const uint32_t value)
 {
     buf[0] = (unsigned char)((value >> 24) & 0xFF);
     buf[1] = (unsigned char)((value >> 16) & 0xFF);
@@ -199,13 +200,13 @@ void ssh2_htonu32(unsigned char *buf, uint32_t value)
     buf[3] = (unsigned char)(value & 0xFF);
 }
 
-void ssh2_store_u32(unsigned char **buf, uint32_t value)
+void ssh2_store_u32(unsigned char **buf, const uint32_t value)
 {
     ssh2_htonu32(*buf, value);
     *buf += sizeof(uint32_t);
 }
 
-void ssh2_store_u64(unsigned char **buf, libssh2_uint64_t value)
+void ssh2_store_u64(unsigned char **buf, const libssh2_uint64_t value)
 {
     unsigned char *ptr = *buf;
 
@@ -221,7 +222,7 @@ void ssh2_store_u64(unsigned char **buf, libssh2_uint64_t value)
     *buf += sizeof(libssh2_uint64_t);
 }
 
-int ssh2_store_str(unsigned char **buf, const void *str, size_t len)
+int ssh2_store_str(unsigned char **buf, const void *str, const size_t len)
 {
     uint32_t len_stored = (uint32_t)len;
 
@@ -236,7 +237,8 @@ int ssh2_store_str(unsigned char **buf, const void *str, size_t len)
 }
 
 int ssh2_store_hybrid_str(unsigned char **buf, const void *str_1,
-                          size_t len_1, const void *str_2, size_t len_2)
+                          const size_t len_1, const void *str_2,
+                          const size_t len_2)
 {
     uint32_t len_stored;
 
@@ -290,8 +292,9 @@ int ssh2_store_bignum_bytes(unsigned char **buf,
     return len_stored == len;
 }
 
-int ssh2_hash(ssh2_hash_alg alg, const void *input, size_t input_len,
-              void *digest, size_t digest_len)
+int ssh2_hash(const ssh2_hash_alg alg, const void *input,
+              const size_t input_len, void *digest,
+              const size_t digest_len)
 {
     ssh2_hash_ctx ctx;
     int success = ssh2_hash_init(&ctx, alg);
@@ -329,7 +332,7 @@ static const short ssh2_base64_reverse_table[256] = {
  */
 int libssh2_base64_decode(LIBSSH2_SESSION *session,
                           char **dest, unsigned int *dest_len,
-                          const char *src, unsigned int src_len)
+                          const char *src, const unsigned int src_len)
 {
     int rc;
     size_t dlen;
@@ -353,7 +356,7 @@ int libssh2_base64_decode(LIBSSH2_SESSION *session,
  */
 int ssh2_base64_decode(LIBSSH2_SESSION *session,
                        char **data, size_t *datalen,
-                       const char *src, size_t src_len)
+                       const char *src, const size_t src_len)
 {
     unsigned char *d;
     const char *s;
@@ -486,7 +489,7 @@ void libssh2_free(LIBSSH2_SESSION *session, void *ptr)
 }
 
 #ifdef LIBSSH2DEBUG
-int libssh2_trace(LIBSSH2_SESSION *session, int bitmask)
+int libssh2_trace(LIBSSH2_SESSION *session, const int bitmask)
 {
     if(!session)
         return LIBSSH2_ERROR_BAD_USE;
@@ -504,7 +507,7 @@ int libssh2_trace_sethandler(LIBSSH2_SESSION *session, void *context,
     return LIBSSH2_ERROR_NONE;
 }
 
-void ssh2_deb_low(LIBSSH2_SESSION *session, int context,
+void ssh2_deb_low(LIBSSH2_SESSION *session, const int context,
                   const char *format, ...)
 {
     static const char * const contexts[] = {
@@ -584,7 +587,7 @@ void ssh2_deb_low(LIBSSH2_SESSION *session, int context,
         fprintf(stderr, "%s\n", buffer);
 }
 #else /* !LIBSSH2DEBUG */
-int libssh2_trace(LIBSSH2_SESSION *session, int bitmask)
+int libssh2_trace(LIBSSH2_SESSION *session, const int bitmask)
 {
     (void)session;
     (void)bitmask;
@@ -726,7 +729,7 @@ ssh2_time_t ssh2_now(void) /* us */
 #endif /* _WIN32 */
 }
 
-void *ssh2_calloc(LIBSSH2_SESSION *session, size_t size)
+void *ssh2_calloc(LIBSSH2_SESSION *session, const size_t size)
 {
     void *p = SSH2_ALLOC(session, size);
     if(p)
@@ -740,13 +743,13 @@ static void *(* const volatile p_ssh2_memset)(void *buf, int val,
 
 /* Local fallback in case there is no system function to securely zero a memory
    buffer. */
-void ssh2_explicit_zero(void *buf, size_t size)
+void ssh2_explicit_zero(void *buf, const size_t size)
 {
     p_ssh2_memset(buf, 0, size);
 }
 #endif
 
-void ssh2_zero_free(LIBSSH2_SESSION *session, void *buf, size_t len)
+void ssh2_zero_free(LIBSSH2_SESSION *session, void *buf, const size_t len)
 {
     if(!buf)
         return;
@@ -935,7 +938,7 @@ int ssh2_get_bignum_bytes(struct string_buf *buf, unsigned char **outbuf,
 /* Given the current location in buf, ssh2_check_length() ensures
    callers can read the next len number of bytes out of the buffer
    before reading the buffer content */
-int ssh2_check_length(struct string_buf *buf, size_t requested_len)
+int ssh2_check_length(struct string_buf *buf, const size_t requested_len)
 {
     unsigned char *endp = &buf->data[buf->len];
     size_t left = endp - buf->dataptr;
@@ -966,7 +969,7 @@ int ssh2_sk_pubkey(LIBSSH2_SESSION *session, char **method,
                    const char **application,
                    const unsigned char **key_handle, size_t *key_handle_len,
                    const char *privkeyfile,
-                   const char *privkeyblob, size_t privkeyblob_len,
+                   const char *privkeyblob, const size_t privkeyblob_len,
                    const char *passphrase)
 {
     (void)method;
@@ -1227,8 +1230,8 @@ FILE *ssh2_fopen(const char *filename, const char *mode)
 /* Get an unsigned number with no leading space or minus. Leading zeroes are
    accepted. return non-zero on error */
 int ssh2_str_number(const char **linep,
-                    libssh2_int64_t *nump, libssh2_int64_t max,
-                    int base) /* 8 or 10, nothing else */
+                    libssh2_int64_t *nump, const libssh2_int64_t max,
+                    const int base) /* 8 or 10, nothing else */
 {
     libssh2_int64_t num = 0;
     const char *p;

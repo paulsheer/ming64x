@@ -54,7 +54,7 @@
 /* ---- byte queue ---- */
 
 static void
-byteq_init(byteq *q, size_t cap, int block)
+byteq_init(byteq *q, const size_t cap, const int block)
 {
     InitializeCriticalSection(&q->lock);
     InitializeConditionVariable(&q->not_full);
@@ -106,7 +106,7 @@ byteq_push(byteq *q, const unsigned char *p, size_t n)
 }
 
 static size_t
-byteq_pop(byteq *q, unsigned char *dst, size_t max)
+byteq_pop(byteq *q, unsigned char *dst, const size_t max)
 {
     size_t got = 0;
     EnterCriticalSection(&q->lock);
@@ -156,7 +156,7 @@ static const char b64_alpha[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static int
-b64_encode(const unsigned char *in, size_t len, char *out, size_t cap)
+b64_encode(const unsigned char *in, const size_t len, char *out, const size_t cap)
 {
     size_t i, o = 0;
 
@@ -189,7 +189,7 @@ b64_encode(const unsigned char *in, size_t len, char *out, size_t cap)
 }
 
 static const char *
-hostkey_type_name(int type)
+hostkey_type_name(const int type)
 {
     switch (type) {
     case LIBSSH2_HOSTKEY_TYPE_RSA:        return "ssh-rsa";
@@ -202,7 +202,7 @@ hostkey_type_name(int type)
 }
 
 static int
-known_hosts_path(char *buf, size_t cap)
+known_hosts_path(char *buf, const size_t cap)
 {
     const char *prof = getenv("USERPROFILE");
     if (!prof || !*prof)
@@ -540,7 +540,7 @@ x11_runner_free(void *user_data)
    the relay coroutine; ssh_run services the channel later. */
 static void
 x11_open_cb(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
-            const char *shost, int sport, void **abstract)
+            const char *shost, const int sport, void **abstract)
 {
     struct ssh_ctx *ctx = (struct ssh_ctx *)*abstract;
     struct x11_conn *x;
@@ -864,7 +864,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
 
         if (ctx->sock->s->bufrd->avail > ctx->sock->s->bufrd->written ||
             ctx->session->packet.writeidx > ctx->session->packet.readidx) {
-            CALL_SOFT(ssh2_transport_read(ctx->session));
+            CALL_SOFT(ssh2_transport_read(ctx->session, 0));
             continue;
         }
 
@@ -939,8 +939,8 @@ ssh_session_free(ssh_session *s)
 
 void
 ssh_session_start(ssh_session *s, const char *host,
-    const char *username, const char *password, int display_number,
-    int x11_forwarding)
+    const char *username, const char *password, const int display_number,
+    const int x11_forwarding)
 {
     static int corout_ready = 0;
 
@@ -1015,7 +1015,7 @@ ssh_send(ssh_session *s, const char *bytes, size_t n)
 }
 
 void
-ssh_request_resize(ssh_session *s, int cols, int rows)
+ssh_request_resize(ssh_session *s, const int cols, const int rows)
 {
     if (!s->running)
         return;
@@ -1089,7 +1089,7 @@ ssh_hostkey_fingerprint(const ssh_session *s)
 }
 
 void
-ssh_hostkey_answer(ssh_session *s, int accept)
+ssh_hostkey_answer(ssh_session *s, const int accept)
 {
     InterlockedExchange(&s->prompt_answer, accept ? 1 : 0);
     InterlockedExchange(&s->prompt_pending, 0);
@@ -1099,7 +1099,7 @@ ssh_hostkey_answer(ssh_session *s, int accept)
 /* ---- UI-thread pump (drain channel output into the terminal) ---- */
 
 static wchar_t
-utf8_decode_seq(const unsigned char *p, int len)
+utf8_decode_seq(const unsigned char *p, const int len)
 {
     unsigned int cp;
 

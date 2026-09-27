@@ -85,7 +85,7 @@ uint32_t ssh2_channel_nextid(LIBSSH2_SESSION *session)
  * Locate a channel pointer by number
  */
 LIBSSH2_CHANNEL *ssh2_channel_locate(LIBSSH2_SESSION *session,
-                                     uint32_t channel_id)
+                                     const uint32_t channel_id)
 {
     LIBSSH2_CHANNEL *channel;
     LIBSSH2_LISTENER *l;
@@ -116,11 +116,11 @@ LIBSSH2_CHANNEL *ssh2_channel_locate(LIBSSH2_SESSION *session,
  */
 void ssh2_channel_open(LIBSSH2_SESSION *session,
                        const char *channel_type,
-                       uint32_t channel_type_len,
-                       uint32_t window_size,
+                       const uint32_t channel_type_len,
+                       const uint32_t window_size,
                        uint32_t packet_size,
                        const unsigned char *message,
-                       size_t message_len)
+                       const size_t message_len)
 {
     static const unsigned char reply_codes[3] = {
         SSH_MSG_CHANNEL_OPEN_CONFIRMATION,
@@ -321,11 +321,11 @@ channel_done:
  */
 void libssh2_channel_open_ex(LIBSSH2_SESSION *session,
                              const char *channel_type,
-                             unsigned int channel_type_len,
-                             unsigned int window_size,
-                             unsigned int packet_size,
+                             const unsigned int channel_type_len,
+                             const unsigned int window_size,
+                             const unsigned int packet_size,
                              const char *message,
-                             unsigned int message_len)
+                             const unsigned int message_len)
 {
     struct corout_item *state;
 
@@ -346,8 +346,8 @@ void libssh2_channel_open_ex(LIBSSH2_SESSION *session,
  * Tunnel TCP/IP connect through the SSH session to direct host/port
  */
 static void channel_direct_tcpip(LIBSSH2_SESSION *session,
-                                 const char *host, int port,
-                                 const char *shost, int sport)
+                                 const char *host, const int port,
+                                 const char *shost, const int sport)
 {
     struct corout_item *state = session->corout_state;
     unsigned char *s;
@@ -396,8 +396,8 @@ static void channel_direct_tcpip(LIBSSH2_SESSION *session,
  * Tunnel TCP/IP connect through the SSH session to direct host/port
  */
 void libssh2_channel_direct_tcpip_ex(LIBSSH2_SESSION *session,
-                                     const char *host, int port,
-                                     const char *shost, int sport)
+                                     const char *host, const int port,
+                                     const char *shost, const int sport)
 {
     struct corout_item *state;
 
@@ -416,7 +416,7 @@ void libssh2_channel_direct_tcpip_ex(LIBSSH2_SESSION *session,
 static void channel_direct_streamlocal(LIBSSH2_SESSION *session,
                                        const char *socket_path,
                                        const char *shost,
-                                       int sport)
+                                       const int sport)
 {
     struct corout_item *state = session->corout_state;
     unsigned char *s;
@@ -464,7 +464,7 @@ static void channel_direct_streamlocal(LIBSSH2_SESSION *session,
  */
 void libssh2_channel_direct_streamlocal_ex(
     LIBSSH2_SESSION *session,
-    const char *socket_path, const char *shost, int sport)
+    const char *socket_path, const char *shost, const int sport)
 {
     struct corout_item *state;
 
@@ -481,9 +481,9 @@ void libssh2_channel_direct_streamlocal_ex(
  * Bind a port on the remote host and listen for connections
  */
 static void channel_forward_listen(LIBSSH2_SESSION *session,
-                                   const char *host, int port,
+                                   const char *host, const int port,
                                    int *bound_port,
-                                   int queue_maxsize)
+                                   const int queue_maxsize)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_REQUEST_SUCCESS, SSH_MSG_REQUEST_FAILURE, 0 };
@@ -612,8 +612,8 @@ static void channel_forward_listen(LIBSSH2_SESSION *session,
  */
 void libssh2_channel_forward_listen_ex(LIBSSH2_SESSION *session,
                                        const char *host,
-                                       int port, int *bound_port,
-                                       int queue_maxsize)
+                                       const int port, int *bound_port,
+                                       const int queue_maxsize)
 {
     struct corout_item *state;
 
@@ -724,7 +724,7 @@ static void channel_forward_accept(LIBSSH2_LISTENER *listener)
     listener->accepted_channel = NULL;
 
     while(!(channel = ssh2_list_first(&listener->queue))) {
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
     }
 
     /* detach channel from listener's queue */
@@ -760,8 +760,8 @@ void libssh2_channel_forward_accept(LIBSSH2_LISTENER *listener)
  * Set an environment variable prior to requesting a shell/program/subsystem
  */
 static void channel_setenv(LIBSSH2_CHANNEL *channel,
-                           const char *varname, unsigned int varname_len,
-                           const char *value, unsigned int value_len)
+                           const char *varname, const unsigned int varname_len,
+                           const char *value, const unsigned int value_len)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_CHANNEL_SUCCESS, SSH_MSG_CHANNEL_FAILURE, 0 };
@@ -834,8 +834,8 @@ static void channel_setenv(LIBSSH2_CHANNEL *channel,
  * Set an environment variable prior to requesting a shell/program/subsystem
  */
 void libssh2_channel_setenv_ex(LIBSSH2_CHANNEL *channel,
-                               const char *varname, unsigned int varname_len,
-                               const char *value, unsigned int value_len)
+                               const char *varname, const unsigned int varname_len,
+                               const char *value, const unsigned int value_len)
 {
     struct corout_item *state;
 
@@ -852,10 +852,10 @@ void libssh2_channel_setenv_ex(LIBSSH2_CHANNEL *channel,
  * Duh... Request a PTY
  */
 static void channel_request_pty(LIBSSH2_CHANNEL *channel,
-                                const char *term, unsigned int term_len,
-                                const char *modes, unsigned int modes_len,
-                                int width, int height,
-                                int width_px, int height_px)
+                                const char *term, const unsigned int term_len,
+                                const char *modes, const unsigned int modes_len,
+                                const int width, const int height,
+                                const int width_px, const int height_px)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_CHANNEL_SUCCESS, SSH_MSG_CHANNEL_FAILURE, 0 };
@@ -934,7 +934,7 @@ static void channel_request_pty(LIBSSH2_CHANNEL *channel,
  */
 static void channel_request_auth_agent(LIBSSH2_CHANNEL *channel,
                                        const char *request_str,
-                                       int request_str_len)
+                                       const int request_str_len)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_CHANNEL_SUCCESS, SSH_MSG_CHANNEL_FAILURE, 0 };
@@ -1044,10 +1044,10 @@ void libssh2_channel_request_auth_agent(LIBSSH2_CHANNEL *channel)
  * Duh... Request a PTY
  */
 void libssh2_channel_request_pty_ex(LIBSSH2_CHANNEL *channel, const char *term,
-                                    unsigned int term_len, const char *modes,
-                                    unsigned int modes_len,
-                                    int width, int height,
-                                    int width_px, int height_px)
+                                    const unsigned int term_len, const char *modes,
+                                    const unsigned int modes_len,
+                                    const int width, const int height,
+                                    const int width_px, const int height_px)
 {
     struct corout_item *state;
 
@@ -1061,8 +1061,8 @@ void libssh2_channel_request_pty_ex(LIBSSH2_CHANNEL *channel, const char *term,
     END();
 }
 
-static void channel_request_pty_size(LIBSSH2_CHANNEL *channel, int width,
-                                     int height, int width_px, int height_px)
+static void channel_request_pty_size(LIBSSH2_CHANNEL *channel, const int width,
+                                     const int height, const int width_px, const int height_px)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
@@ -1096,8 +1096,8 @@ static void channel_request_pty_size(LIBSSH2_CHANNEL *channel, int width,
 }
 
 void libssh2_channel_request_pty_size_ex(LIBSSH2_CHANNEL *channel,
-                                         int width, int height,
-                                         int width_px, int height_px)
+                                         const int width, const int height,
+                                         const int width_px, const int height_px)
 {
     struct corout_item *state;
 
@@ -1116,9 +1116,9 @@ void libssh2_channel_request_pty_size_ex(LIBSSH2_CHANNEL *channel,
 /*
  * Request X11 forwarding
  */
-static void channel_x11_req(LIBSSH2_CHANNEL *channel, int single_connection,
+static void channel_x11_req(LIBSSH2_CHANNEL *channel, const int single_connection,
                             const char *auth_proto, const char *auth_cookie,
-                            int screen_number)
+                            const int screen_number)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_CHANNEL_SUCCESS, SSH_MSG_CHANNEL_FAILURE, 0 };
@@ -1227,9 +1227,9 @@ static void channel_x11_req(LIBSSH2_CHANNEL *channel, int single_connection,
 /*
  * Request X11 forwarding
  */
-void libssh2_channel_x11_req_ex(LIBSSH2_CHANNEL *channel, int single_connection,
+void libssh2_channel_x11_req_ex(LIBSSH2_CHANNEL *channel, const int single_connection,
                                 const char *auth_proto, const char *auth_cookie,
-                                int screen_number)
+                                const int screen_number)
 {
     struct corout_item *state;
 
@@ -1247,8 +1247,8 @@ void libssh2_channel_x11_req_ex(LIBSSH2_CHANNEL *channel, int single_connection,
  * Primitive for libssh2_channel_(shell|exec|subsystem)
  */
 void ssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
-                                  const char *request, size_t request_len,
-                                  const char *message, size_t message_len)
+                                  const char *request, const size_t request_len,
+                                  const char *message, const size_t message_len)
 {
     static const unsigned char reply_codes[3] =
         { SSH_MSG_CHANNEL_SUCCESS, SSH_MSG_CHANNEL_FAILURE, 0 };
@@ -1335,9 +1335,9 @@ void ssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
  */
 void libssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
                                      const char *request,
-                                     unsigned int request_len,
+                                     const unsigned int request_len,
                                      const char *message,
-                                     unsigned int message_len)
+                                     const unsigned int message_len)
 {
     struct corout_item *state;
 
@@ -1355,7 +1355,7 @@ void libssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
  * Set a channel's BEHAVIOR blocking on or off. The socket remains non-
  * blocking.
  */
-void libssh2_channel_set_blocking(LIBSSH2_CHANNEL *channel, int blocking)
+void libssh2_channel_set_blocking(LIBSSH2_CHANNEL *channel, const int blocking)
 {
     if(channel)
         (void)ssh2_session_set_blocking(channel->session, blocking);
@@ -1365,7 +1365,7 @@ void libssh2_channel_set_blocking(LIBSSH2_CHANNEL *channel, int blocking)
  * Flush data from one (or all) stream
  * Returns number of bytes flushed, or negative on failure
  */
-void ssh2_channel_flush(LIBSSH2_CHANNEL *channel, int streamid)
+void ssh2_channel_flush(LIBSSH2_CHANNEL *channel, const int streamid)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
@@ -1451,7 +1451,7 @@ void ssh2_channel_flush(LIBSSH2_CHANNEL *channel, int streamid)
  * Flush data from one (or all) stream
  * Returns number of bytes flushed, or negative on failure
  */
-void libssh2_channel_flush_ex(LIBSSH2_CHANNEL *channel, int streamid)
+void libssh2_channel_flush_ex(LIBSSH2_CHANNEL *channel, const int streamid)
 {
     struct corout_item *state;
 
@@ -1561,8 +1561,8 @@ int libssh2_channel_get_exit_signal(LIBSSH2_CHANNEL *channel,
  * Calls ssh2_err() !
  */
 void ssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
-                                        uint32_t adjustment,
-                                        unsigned char force,
+                                        const uint32_t adjustment,
+                                        const unsigned char force,
                                         unsigned int *store)
 {
     LIBSSH2_SESSION *session = channel->session;
@@ -1628,8 +1628,8 @@ void ssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
  *
  */
 void libssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
-                                           unsigned long adjustment,
-                                           unsigned char force)
+                                           const unsigned long adjustment,
+                                           const unsigned char force)
 {
     struct corout_item *state;
 
@@ -1655,8 +1655,8 @@ void libssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
  * Returns the "normal" error code: 0 for success, negative for failure.
  */
 void libssh2_channel_receive_window_adjust2(LIBSSH2_CHANNEL *channel,
-                                            unsigned long adjustment,
-                                            unsigned char force,
+                                            const unsigned long adjustment,
+                                            const unsigned char force,
                                             unsigned int *storewindow)
 {
     struct corout_item *state;
@@ -1672,7 +1672,7 @@ void libssh2_channel_receive_window_adjust2(LIBSSH2_CHANNEL *channel,
     END();
 }
 
-void ssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, int ignore_mode)
+void ssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, const int ignore_mode)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
@@ -1700,7 +1700,7 @@ void ssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, int ignore_mode)
 }
 
 void libssh2_channel_handle_extended_data2(LIBSSH2_CHANNEL *channel,
-                                           int ignore_mode)
+                                           const int ignore_mode)
 {
     struct corout_item *state;
 
@@ -1723,7 +1723,7 @@ void libssh2_channel_handle_extended_data2(LIBSSH2_CHANNEL *channel,
  * out packets as they come in]? (IGNORE)
  */
 void libssh2_channel_handle_extended_data(LIBSSH2_CHANNEL *channel,
-                                          int ignore_mode)
+                                          const int ignore_mode)
 {
     struct corout_item *state;
 
@@ -1747,8 +1747,8 @@ void libssh2_channel_handle_extended_data(LIBSSH2_CHANNEL *channel,
  * The receive window must be maintained (enlarged) by the user of this
  * function.
  */
-void ssh2_channel_read(LIBSSH2_CHANNEL *channel, int stream_id,
-                       char *buf, size_t buflen)
+void ssh2_channel_read(LIBSSH2_CHANNEL *channel, const int stream_id,
+                       char *buf, const size_t buflen)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
@@ -1877,7 +1877,7 @@ void ssh2_channel_read(LIBSSH2_CHANNEL *channel, int stream_id,
         if(channel->remote.eof || channel->remote.close)
             break;
 
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
     }
 
     channel->read_avail -= bytes_read;
@@ -1900,8 +1900,8 @@ void ssh2_channel_read(LIBSSH2_CHANNEL *channel, int stream_id,
  * receive a full buffer's wort of contents. An application may choose to
  * adjust the receive window more to increase transfer performance.
  */
-void libssh2_channel_read_ex(LIBSSH2_CHANNEL *channel, int stream_id,
-                             char *buf, size_t buflen)
+void libssh2_channel_read_ex(LIBSSH2_CHANNEL *channel, const int stream_id,
+                             char *buf, const size_t buflen)
 {
     struct corout_item *state;
     unsigned long recv_window;
@@ -1929,7 +1929,7 @@ void libssh2_channel_read_ex(LIBSSH2_CHANNEL *channel, int stream_id,
  * Return the size of the data block of the current packet, or 0 if there
  * is not a packet.
  */
-size_t ssh2_channel_packet_data_len(LIBSSH2_CHANNEL *channel, int stream_id)
+size_t ssh2_channel_packet_data_len(LIBSSH2_CHANNEL *channel, const int stream_id)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct packet *read_packet;
@@ -1988,7 +1988,7 @@ size_t ssh2_channel_packet_data_len(LIBSSH2_CHANNEL *channel, int stream_id)
  * Returns: number of bytes sent, or if it returns a negative number, that is
  * the error code!
  */
-void ssh2_channel_write(LIBSSH2_CHANNEL *channel, int stream_id,
+void ssh2_channel_write(LIBSSH2_CHANNEL *channel, const int stream_id,
                         const unsigned char *buf, size_t buflen)
 {
     LIBSSH2_SESSION *session = channel->session;
@@ -2027,7 +2027,7 @@ void ssh2_channel_write(LIBSSH2_CHANNEL *channel, int stream_id,
         /* wait for the remote end to open up some window space, reading
            incoming packets (which carry window adjustments) until it does */
         while(channel->local.window_size <= 0)
-            CALL(ssh2_transport_read(session));
+            CALL(ssh2_transport_read(session, 0));
 
         /* Clamp after the window-wait yield: buflen is a parameter re-passed
            on resume, and anything before the CALL above is skipped when
@@ -2098,8 +2098,8 @@ void ssh2_channel_write(LIBSSH2_CHANNEL *channel, int stream_id,
 /*
  * Send data to a channel
  */
-void libssh2_channel_write_ex(LIBSSH2_CHANNEL *channel, int stream_id,
-                              const char *buf, size_t buflen)
+void libssh2_channel_write_ex(LIBSSH2_CHANNEL *channel, const int stream_id,
+                              const char *buf, const size_t buflen)
 {
     struct corout_item *state;
 
@@ -2120,15 +2120,14 @@ static void channel_send_eof(LIBSSH2_CHANNEL *channel)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
-    unsigned char packet[5]; /* packet_type(1) + channelno(4) */
 
     START();
 
     ssh2_deb((session, LIBSSH2_TRACE_CONN, "Sending EOF on channel %u/%u",
               channel->local.id, channel->remote.id));
-    packet[0] = SSH_MSG_CHANNEL_EOF;
-    ssh2_htonu32(packet + 1, channel->remote.id);
-    CALL(ssh2_transport_send(session, packet, 5, NULL, 0));
+    channel->eof_packet[0] = SSH_MSG_CHANNEL_EOF;
+    ssh2_htonu32(channel->eof_packet + 1, channel->remote.id);
+    CALL(ssh2_transport_send(session, channel->eof_packet, 5, NULL, 0));
     channel->local.eof = 1;
 
     END();
@@ -2215,7 +2214,7 @@ static void channel_wait_eof(LIBSSH2_CHANNEL *channel)
             COROUT_EXIT();
         }
 
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
     }
 
     END();
@@ -2268,7 +2267,7 @@ void ssh2_channel_close(LIBSSH2_CHANNEL *channel)
     /* We must wait for the remote SSH_MSG_CHANNEL_CLOSE message */
     while(!channel->remote.close &&
           (session->socket_state != SSH2_SOCKET_DISCONNECTED))
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
 
     /* set the local close state */
     channel->local.close = 1;
@@ -2323,7 +2322,7 @@ static void channel_wait_closed(LIBSSH2_CHANNEL *channel)
     /* While channel is not closed, read more packets from the network.
        Either the channel is closed or the remote end drops the connection. */
     while(!channel->remote.close)
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
 
     END();
 }
@@ -2552,7 +2551,7 @@ unsigned long libssh2_channel_window_write_ex(
    this section.
  */
 static void channel_signal(LIBSSH2_CHANNEL *channel,
-                           const char *signame, size_t signame_len)
+                           const char *signame, const size_t signame_len)
 {
     LIBSSH2_SESSION *session = channel->session;
     struct corout_item *state = session->corout_state;
@@ -2588,7 +2587,7 @@ static void channel_signal(LIBSSH2_CHANNEL *channel,
 }
 
 void libssh2_channel_signal_ex(LIBSSH2_CHANNEL *channel,
-                               const char *signame, size_t signame_len)
+                               const char *signame, const size_t signame_len)
 {
     struct corout_item *state;
 

@@ -75,7 +75,7 @@ static char *wchar_to_char (const wchar_t * w)
     return r;
 }
 
-void corout_error_str(int error, char *r, int n)
+void corout_error_str(const int error, char *r, const int n)
 {
     wchar_t *s = NULL;
     char *p;
@@ -101,14 +101,14 @@ void corout_error_str(int error, char *r, int n)
         r[l--] = '\0';
 }
 
-static char *mswin_error_to_text(int error)
+static char *mswin_error_to_text(const int error)
 {
     static char r[256];
     corout_error_str(error, r, sizeof(r));
     return r;
 }
 
-static void fatal(int user, const char *fmt,...)
+static void fatal(const int user, const char *fmt,...)
 {
     int wsa_error, error;
     char wsaerrs[256], errs[256], msg[256];
@@ -131,13 +131,13 @@ static void fatal(int user, const char *fmt,...)
 
 #else  /* _WIN32 */
 
-void corout_error_str(int error, char *s, int n)
+void corout_error_str(const int error, char *s, const int n)
 {
     strncpy(s, strerror(error), n);
     s[n - 1] = '\0';
 }
 
-static void fatal(int user, const char *fmt,...)
+static void fatal(const int user, const char *fmt,...)
 {
     int error = 0;
     char errs[256], msg[256];
@@ -282,7 +282,7 @@ static int timer_cmp(void *user_data, const void *a_, const void *b_)
 }
 
 #ifdef MSWIN_OVLPIO
-static int overlapped_deref(struct overlapped *u, int clean);
+static int overlapped_deref(struct overlapped *u, const int clean);
 
 typedef WINBOOL (WINAPI *LPFN_DISCONNECTEX)(SOCKET s,LPOVERLAPPED lpOverlapped,DWORD dwFlags,DWORD dwReserved);
 typedef WINBOOL (WINAPI *LPFN_CONNECTEX)(SOCKET s,const struct sockaddr *name,int namelen,PVOID lpSendBuffer,DWORD dwSendDataLength,LPDWORD lpdwBytesSent,LPOVERLAPPED lpOverlapped);
@@ -375,7 +375,7 @@ struct corout *corout_alloc(void)
 }
 
 #ifndef MSWIN_OVLPIO
-static void corout_update_max_fd(struct corout *o, struct sockbuf *s, int addfd)
+static void corout_update_max_fd(struct corout *o, struct sockbuf *s, const int addfd)
 {
     struct sockbuf *last, *f;
 
@@ -425,7 +425,7 @@ void corout_item_remove(struct corout_item *p)
 }
 
 #ifdef MSWIN_OVLPIO
-static int corout_once_overlapped(struct corout *o, long long t);
+static int corout_once_overlapped(struct corout *o, const long long t);
 static void corout_socket_disconnect(struct sockbuf *s);
 
 static void corout_item_disconnect(struct corout_item *p)
@@ -472,7 +472,7 @@ void corout_free(struct corout *o)
     free(o);
 }
 
-void corout_wait_timeout(struct corout_item *p, unsigned long ms, int clear_io_waits)
+void corout_wait_timeout(struct corout_item *p, const unsigned long ms, const int clear_io_waits)
 {
     int i;
     if (clear_io_waits)
@@ -485,7 +485,7 @@ void corout_wait_timeout(struct corout_item *p, unsigned long ms, int clear_io_w
     pairheap_insert(p->o->h, p);
 }
 
-void corout_wait_wakeable(struct corout_item *p, unsigned long ms)
+void corout_wait_wakeable(struct corout_item *p, const unsigned long ms)
 {
     assert (!p->timer);
     p->wakeable = 1;
@@ -493,7 +493,7 @@ void corout_wait_wakeable(struct corout_item *p, unsigned long ms)
     pairheap_insert(p->o->h, p);
 }
 
-static void corout_step(struct corout_item *p, struct sockbuf *s, int ev, struct accept_sock *as)
+static void corout_step(struct corout_item *p, struct sockbuf *s, const int ev, struct accept_sock *as)
 {
     struct sockevent g;
     if (p->timer) {
@@ -516,7 +516,7 @@ static void corout_step(struct corout_item *p, struct sockbuf *s, int ev, struct
     }
 }
 
-void corout_signal(struct corout *o, void *user_data, unsigned long user_signal)
+void corout_signal(struct corout *o, void *user_data, const unsigned long user_signal)
 {
     struct corout_item *p, search;
 
@@ -624,7 +624,7 @@ static struct overlapped *overlapped_alloc(struct socket *e)
     return u;
 }
 
-static int overlapped_deref(struct overlapped *u, int clean)
+static int overlapped_deref(struct overlapped *u, const int clean)
 {
     if (!u)
         return 1;
@@ -878,7 +878,7 @@ static int inaddr_len(union sockaddr_in4in6 *r)
     return sizeof(r->sain4);
 }
 
-void inaddr_from_text(union sockaddr_in4in6 *r, const char *s, long port, int family)
+void inaddr_from_text(union sockaddr_in4in6 *r, const char *s, const long port, const int family)
 {
     if (port > 65535)
         fatal(1, "invalid port %ld", port);
@@ -896,7 +896,7 @@ void inaddr_from_text(union sockaddr_in4in6 *r, const char *s, long port, int fa
     }
 }
 
-int corout_connect(struct socket *e, long port, const char *saddr)
+int corout_connect(struct socket *e, const long port, const char *saddr)
 {
     struct sockbuf *s = e->s;
     union sockaddr_in4in6 addr;
@@ -1087,7 +1087,7 @@ int corout_socket_count(struct corout_item *c)
     return n;
 }
 
-struct buffer *corout_buffer_alloc(int n)
+struct buffer *corout_buffer_alloc(const int n)
 {
     struct buffer *p;
     p = (struct buffer *) malloc(sizeof(struct buffer));
@@ -1285,7 +1285,7 @@ struct os_poller {
 #define N_OS_POLLERS    128
 
 #ifdef __linux__
-static void send_os_poll_changes(struct corout *o, struct os_poller *p, int n)
+static void send_os_poll_changes(struct corout *o, struct os_poller *p, const int n)
 {
     int i;
     for (i = 0; i < n; i++) {
@@ -1302,7 +1302,7 @@ static void send_os_poll_changes(struct corout *o, struct os_poller *p, int n)
     }
 }
 #elif defined(__sun)
-static void send_os_poll_changes(struct corout *o, struct os_poller *p, int n)
+static void send_os_poll_changes(struct corout *o, struct os_poller *p, const int n)
 {
     int i, j = 0;
     struct pollfd q[N_OS_POLLERS * 2];
@@ -1349,7 +1349,7 @@ static void remove_os_poll(struct corout *o, socket_t fd)
 
 #define MAX(a,b)        ((a) > (b) ? (a) : (b))
 
-static void corout_once_os(struct corout *o, long long t)
+static void corout_once_os(struct corout *o, const long long t)
 {
     unsigned int n = 0, g, i, j, k, max_fd;
     struct os_poller p[N_OS_POLLERS];
@@ -1480,7 +1480,7 @@ static void corout_once_os(struct corout *o, long long t)
 
 #elif defined(MSWIN_OVLPIO)
 
-void process_overlapped(struct overlapped *u, int l)
+void process_overlapped(struct overlapped *u, const int l)
 {
     struct sockbuf *s;
     struct corout_item *c;
@@ -1564,7 +1564,7 @@ void process_overlapped(struct overlapped *u, int l)
 
 WINBASEAPI WINBOOL WINAPI GetQueuedCompletionStatusEx (HANDLE CompletionPort, LPOVERLAPPED_ENTRY lpCompletionPortEntries, ULONG ulCount, PULONG ulNumEntriesRemoved, DWORD dwMilliseconds, WINBOOL fAlertable);
 
-static int corout_once_overlapped(struct corout *o, long long t)
+static int corout_once_overlapped(struct corout *o, const long long t)
 {
     int r;
     struct overlapped *u, *next;
@@ -1623,7 +1623,7 @@ static int corout_once_overlapped(struct corout *o, long long t)
 
 #else
 
-static void corout_once_select(struct corout *o, struct ranktree_iterator *i, long long t)
+static void corout_once_select(struct corout *o, struct ranktree_iterator *i, const long long t)
 {
     int r;
     struct sockbuf *s;
@@ -1743,7 +1743,7 @@ static void corout_once_select(struct corout *o, struct ranktree_iterator *i, lo
 
 
 
-void int_handler(int x)
+void int_handler(const int x)
 {
     (void) x;
     got_SIGINT = 1;
@@ -1797,7 +1797,7 @@ int corout_no_delay(struct socket *e)
     return setsockopt(e->s->s, IPPROTO_TCP, TCP_NODELAY, (char *) &yes, sizeof (yes));
 }
 
-static socket_t corout_create_socket_(struct corout *o, long local_port, const char *local_addr, int server, int family)
+static socket_t corout_create_socket_(struct corout *o, const long local_port, const char *local_addr, const int server, const int family)
 {
     int sz;
     socket_t s = OS_SOCK_ERR;
@@ -1872,7 +1872,7 @@ static socket_t corout_create_socket_(struct corout *o, long local_port, const c
     return OS_SOCK_ERR;
 }
 
-struct socket *corout_socket_listener_alloc(struct corout *o, enum corout_socket_type type, long bind_port, const char *bind_addr)
+struct socket *corout_socket_listener_alloc(struct corout *o, const enum corout_socket_type type, const long bind_port, const char *bind_addr)
 {
     socket_t s;
     assert (type == COROUT_SOCKET_TYPE_TCP);
@@ -1882,7 +1882,7 @@ struct socket *corout_socket_listener_alloc(struct corout *o, enum corout_socket
     return corout_socket_alloc(s);
 }
 
-struct socket *corout_socket_client_alloc(struct corout *o, enum corout_socket_type type, long bind_port, const char *bind_addr, const char *remote_addr)
+struct socket *corout_socket_client_alloc(struct corout *o, const enum corout_socket_type type, const long bind_port, const char *bind_addr, const char *remote_addr)
 {
     socket_t s;
     int family;

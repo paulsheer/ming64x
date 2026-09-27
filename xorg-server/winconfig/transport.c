@@ -54,7 +54,7 @@
 #ifdef LIBSSH2DEBUG
 #define UNPRINTABLE_CHAR '.'
 static void transport_debugdump(LIBSSH2_SESSION *session, const char *desc,
-                                const unsigned char *ptr, size_t size)
+                                const unsigned char *ptr, const size_t size)
 {
     static const char *hex_chars = "0123456789ABCDEF";
 
@@ -141,7 +141,7 @@ static void transport_debugdump(LIBSSH2_SESSION *session, const char *desc,
  * returns 0 on success and negative on failure
  */
 static int transport_decrypt(LIBSSH2_SESSION *session, unsigned char *source,
-                             unsigned char *dest, ssize_t len, int firstlast)
+                             unsigned char *dest, ssize_t len, const int firstlast)
 {
     struct transportpacket *p = &session->packet;
     int blocksize = session->remote.crypt->blocksize;
@@ -201,7 +201,8 @@ static int transport_decrypt(LIBSSH2_SESSION *session, unsigned char *source,
  * session->fullpacket_data and packet.payload is NULLed up front so session
  * cleanup never double-frees it.
  */
-static void transport_fullpacket(LIBSSH2_SESSION *session, int encrypted)
+static void transport_fullpacket(LIBSSH2_SESSION *session, const int encrypted,
+                                 const uint32_t fullpacket_required_type)
 {
     struct corout_item *state = session->corout_state;
     unsigned char macbuf[MAX_MACSIZE];
@@ -376,11 +377,13 @@ static void transport_fullpacket(LIBSSH2_SESSION *session, int encrypted)
        NULL so session_free() can never double-free. */
     session->fullpacket_data = p->payload;
     p->payload = NULL;
+    p->total_num = 0;
 
     CALL(ssh2_packet_add(session, session->fullpacket_data,
                          session->fullpacket_payload_len,
                          session->fullpacket_macstate,
-                         session->fullpacket_seq));
+                         session->fullpacket_seq,
+                         fullpacket_required_type));
 
     if(session->kex_strict &&
        state->stack[state->depth].fullpacket_packet_type == SSH_MSG_NEWKEYS)
@@ -399,7 +402,7 @@ static void transport_fullpacket(LIBSSH2_SESSION *session, int encrypted)
  * after each yield. The finished packet is handed to transport_fullpacket(),
  * which records the packet type in the per-frame fullpacket slot.
  */
-void ssh2_transport_read(LIBSSH2_SESSION *session)
+void ssh2_transport_read(LIBSSH2_SESSION *session, const uint32_t fullpacket_required_type)
 {
     struct corout_item *state = session->corout_state;
     struct socket *sock = session->corout_sock;
@@ -873,7 +876,8 @@ void ssh2_transport_read(LIBSSH2_SESSION *session)
 
         if(!remainpack) {
             /* we have a full packet */
-            CALL(transport_fullpacket(session, session->trs.encrypted));
+            CALL(transport_fullpacket(session, session->trs.encrypted,
+                                fullpacket_required_type));
 
             p->total_num = 0; /* no packet buffer available */
 
@@ -896,7 +900,7 @@ void ssh2_transport_read(LIBSSH2_SESSION *session)
  */
 void ssh2_transport_send(LIBSSH2_SESSION *session,
                          const unsigned char *data, size_t data_len,
-                         const unsigned char *data2, size_t data2_len)
+                         const unsigned char *data2, const size_t data2_len)
 {
     struct corout_item *state = session->corout_state;
     struct socket *sock = session->corout_sock;

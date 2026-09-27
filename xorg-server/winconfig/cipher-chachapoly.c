@@ -34,7 +34,7 @@ static int chachapoly_timingsafe_bcmp(const void *b1, const void *b2, size_t n)
 }
 
 int chachapoly_init(struct chachapoly_ctx *ctx, const unsigned char *key,
-                    size_t keylen)
+                    const size_t keylen)
 {
     if(keylen != (32 + 32)) /* 2 x 256-bit keys */
         return LIBSSH2_ERROR_INVAL;
@@ -52,9 +52,10 @@ int chachapoly_init(struct chachapoly_ctx *ctx, const unsigned char *key,
  * POLY1305_TAGLEN bytes at offset 'len'+'aadlen' as the authentication
  * tag. This tag is written on encryption and verified on decryption.
  */
-int chachapoly_crypt(struct chachapoly_ctx *ctx, libssh2_uint64_t seqnr,
-                     unsigned char *dest, const unsigned char *src, size_t len,
-                     size_t aadlen, int do_encrypt)
+int chachapoly_crypt(struct chachapoly_ctx *ctx, const libssh2_uint64_t seqnr,
+                     unsigned char *dest, const unsigned char *src,
+                     const size_t len,
+                     const size_t aadlen, const int do_encrypt)
 {
     static const unsigned char one[8] = {
         1, 0, 0, 0, 0, 0, 0, 0  /* NB little-endian */
@@ -107,8 +108,8 @@ out:
 
 /* Decrypt and extract the encrypted packet length */
 int chachapoly_get_length(struct chachapoly_ctx *ctx, unsigned int *plenp,
-                          libssh2_uint64_t seqnr, const unsigned char *cp,
-                          size_t len)
+                          const libssh2_uint64_t seqnr, const unsigned char *cp,
+                          const size_t len)
 {
     unsigned char buf[4], seqbuf[8];
     unsigned char *ptr = NULL;

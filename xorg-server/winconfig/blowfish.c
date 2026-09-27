@@ -434,7 +434,8 @@ static void Blowfish_initstate(struct blf_ctx *c)
 }
 
 /* Converts uint8_t to uint32_t */
-static uint32_t Blowfish_stream2word(const uint8_t *data, uint16_t databytes,
+static uint32_t Blowfish_stream2word(const uint8_t *data,
+                                     const uint16_t databytes,
                                      uint16_t *current)
 {
     uint8_t i;
@@ -455,7 +456,7 @@ static uint32_t Blowfish_stream2word(const uint8_t *data, uint16_t databytes,
 }
 
 static void Blowfish_expand0state(struct blf_ctx *c,
-                                  const uint8_t *key, uint16_t keybytes)
+                                  const uint8_t *key, const uint16_t keybytes)
 {
     int i;
     int k;
@@ -492,8 +493,8 @@ static void Blowfish_expand0state(struct blf_ctx *c,
 }
 
 static void Blowfish_expandstate(struct blf_ctx *c,
-                                 const uint8_t *data, uint16_t databytes,
-                                 const uint8_t *key, uint16_t keybytes)
+                                 const uint8_t *data, const uint16_t databytes,
+                                 const uint8_t *key, const uint16_t keybytes)
 {
     int i;
     int k;
@@ -534,7 +535,7 @@ static void Blowfish_expandstate(struct blf_ctx *c,
 }
 
 #ifdef DEBUG_BLOWFISH
-static void blf_key(struct blf_ctx *c, const uint8_t *k, uint16_t len)
+static void blf_key(struct blf_ctx *c, const uint8_t *k, const uint16_t len)
 {
     /* Initialize S-boxes and subkeys with Pi */
     Blowfish_initstate(c);
@@ -544,7 +545,7 @@ static void blf_key(struct blf_ctx *c, const uint8_t *k, uint16_t len)
 }
 #endif
 
-static void blf_enc(struct blf_ctx *c, uint32_t *data, uint16_t blocks)
+static void blf_enc(struct blf_ctx *c, uint32_t *data, const uint16_t blocks)
 {
     uint32_t *d;
     uint16_t i;
@@ -557,7 +558,7 @@ static void blf_enc(struct blf_ctx *c, uint32_t *data, uint16_t blocks)
 }
 
 #ifdef DEBUG_BLOWFISH
-static void blf_dec(struct blf_ctx *c, uint32_t *data, uint16_t blocks)
+static void blf_dec(struct blf_ctx *c, uint32_t *data, const uint16_t blocks)
 {
     uint32_t *d;
     uint16_t i;
@@ -569,7 +570,7 @@ static void blf_dec(struct blf_ctx *c, uint32_t *data, uint16_t blocks)
     }
 }
 
-static void report(uint32_t data[], uint16_t len)
+static void report(uint32_t data[], const uint16_t len)
 {
     int i;
     for(i = 0; i < len; i += 2)

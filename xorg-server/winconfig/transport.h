@@ -62,6 +62,7 @@ void ssh2_transport_send(LIBSSH2_SESSION *session,
  * chunk at a time, yielding whenever more data is needed. On error it records
  * the error with ssh2_err() and exits the coroutine (COROUT_ERROR).
  */
-void ssh2_transport_read(LIBSSH2_SESSION *session);
+void ssh2_transport_read(LIBSSH2_SESSION *session,
+                         const uint32_t fullpacket_required_type);
 
 #endif /* LIBSSH2_TRANSPORT_H */

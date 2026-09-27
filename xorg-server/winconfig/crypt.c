@@ -51,11 +51,11 @@
  *
  */
 static int crypt_none_crypt(LIBSSH2_SESSION *session,
-                            unsigned int seqno,
+                            const unsigned int seqno,
                             unsigned char *buf,
-                            size_t buf_len,
+                            const size_t buf_len,
                             void **abstract,
-                            int firstlast)
+                            const int firstlast)
 {
     /* Do nothing to the data! */
     return 0;
@@ -88,7 +88,7 @@ static int crypt_init(LIBSSH2_SESSION *session,
                       const struct crypt_method *method,
                       unsigned char *iv, int *free_iv,
                       unsigned char *secret, int *free_secret,
-                      int encrypt, int privkeyfile, void **abstract)
+                      const int encrypt, const int privkeyfile, void **abstract)
 {
     struct crypt_ctx *ctx = SSH2_ALLOC(session, sizeof(struct crypt_ctx));
     if(!ctx)
@@ -108,11 +108,11 @@ static int crypt_init(LIBSSH2_SESSION *session,
 }
 
 static int crypt_encrypt(LIBSSH2_SESSION *session,
-                         unsigned int seqno,
+                         const unsigned int seqno,
                          unsigned char *buf,
-                         size_t buf_len,
+                         const size_t buf_len,
                          void **abstract,
-                         int firstlast)
+                         const int firstlast)
 {
     struct crypt_ctx *cctx = *(struct crypt_ctx **)abstract;
     (void)session;
@@ -312,7 +312,7 @@ static int crypt_init_arcfour128(LIBSSH2_SESSION *session,
                                  const struct crypt_method *method,
                                  unsigned char *iv, int *free_iv,
                                  unsigned char *secret, int *free_secret,
-                                 int encrypt, int privkeyfile, void **abstract)
+                                 const int encrypt, const int privkeyfile, void **abstract)
 {
     int rc;
 
@@ -385,7 +385,7 @@ static int crypt_init_chacha20_poly(LIBSSH2_SESSION *session,
                                     const struct crypt_method *method,
                                     unsigned char *iv, int *free_iv,
                                     unsigned char *secret, int *free_secret,
-                                    int encrypt, int privkeyfile,
+                                    const int encrypt, const int privkeyfile,
                                     void **abstract)
 {
     struct crypt_ctx *ctx = SSH2_ALLOC(session, sizeof(struct crypt_ctx));
@@ -411,11 +411,11 @@ static int crypt_init_chacha20_poly(LIBSSH2_SESSION *session,
 }
 
 static int crypt_encrypt_chacha20_poly_buffer(LIBSSH2_SESSION *session,
-                                              unsigned int seqno,
+                                              const unsigned int seqno,
                                               unsigned char *buf,
-                                              size_t buf_len,
+                                              const size_t buf_len,
                                               void **abstract,
-                                              int firstlast)
+                                              const int firstlast)
 {
     int ret = 1;
     struct crypt_ctx *ctx = *(struct crypt_ctx **)abstract;
@@ -458,9 +458,9 @@ static int crypt_encrypt_chacha20_poly_buffer(LIBSSH2_SESSION *session,
 }
 
 static int crypt_get_length_chacha20_poly(LIBSSH2_SESSION *session,
-                                          unsigned int seqno,
+                                          const unsigned int seqno,
                                           unsigned char *data,
-                                          size_t data_size,
+                                          const size_t data_size,
                                           unsigned int *len, void **abstract)
 {
     struct crypt_ctx *ctx = *(struct crypt_ctx **)abstract;

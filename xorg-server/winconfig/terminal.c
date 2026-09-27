@@ -95,7 +95,7 @@ terminal_count_blank_rows(const terminal *t)
 }
 
 void
-terminal_resize(terminal *t, int nrows, int ncols)
+terminal_resize(terminal *t, const int nrows, const int ncols)
 {
     int blank_rows = 0;
     int old_nrows = t->nrows;
@@ -179,7 +179,7 @@ static const int ansi_palette[16] = {
 };
 
 static int
-ansi_256_color(int n)
+ansi_256_color(const int n)
 {
     if (n < 16)
         return ansi_palette[n];
@@ -338,7 +338,7 @@ index_up(terminal *t)
 }
 
 static void
-erase_line(terminal *t, int mode)
+erase_line(terminal *t, const int mode)
 {
     int c, from = 0, to = t->ncols - 1;
 
@@ -353,7 +353,7 @@ erase_line(terminal *t, int mode)
 }
 
 static void
-erase_display(terminal *t, int mode)
+erase_display(terminal *t, const int mode)
 {
     int r, c;
 
@@ -387,7 +387,7 @@ erase_display(terminal *t, int mode)
 }
 
 static void
-erase_chars(terminal *t, int n)
+erase_chars(terminal *t, const int n)
 {
     int c, end = t->cursor_col + n;
 
@@ -484,7 +484,7 @@ delete_lines(terminal *t, int n)
 }
 
 static void
-csi_execute(terminal *t, wchar_t cmd)
+csi_execute(terminal *t, const wchar_t cmd)
 {
     int n, row, col;
 
@@ -817,7 +817,7 @@ terminal_print(terminal *t, const wchar_t *s)
 }
 
 static int
-cell_selected(const terminal *t, int row, int col)
+cell_selected(const terminal *t, const int row, const int col)
 {
     int top_r, top_c, bot_r, bot_c;
     int cell_lin, top_lin, bot_lin;
@@ -849,9 +849,9 @@ cell_selected(const terminal *t, int row, int col)
 
 static void
 draw_row_segment(struct nk_command_buffer *canvas, const terminal *t,
-    struct nk_user_font *font, float x, float y, float char_width,
-    float line_height, int row, int c0, int c1,
-    struct nk_color bg, struct nk_color fg, char *utf8, wchar_t *scratch)
+    struct nk_user_font *font, const float x, const float y, const float char_width,
+    const float line_height, const int row, const int c0, const int c1,
+    const struct nk_color bg, const struct nk_color fg, char *utf8, wchar_t *scratch)
 {
     int len, n, c;
     struct nk_rect r;

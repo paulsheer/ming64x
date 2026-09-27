@@ -46,10 +46,11 @@
 #undef perror
 #undef RETRY
 
-static void kex_value_hash(ssh2_hash_alg hash_alg, size_t digest_len,
+static void kex_value_hash(const ssh2_hash_alg hash_alg,
+                           const size_t digest_len,
                            LIBSSH2_SESSION *session,
                            struct kmdhgGPshakex_state *exchange_state,
-                           unsigned char **data, size_t data_len,
+                           unsigned char **data, const size_t data_len,
                            const void *version)
 {
     if(!digest_len || digest_len > MAX_SHA_DIGEST_LEN) {
@@ -90,7 +91,7 @@ static void kex_value_hash(ssh2_hash_alg hash_alg, size_t digest_len,
 
 static int kex_proc_hostkey(LIBSSH2_SESSION *session, struct string_buf *buf,
                             const struct kmdhgGPshakex_state *exchange_state,
-                            unsigned char *data, size_t data_len)
+                            unsigned char *data, const size_t data_len)
 {
     size_t host_key_len;
 
@@ -189,7 +190,7 @@ static int kex_proc_hostkey(LIBSSH2_SESSION *session, struct string_buf *buf,
 
 static void kex_finish(LIBSSH2_SESSION *session,
                        struct kmdhgGPshakex_state *exchange_state,
-                       ssh2_hash_alg hash_alg, size_t digest_len)
+                       const ssh2_hash_alg hash_alg, const size_t digest_len)
 {
     struct corout_item *state = session->corout_state;
 
@@ -432,13 +433,13 @@ static void kex_diffie_hellman_cleanup(
 static void kex_diffie_hellman_sha(LIBSSH2_SESSION *session,
                                    ssh2_bn *g,
                                    ssh2_bn *p,
-                                   int group_order,
-                                   ssh2_hash_alg hash_alg,
-                                   size_t digest_len,
-                                   unsigned char packet_type_init,
-                                   unsigned char packet_type_reply,
+                                   const int group_order,
+                                   const ssh2_hash_alg hash_alg,
+                                   const size_t digest_len,
+                                   const unsigned char packet_type_init,
+                                   const unsigned char packet_type_reply,
                                    unsigned char *midhash,
-                                   size_t midhash_len,
+                                   const size_t midhash_len,
                                    struct kmdhgGPshakex_state *exchange_state)
 {
     struct corout_item *state = session->corout_state;
@@ -800,8 +801,8 @@ typedef void (*diffie_hellman_hash_func_t)(
 
 static void kex_method_diffie_hellman_group14_key_exchange(
     LIBSSH2_SESSION *session, struct key_exchange_state_low *key_state,
-    ssh2_hash_alg hash_alg,
-    size_t digest_len,
+    const ssh2_hash_alg hash_alg,
+    const size_t digest_len,
     diffie_hellman_hash_func_t hashfunc)
 {
     static const unsigned char p_value[256] = {
@@ -1350,10 +1351,11 @@ static void kex_method_diffie_hellman_group_exchange_sha256_key_exchange(
  */
 static int kex_method_ec_sha_hash_create_verify(
     LIBSSH2_SESSION *session, struct kmdhgGPshakex_state *exchange_state,
-    unsigned char *public_key, size_t public_key_len,
-    unsigned char *public_pq_key, size_t public_pq_key_len,
-    unsigned char *server_public_key, size_t server_public_key_len,
-    ssh2_hash_alg hash_alg, size_t digest_len, const char *signerr)
+    unsigned char *public_key, const size_t public_key_len,
+    unsigned char *public_pq_key, const size_t public_pq_key_len,
+    unsigned char *server_public_key, const size_t server_public_key_len,
+    const ssh2_hash_alg hash_alg, const size_t digest_len,
+    const char *signerr)
 {
     ssh2_hash_ctx ctx;
     int err;
@@ -1516,10 +1518,10 @@ static void kex_method_ecdh_cleanup(LIBSSH2_SESSION *session,
  * Elliptic Curve Diffie Hellman Key Exchange
  */
 static void kex_ecdh_sha2_nistp(LIBSSH2_SESSION *session,
-                                ssh2_curve_type curve,
-                                unsigned char *data, size_t data_len,
+                                const ssh2_curve_type curve,
+                                unsigned char *data, const size_t data_len,
                                 unsigned char *public_key,
-                                size_t public_key_len,
+                                const size_t public_key_len,
                                 ssh2_ec_key *private_key,
                                 struct kmdhgGPshakex_state *exchange_state)
 {
@@ -1796,9 +1798,9 @@ static void kex_method_mlkem_nistp_cleanup(
 }
 
 static void kex_mlkem_nistp(LIBSSH2_SESSION *session,
-                            unsigned char *data, size_t data_len,
+                            unsigned char *data, const size_t data_len,
                             unsigned char *public_t_key,
-                            size_t public_t_key_len,
+                            const size_t public_t_key_len,
                             ssh2_ec_key *private_t_key,
                             unsigned char *public_pq_key,
                             unsigned char *private_pq_key,
@@ -2117,7 +2119,7 @@ static void kex_method_curve25519_cleanup(
  */
 static void kex_curve25519_sha256(
     LIBSSH2_SESSION *session,
-    unsigned char *data, size_t data_len,
+    unsigned char *data, const size_t data_len,
     unsigned char public_key[SSH2_ED25519_KEY_LEN],
     unsigned char private_key[SSH2_ED25519_KEY_LEN],
     struct kmdhgGPshakex_state *exchange_state)
@@ -2358,7 +2360,7 @@ static void kex_method_mlkem768x25519_cleanup(
 
 static void kex_mlkem768x25519_sha256(
     LIBSSH2_SESSION *session,
-    unsigned char *data, size_t data_len,
+    unsigned char *data, const size_t data_len,
     unsigned char public_t_key[SSH2_ED25519_KEY_LEN],
     unsigned char private_t_key[SSH2_ED25519_KEY_LEN],
     unsigned char public_pq_key[SSH2_MLKEM_768_PUBLIC_KEY_LEN],
@@ -2773,7 +2775,7 @@ static size_t kex_method_strlen(const struct common_method **method)
 /*
  * Generate formatted preference list in buf
  */
-static uint32_t kex_method_list(unsigned char *buf, uint32_t list_strlen,
+static uint32_t kex_method_list(unsigned char *buf, const uint32_t list_strlen,
                                 const struct common_method **method)
 {
     ssh2_htonu32(buf, list_strlen);
@@ -2968,8 +2970,9 @@ static void kex_init(LIBSSH2_SESSION *session)
  * Kex specific variant of strstr()
  * Needle must be preceded by BOL or ',', and followed by ',' or EOL
  */
-const char *ssh2_kex_agree_instr(const char *haystack, size_t haystack_len,
-                                 const char *needle, size_t needle_len)
+const char *ssh2_kex_agree_instr(const char *haystack,
+                                 const size_t haystack_len,
+                                 const char *needle, const size_t needle_len)
 {
     const char *s;
     const char *end_haystack;
@@ -3015,7 +3018,7 @@ const char *ssh2_kex_agree_instr(const char *haystack, size_t haystack_len,
 }
 
 static const struct common_method *kex_get_method_by_name(
-    const char *name, size_t name_len,
+    const char *name, const size_t name_len,
     const struct common_method **methodlist)
 {
     while(*methodlist) {
@@ -3031,8 +3034,9 @@ static const struct common_method *kex_get_method_by_name(
 /*
  * Agree on a Hostkey which works with this kex
  */
-static int kex_agree_hostkey(LIBSSH2_SESSION *session, size_t kex_flags,
-                             const char *hostkey, size_t hostkey_len)
+static int kex_agree_hostkey(LIBSSH2_SESSION *session,
+                             const size_t kex_flags,
+                             const char *hostkey, const size_t hostkey_len)
 {
     const struct hostkey_method **hostkeyp = ssh2_hostkey_methods();
     const char *s;
@@ -3099,8 +3103,8 @@ static int kex_agree_hostkey(LIBSSH2_SESSION *session, size_t kex_flags,
  * Agree on a Key Exchange method and a hostkey encoding type
  */
 static int kex_agree_kex_hostkey(LIBSSH2_SESSION *session,
-                                 const char *kex, size_t kex_len,
-                                 const char *hostkey, size_t hostkey_len)
+                                 const char *kex, const size_t kex_len,
+                                 const char *hostkey, const size_t hostkey_len)
 {
     static const char strict[] = "kex-strict-s-v00@openssh.com";
     const struct kex_method **kexp = kex_methods;
@@ -3173,7 +3177,7 @@ static int kex_agree_kex_hostkey(LIBSSH2_SESSION *session,
  */
 static int kex_agree_crypt(LIBSSH2_SESSION *session,
                            struct endpoint_data *endpoint,
-                           const char *crypt, size_t crypt_len)
+                           const char *crypt, const size_t crypt_len)
 {
     const struct crypt_method **cryptp = ssh2_crypt_methods();
     const char *s;
@@ -3222,7 +3226,7 @@ static int kex_agree_crypt(LIBSSH2_SESSION *session,
  */
 static int kex_agree_mac(LIBSSH2_SESSION *session,
                          struct endpoint_data *endpoint,
-                         const char *mac, size_t mac_len)
+                         const char *mac, const size_t mac_len)
 {
     const struct mac_method **macp = ssh2_mac_methods();
     const struct mac_method *override;
@@ -3279,7 +3283,7 @@ static int kex_agree_mac(LIBSSH2_SESSION *session,
  */
 static int kex_agree_comp(LIBSSH2_SESSION *session,
                           struct endpoint_data *endpoint,
-                          const char *comp, size_t comp_len)
+                          const char *comp, const size_t comp_len)
 {
     const struct comp_method **compp = ssh2_comp_methods(session);
     const char *s;
@@ -3330,7 +3334,7 @@ static int kex_agree_comp(LIBSSH2_SESSION *session,
  * Decide which specific method to use of the methods offered by each party
  */
 static int kex_agree_methods(LIBSSH2_SESSION *session, unsigned char *data,
-                             size_t data_len)
+                             const size_t data_len)
 {
     char *kex, *hostkey, *crypt_cs, *crypt_sc, *comp_cs, *comp_sc,
         *mac_cs, *mac_sc, *tmp;
@@ -3432,7 +3436,7 @@ static int kex_agree_methods(LIBSSH2_SESSION *session, unsigned char *data,
  *
  * Returns some errors without ssh2_err()
  */
-void ssh2_kex_exchange(LIBSSH2_SESSION *session, int reexchange,
+void ssh2_kex_exchange(LIBSSH2_SESSION *session, const int reexchange,
                        struct key_exchange_state *key_state)
 {
     struct corout_item *state = session->corout_state;
@@ -3524,7 +3528,8 @@ void ssh2_kex_exchange(LIBSSH2_SESSION *session, int reexchange,
 /*
  * Set preferred method
  */
-int libssh2_session_method_pref(LIBSSH2_SESSION *session, int method_type,
+int libssh2_session_method_pref(LIBSSH2_SESSION *session,
+                                const int method_type,
                                 const char *prefs)
 {
     char **prefvar, *s, *newprefs;
@@ -3667,7 +3672,7 @@ int libssh2_session_method_pref(LIBSSH2_SESSION *session, int method_type,
  * a negative number on failure
  */
 int libssh2_session_supported_algs(LIBSSH2_SESSION *session,
-                                   int method_type,
+                                   const int method_type,
                                    const char ***algs)
 {
     unsigned int i;

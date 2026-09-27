@@ -61,7 +61,7 @@ struct ranktree_iterator {
 #define ELEM(i)         ((void *) ((char *) (i) - o->off))
 #define NODE(i)         ((struct ranktree_node *) ((char *) (i) + o->off))
 
-struct ranktree *ranktree_alloc (ranktree_cmp_t fn, void *user_data, int off)
+struct ranktree *ranktree_alloc (ranktree_cmp_t fn, void *user_data, const int off)
 {
     struct ranktree *o;
     o = (struct ranktree *) malloc (sizeof (struct ranktree));
@@ -114,10 +114,11 @@ typedef unsigned long long big_size_t;
 #endif
 
 static void ranktree_iterator_rebuild (struct ranktree_iterator *i,
-                                       struct ranktree_node *n, int direction);
+                                       struct ranktree_node *n,
+                                       const int direction);
 
-static void rebalance (struct ranktree *o, int d, struct ranktree_node *n,
-                       int direction)
+static void rebalance (struct ranktree *o, const int d, struct ranktree_node *n,
+                       const int direction)
 {
     struct ranktree_iterator *iter;
     struct ranktree_node ***p = o->p;
@@ -170,7 +171,7 @@ void *ranktree_find (const struct ranktree *o, const void *elem)
     return NULL;
 }
 
-void *ranktree_index (struct ranktree *o, size_t index)
+void *ranktree_index (struct ranktree *o, const size_t index)
 {
     struct ranktree_node *i, *n = o->root;
     size_t c;
@@ -193,7 +194,7 @@ void *ranktree_index (struct ranktree *o, size_t index)
 }
 
 static void *ranktree_find_get_index (struct ranktree *o, const void *elem,
-                                      size_t *index, int exact)
+                                      size_t *index, const int exact)
 {
     size_t j = 0, index_last = 0;
     struct ranktree_node *n, *last = NULL, *found = NULL;
@@ -238,14 +239,14 @@ void *ranktree_find_index (struct ranktree *o, const void *p, size_t *index)
     return ranktree_find_get_index (o, p, index, 0);
 }
 
-void *ranktree_rindex (struct ranktree *o, size_t index)
+void *ranktree_rindex (struct ranktree *o, const size_t index)
 {
     return ranktree_index (o, COUNT (o->root) - 1 - index);
 }
 
 /* returns existing element or NULL */
 static void *ranktree_insert_replace_ (struct ranktree *o, void *elem,
-                                       int replace)
+                                       const int replace)
 {
     struct ranktree_node *n, **found = NULL, *i, ***p = o->p;
     int d = 0;
@@ -532,7 +533,7 @@ void *ranktree_iterator_first (struct ranktree_iterator *i, const void *search)
 }
 
 static void *ranktree_iterator_rindex_ (struct ranktree_iterator *i,
-                                        size_t index)
+                                        const size_t index)
 {
     struct ranktree *o = i->ranktree;
     struct ranktree_node *p = o->root;
@@ -585,7 +586,8 @@ void *ranktree_iterator_next (struct ranktree_iterator *i)
 }
 
 static void ranktree_iterator_rebuild (struct ranktree_iterator *i,
-                                       struct ranktree_node *n, int direction)
+                                       struct ranktree_node *n,
+                                       const int direction)
 {
     void *r;
     struct ranktree *o = i->ranktree;

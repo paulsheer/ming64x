@@ -62,7 +62,7 @@
  */
 static void packet_queue_listener(
     LIBSSH2_SESSION *session,
-    unsigned char *data, size_t datalen,
+    unsigned char *data, const size_t datalen,
     struct packet_queue_listener_state *listen_state)
 {
     struct corout_item *state = session->corout_state;
@@ -272,7 +272,7 @@ static void packet_queue_listener(
  */
 static void packet_x11_open(
     LIBSSH2_SESSION *session,
-    unsigned char *data, size_t datalen,
+    unsigned char *data, const size_t datalen,
     struct packet_x11_open_state *x11open_state)
 {
     struct corout_item *state = session->corout_state;
@@ -454,7 +454,7 @@ static void packet_x11_open(
  */
 static void packet_authagent_open(
     LIBSSH2_SESSION *session,
-    unsigned char *data, size_t datalen,
+    unsigned char *data, const size_t datalen,
     struct packet_authagent_state *authagent_state)
 {
     struct corout_item *state = session->corout_state;
@@ -613,7 +613,8 @@ static void packet_authagent_open(
  * resume labels skip the parse on re-entry.
  */
 void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
-                     size_t datalen, int macstate, uint32_t seq)
+                     size_t datalen, const int macstate, const uint32_t seq,
+                     const uint32_t fullpacket_required_type)
 {
     struct corout_item *state = session->corout_state;
     char *message = NULL;
@@ -622,12 +623,13 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
     size_t language_len = 0;
     LIBSSH2_CHANNEL *channelp = NULL;
     size_t data_head = 0;
-    unsigned char msg = data[0];
     int rc = 0;
-
     uint32_t channel = 0;
     uint32_t len = 0;
     unsigned char want_reply = 0;
+
+#define msg()   (state->stack[state->depth].msg)
+    msg() = data[0];
 
     START();
 
@@ -635,7 +637,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
 
     ssh2_deb((session, LIBSSH2_TRACE_TRANS,
               "Packet type %u received, length=%ld",
-              (unsigned int)msg, (long)datalen));
+              (unsigned int)msg(), (long)datalen));
 
     if(macstate == SSH2_MAC_INVALID &&
        (!session->macerror ||
@@ -648,7 +650,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
     }
 
     if(session->state & SSH2_STATE_INITIAL_KEX) {
-        if(msg == SSH_MSG_KEXINIT) {
+        if(msg() == SSH_MSG_KEXINIT) {
             if(!session->kex_strict) {
                 if(datalen < 17) {
                     SSH2_FREE(session, data);
@@ -695,8 +697,8 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
             }
         }
 
-        if(session->kex_strict && session->fullpacket_required_type &&
-           session->fullpacket_required_type != msg) {
+        if(session->kex_strict && fullpacket_required_type &&
+           fullpacket_required_type != msg()) {
             SSH2_FREE(session, data);
             session->socket_state = SSH2_SOCKET_DISCONNECTED;
             libssh2_session_disconnect(session, "strict KEX violation: "
@@ -707,7 +709,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
         }
     }
 
-    if(msg == SSH_MSG_DISCONNECT) {
+    if(msg() == SSH_MSG_DISCONNECT) {
 
         /*
            byte      SSH_MSG_DISCONNECT
@@ -750,7 +752,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_IGNORE) {
+    else if(msg() == SSH_MSG_IGNORE) {
         if(datalen >= 2) {
             if(session->ssh_msg_ignore)
                 SSH2_IGNORE(session, (char *)data + 1, datalen - 1);
@@ -769,7 +771,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_DEBUG) {
+    else if(msg() == SSH_MSG_DEBUG) {
         if(datalen >= 2) {
             int always_display = data[1];
 
@@ -803,7 +805,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_EXT_INFO) {
+    else if(msg() == SSH_MSG_EXT_INFO) {
         if(datalen >= 5) {
             uint32_t nr_extensions = 0;
             struct string_buf buf;
@@ -868,7 +870,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_GLOBAL_REQUEST) {
+    else if(msg() == SSH_MSG_GLOBAL_REQUEST) {
         if(datalen >= 5) {
             want_reply = 0;
             len = ssh2_ntohu32(data + 1);
@@ -896,9 +898,9 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_CHANNEL_EXTENDED_DATA ||
-            msg == SSH_MSG_CHANNEL_DATA) {
-        if(msg == SSH_MSG_CHANNEL_EXTENDED_DATA) {
+    else if(msg() == SSH_MSG_CHANNEL_EXTENDED_DATA ||
+            msg() == SSH_MSG_CHANNEL_DATA) {
+        if(msg() == SSH_MSG_CHANNEL_EXTENDED_DATA) {
             /* streamid(4) */
             data_head += 4;
         }
@@ -919,7 +921,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
 #ifdef LIBSSH2DEBUG
         {
             uint32_t stream_id = 0;
-            if(msg == SSH_MSG_CHANNEL_EXTENDED_DATA)
+            if(msg() == SSH_MSG_CHANNEL_EXTENDED_DATA)
                 stream_id = ssh2_ntohu32(data + 5);
 
             ssh2_deb((session, LIBSSH2_TRACE_CONN,
@@ -932,7 +934,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
 #endif
         if(channelp->remote.extended_data_ignore_mode ==
            LIBSSH2_CHANNEL_EXTENDED_DATA_IGNORE &&
-           msg == SSH_MSG_CHANNEL_EXTENDED_DATA) {
+           msg() == SSH_MSG_CHANNEL_EXTENDED_DATA) {
             /* Pretend we did not receive this */
             ssh2_deb((session, LIBSSH2_TRACE_CONN,
                       "Ignoring extended data and refunding %ld bytes",
@@ -1019,7 +1021,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
            uint32    recipient channel
          */
 
-    else if(msg == SSH_MSG_CHANNEL_EOF) {
+    else if(msg() == SSH_MSG_CHANNEL_EOF) {
         if(datalen >= 5)
             channelp =
                 ssh2_channel_locate(session, ssh2_ntohu32(data + 1));
@@ -1044,7 +1046,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_CHANNEL_REQUEST) {
+    else if(msg() == SSH_MSG_CHANNEL_REQUEST) {
         if(datalen >= 9) {
             unsigned char *request;
             size_t r_len;
@@ -1171,7 +1173,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_CHANNEL_CLOSE) {
+    else if(msg() == SSH_MSG_CHANNEL_CLOSE) {
         if(datalen >= 5)
             channelp =
                 ssh2_channel_locate(session, ssh2_ntohu32(data + 1));
@@ -1199,7 +1201,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
          */
 
     }
-    else if(msg == SSH_MSG_CHANNEL_OPEN) {
+    else if(msg() == SSH_MSG_CHANNEL_OPEN) {
         if(datalen >= (sizeof("forwarded-tcpip") - 1 + 5) &&
            ssh2_ntohu32(data + 1) == sizeof("forwarded-tcpip") - 1 &&
            !memcmp(data + 5, "forwarded-tcpip",
@@ -1243,7 +1245,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
            uint32    bytes to add
          */
     }
-    else if(msg == SSH_MSG_CHANNEL_WINDOW_ADJUST) {
+    else if(msg() == SSH_MSG_CHANNEL_WINDOW_ADJUST) {
         if(datalen >= 9) {
             uint32_t bytestoadd = ssh2_ntohu32(data + 5);
             channelp =
@@ -1287,7 +1289,7 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
         ssh2_list_add(&session->packets, &packetp->node);
     }
 
-    if(msg == SSH_MSG_KEXINIT &&
+    if(msg() == SSH_MSG_KEXINIT &&
        !(session->state & SSH2_STATE_EXCHANGING_KEYS)) {
         /*
          * The KEXINIT message has been added to the queue. Reset the kex
@@ -1303,16 +1305,17 @@ void ssh2_packet_add(LIBSSH2_SESSION *session, unsigned char *data,
     }
 
     END();
+#undef msg
 }
 
 /*
  * Scan the brigade for a matching packet type, optionally poll the socket for
  * a packet first
  */
-int ssh2_packet_ask(LIBSSH2_SESSION *session, unsigned char packet_type,
+int ssh2_packet_ask(LIBSSH2_SESSION *session, const unsigned char packet_type,
                     unsigned char **data, size_t *data_len,
-                    int match_ofs, const unsigned char *match_buf,
-                    size_t match_len)
+                    const int match_ofs, const unsigned char *match_buf,
+                    const size_t match_len)
 {
     struct packet *packet = ssh2_list_first(&session->packets);
 
@@ -1354,8 +1357,8 @@ int ssh2_packet_ask(LIBSSH2_SESSION *session, unsigned char packet_type,
 static int packet_askv(LIBSSH2_SESSION *session,
                        const unsigned char *packet_types,
                        unsigned char **data, size_t *data_len,
-                       int match_ofs,
-                       const unsigned char *match_buf, size_t match_len)
+                       const int match_ofs,
+                       const unsigned char *match_buf, const size_t match_len)
 {
     size_t i, packet_types_len = strlen((const char *)packet_types);
 
@@ -1377,11 +1380,11 @@ static int packet_askv(LIBSSH2_SESSION *session,
  * packet is found in the brigade. Errors propagate via COROUT_EXIT().
  */
 void ssh2_packet_require(LIBSSH2_SESSION *session,
-                         unsigned char packet_type,
+                         const unsigned char packet_type,
                                 unsigned char **data, size_t *data_len,
-                                int match_ofs,
+                                const int match_ofs,
                                 const unsigned char *match_buf,
-                                size_t match_len)
+                                const size_t match_len)
 {
     struct corout_item *state = session->corout_state;
 
@@ -1392,9 +1395,7 @@ void ssh2_packet_require(LIBSSH2_SESSION *session,
         return;  /* A packet was available in the packet brigade */
 
     while(session->socket_state == SSH2_SOCKET_CONNECTED) {
-        session->fullpacket_required_type = packet_type;
-        CALL(ssh2_transport_read(session));
-        session->fullpacket_required_type = 0;
+        CALL(ssh2_transport_read(session, packet_type));
 
         /* Be lazy, let packet_ask pull it out of the brigade */
         if(ssh2_packet_ask(session, packet_type, data, data_len,
@@ -1438,7 +1439,7 @@ void ssh2_packet_burn(LIBSSH2_SESSION *session)
     }
 
     while(session->socket_state == SSH2_SOCKET_CONNECTED) {
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
 
         /* all_packets is a stack local lost across the yield, rebuild it */
         for(i = 1; i < 255; i++)
@@ -1471,9 +1472,9 @@ void ssh2_packet_burn(LIBSSH2_SESSION *session)
 void ssh2_packet_requirev(LIBSSH2_SESSION *session,
                           const unsigned char *packet_types,
                                  unsigned char **data, size_t *data_len,
-                                 int match_ofs,
+                                 const int match_ofs,
                                  const unsigned char *match_buf,
-                                 size_t match_len)
+                                 const size_t match_len)
 {
     struct corout_item *state = session->corout_state;
 
@@ -1484,7 +1485,7 @@ void ssh2_packet_requirev(LIBSSH2_SESSION *session,
         return;  /* One of the packets listed was available */
 
     while(session->socket_state != SSH2_SOCKET_DISCONNECTED) {
-        CALL(ssh2_transport_read(session));
+        CALL(ssh2_transport_read(session, 0));
 
         /* Be lazy, let packet_askv() pull it out of the brigade */
         if(packet_askv(session, packet_types, data, data_len,

@@ -37,8 +37,8 @@
 /* Keep-alive stuff. */
 
 void libssh2_keepalive_config(LIBSSH2_SESSION *session,
-                              int want_reply,
-                              unsigned int interval_s)
+                              const int want_reply,
+                              const unsigned int interval_s)
 {
     if(!session)
         return;
@@ -62,14 +62,16 @@ void libssh2_keepalive_send(LIBSSH2_SESSION *session, int *seconds_to_next)
         if(now >= session->keepalive_last_sent + session->keepalive_interval) {
             /* Format is
                "SSH_MSG_GLOBAL_REQUEST || 4-byte len || str || want-reply". */
-            unsigned char keepalive_data[] =
-                "\x50\x00\x00\x00\x15keepalive@libssh2.orgW";
+            memcpy(session->keepalive_packet,
+                   "\x50\x00\x00\x00\x15keepalive@libssh2.orgW",
+                   sizeof(session->keepalive_packet));
 
-            keepalive_data[sizeof(keepalive_data) - 2] =
+            session->keepalive_packet[sizeof(session->keepalive_packet) - 2] =
                 (unsigned char)session->keepalive_want_reply;
 
-            CALL(ssh2_transport_send(session, keepalive_data,
-                                     sizeof(keepalive_data) - 1, NULL, 0));
+            CALL(ssh2_transport_send(session, session->keepalive_packet,
+                                     sizeof(session->keepalive_packet) - 1,
+                                     NULL, 0));
 
             session->keepalive_last_sent = ssh2_now();
         }

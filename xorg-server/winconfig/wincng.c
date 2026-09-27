@@ -99,7 +99,7 @@
 #define PKCS_RSA_PRIVATE_KEY ((LPCSTR)(size_t)43)
 #endif
 
-static void wcng_zero_free(void *buf, size_t len)
+static void wcng_zero_free(void *buf, const size_t len)
 {
     if(!buf)
         return;
@@ -114,9 +114,9 @@ static void wcng_zero_free(void *buf, size_t len)
  * if the size of src is smaller than dest then pad the "left" (MSB)
  * end with zeroes and copy the bits into the "right" (LSB) end. */
 static void wcng_memcpy_with_be_padding(unsigned char *dest,
-                                        size_t dest_len,
+                                        const size_t dest_len,
                                         const unsigned char *src,
-                                        size_t src_len)
+                                        const size_t src_len)
 {
     if(dest_len > src_len)
         memset(dest, 0, dest_len - src_len);
@@ -140,7 +140,7 @@ ssh2_bn *ssh2_bn_init(void)
     return bignum;
 }
 
-static int wcng_bn_resize(ssh2_bn *bn, size_t length)
+static int wcng_bn_resize(ssh2_bn *bn, const size_t length)
 {
     unsigned char *bignum;
 
@@ -163,7 +163,7 @@ static int wcng_bn_resize(ssh2_bn *bn, size_t length)
     return 0;
 }
 
-static int wcng_bn_random(ssh2_bn *rnd, int bits, int top, int bottom)
+static int wcng_bn_random(ssh2_bn *rnd, int bits, const int top, const int bottom)
 {
     unsigned char *bignum;
     size_t length;
@@ -273,7 +273,7 @@ static int wcng_bn_mod_exp(ssh2_bn *r, const ssh2_bn *a, const ssh2_bn *p,
     return BCRYPT_SUCCESS(ret) ? 0 : -1;
 }
 
-int ssh2_bn_set_word(ssh2_bn *bn, uint32_t word)
+int ssh2_bn_set_word(ssh2_bn *bn, const uint32_t word)
 {
     size_t offset, number, bits, length;
 
@@ -335,7 +335,7 @@ static void wcng_bn_normalize(ssh2_bn *bn)
     }
 }
 
-int ssh2_bn_from_bin(ssh2_bn **bn, const unsigned char *bin, size_t len)
+int ssh2_bn_from_bin(ssh2_bn **bn, const unsigned char *bin, const size_t len)
 {
     if(!bn || !bin || !len)
         return -1;
@@ -677,7 +677,7 @@ void ssh2_crypto_exit(void)
     memset(&ssh2_wcng, 0, sizeof(ssh2_wcng));
 }
 
-int ssh2_random(unsigned char *buf, size_t len)
+int ssh2_random(unsigned char *buf, const size_t len)
 {
     int ret;
 
@@ -695,7 +695,7 @@ int ssh2_random(unsigned char *buf, size_t len)
  */
 
 static int ssh2_hash_init_low(ssh2_hash_ctx *ctx, ssh2_hash_alg alg,
-                              unsigned char *key, ULONG key_len)
+                              unsigned char *key, const ULONG key_len)
 {
     BCRYPT_HASH_HANDLE hHash;
     unsigned char *pbHashObject;
@@ -741,14 +741,14 @@ int ssh2_hash_init(ssh2_hash_ctx *ctx, ssh2_hash_alg alg)
     return ssh2_hash_init_low(ctx, alg, NULL, 0);
 }
 
-int ssh2_hash_update(ssh2_hash_ctx *ctx, const void *input, size_t input_len)
+int ssh2_hash_update(ssh2_hash_ctx *ctx, const void *input, const size_t input_len)
 {
     return input_len <= ULONG_MAX &&
         BCRYPT_SUCCESS(BCryptHashData(ctx->hHash, SSH2_UNCONST(input),
                                       (ULONG)input_len, 0));
 }
 
-int ssh2_hash_final(ssh2_hash_ctx *ctx, void *digest, size_t digest_len)
+int ssh2_hash_final(ssh2_hash_ctx *ctx, void *digest, const size_t digest_len)
 {
     int ret = 0;
 
@@ -779,17 +779,17 @@ int ssh2_hmac_ctx_init(ssh2_hmac_ctx *ctx)
 }
 
 int ssh2_hmac_init(ssh2_hmac_ctx *ctx, ssh2_hmac_alg alg,
-                   void *key, size_t key_len)
+                   void *key, const size_t key_len)
 {
     return ssh2_hash_init_low(ctx, alg, key, (ULONG)key_len);
 }
 
-int ssh2_hmac_update(ssh2_hmac_ctx *ctx, const void *input, size_t input_len)
+int ssh2_hmac_update(ssh2_hmac_ctx *ctx, const void *input, const size_t input_len)
 {
     return ssh2_hash_update(ctx, input, input_len);
 }
 
-int ssh2_hmac_final(ssh2_hmac_ctx *ctx, void *mac, size_t mac_len)
+int ssh2_hmac_final(ssh2_hmac_ctx *ctx, void *mac, const size_t mac_len)
 {
     return BCRYPT_SUCCESS(BCryptFinishHash(ctx->hHash,
                                            mac, (ULONG)mac_len, 0));
@@ -813,10 +813,10 @@ void ssh2_hmac_cleanup(ssh2_hmac_ctx *ctx)
 #if LIBSSH2_RSA || LIBSSH2_DSA
 static int wcng_key_sha_verify(struct wcng_key_ctx *ctx,
                                LIBSSH2_SESSION *session,
-                               ULONG hash_len,
-                               const unsigned char *sig, ULONG sig_len,
-                               const unsigned char *m, ULONG m_len,
-                               ULONG flags)
+                               const ULONG hash_len,
+                               const unsigned char *sig, const ULONG sig_len,
+                               const unsigned char *m, const ULONG m_len,
+                               const ULONG flags)
 {
     BCRYPT_PKCS1_PADDING_INFO paddingInfoPKCS1;
     ssh2_hash_alg hash_alg;
@@ -888,10 +888,10 @@ static int wcng_key_sha_verify(struct wcng_key_ctx *ctx,
 
 static int wcng_load_priv(LIBSSH2_SESSION *session,
                           const char *filename,
-                          const char *privkeyblob, size_t privkeyblob_len,
+                          const char *privkeyblob, const size_t privkeyblob_len,
                           const char *passphrase,
                           unsigned char **ppbEncoded, size_t *pcbEncoded,
-                          int tryLoadRSA, int tryLoadDSA)
+                          const int tryLoadRSA, const int tryLoadDSA)
 {
     int ret = -1;
     unsigned char *data = NULL;
@@ -924,7 +924,7 @@ static int wcng_load_priv(LIBSSH2_SESSION *session,
 }
 
 static int wcng_asn_decode(LIBSSH2_SESSION *session,
-                           const unsigned char *pbEncoded, DWORD cbEncoded,
+                           const unsigned char *pbEncoded, const DWORD cbEncoded,
                            LPCSTR lpszStructType,
                            unsigned char **ppbDecoded, DWORD *pcbDecoded)
 {
@@ -959,7 +959,7 @@ static int wcng_asn_decode(LIBSSH2_SESSION *session,
 }
 
 static int wcng_bn_ltob(LIBSSH2_SESSION *session,
-                        const unsigned char *pbInput, DWORD cbInput,
+                        const unsigned char *pbInput, const DWORD cbInput,
                         unsigned char **ppbOutput, DWORD *pcbOutput)
 {
     unsigned char *pbOutput;
@@ -994,7 +994,7 @@ static int wcng_bn_ltob(LIBSSH2_SESSION *session,
 }
 
 static int wcng_asn_decode_bn(LIBSSH2_SESSION *session,
-                              const unsigned char *pbEncoded, DWORD cbEncoded,
+                              const unsigned char *pbEncoded, const DWORD cbEncoded,
                               unsigned char **ppbDecoded, DWORD *pcbDecoded)
 {
     unsigned char *pbDecoded = NULL;
@@ -1021,7 +1021,7 @@ static int wcng_asn_decode_bn(LIBSSH2_SESSION *session,
 
 static int wcng_asn_decode_bns(LIBSSH2_SESSION *session,
                                const unsigned char *pbEncoded,
-                               DWORD cbEncoded,
+                               const DWORD cbEncoded,
                                unsigned char ***prpbDecoded,
                                DWORD **prcbDecoded,
                                DWORD *pcbCount)
@@ -1109,14 +1109,14 @@ static size_t wcng_bn_size(const unsigned char *bignum, size_t length)
  */
 
 int ssh2_rsa_new(ssh2_rsa_ctx **rsa, LIBSSH2_SESSION *session,
-                 const unsigned char *edata, size_t elen,
-                 const unsigned char *ndata, size_t nlen,
-                 const unsigned char *ddata, size_t dlen,
-                 const unsigned char *pdata, size_t plen,
-                 const unsigned char *qdata, size_t qlen,
-                 const unsigned char *e1data, size_t e1len,
-                 const unsigned char *e2data, size_t e2len,
-                 const unsigned char *coeffdata, size_t coefflen)
+                 const unsigned char *edata, const size_t elen,
+                 const unsigned char *ndata, const size_t nlen,
+                 const unsigned char *ddata, const size_t dlen,
+                 const unsigned char *pdata, const size_t plen,
+                 const unsigned char *qdata, const size_t qlen,
+                 const unsigned char *e1data, const size_t e1len,
+                 const unsigned char *e2data, const size_t e2len,
+                 const unsigned char *coeffdata, const size_t coefflen)
 {
     BCRYPT_KEY_HANDLE hKey;
     BCRYPT_RSAKEY_BLOB *rsakey;
@@ -1242,7 +1242,7 @@ int ssh2_rsa_new(ssh2_rsa_ctx **rsa, LIBSSH2_SESSION *session,
 
 static int wcng_rsa_new_priv_parse(ssh2_rsa_ctx **rsa,
                                    LIBSSH2_SESSION *session,
-                                   unsigned char *pbEncoded, size_t cbEncoded)
+                                   unsigned char *pbEncoded, const size_t cbEncoded)
 {
     BCRYPT_KEY_HANDLE hKey;
     unsigned char *pbStructInfo;
@@ -1282,7 +1282,7 @@ static int wcng_rsa_new_priv_parse(ssh2_rsa_ctx **rsa,
 int ssh2_rsa_new_priv(ssh2_rsa_ctx **rsa,
                       LIBSSH2_SESSION *session,
                       const char *filename,
-                      const char *blob, size_t blob_len,
+                      const char *blob, const size_t blob_len,
                       const char *passphrase)
 {
     unsigned char *pbEncoded;
@@ -1297,8 +1297,8 @@ int ssh2_rsa_new_priv(ssh2_rsa_ctx **rsa,
 
 #if LIBSSH2_RSA_SHA1
 int ssh2_rsa_sha1_verify(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
-                         const unsigned char *sig, size_t sig_len,
-                         const unsigned char *m, size_t m_len)
+                         const unsigned char *sig, const size_t sig_len,
+                         const unsigned char *m, const size_t m_len)
 {
     return wcng_key_sha_verify(rsa, session, SSH2_SHA1_DIG_LEN,
                                sig, (ULONG)sig_len,
@@ -1308,9 +1308,9 @@ int ssh2_rsa_sha1_verify(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
 #endif
 #if LIBSSH2_RSA_SHA2
 int ssh2_rsa_sha2_verify(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
-                         size_t hash_len,
-                         const unsigned char *sig, size_t sig_len,
-                         const unsigned char *m, size_t m_len)
+                         const size_t hash_len,
+                         const unsigned char *sig, const size_t sig_len,
+                         const unsigned char *m, const size_t m_len)
 {
     return wcng_key_sha_verify(rsa, session, (ULONG)hash_len,
                                sig, (ULONG)sig_len,
@@ -1320,7 +1320,7 @@ int ssh2_rsa_sha2_verify(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
 #endif
 
 static int wcng_rsa_sha_sign(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
-                             const unsigned char *hash, size_t hash_len,
+                             const unsigned char *hash, const size_t hash_len,
                              unsigned char **signature, size_t *signature_len)
 {
     BCRYPT_PKCS1_PADDING_INFO paddingInfo;
@@ -1376,7 +1376,7 @@ static int wcng_rsa_sha_sign(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
 
 #if LIBSSH2_RSA_SHA1
 int ssh2_rsa_sha1_sign(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
-                       const unsigned char *hash, size_t hash_len,
+                       const unsigned char *hash, const size_t hash_len,
                        unsigned char **signature, size_t *signature_len)
 {
     return wcng_rsa_sha_sign(rsa, session,
@@ -1385,7 +1385,7 @@ int ssh2_rsa_sha1_sign(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
 #endif
 #if LIBSSH2_RSA_SHA2
 int ssh2_rsa_sha2_sign(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session,
-                       const unsigned char *hash, size_t hash_len,
+                       const unsigned char *hash, const size_t hash_len,
                        unsigned char **signature, size_t *signature_len)
 {
     return wcng_rsa_sha_sign(rsa, session,
@@ -1413,11 +1413,11 @@ void ssh2_rsa_free(ssh2_rsa_ctx *rsa, LIBSSH2_SESSION *session)
 
 #if LIBSSH2_DSA
 int ssh2_dsa_new(ssh2_dsa_ctx **dsa, LIBSSH2_SESSION *session,
-                 const unsigned char *pdata, size_t plen,
-                 const unsigned char *qdata, size_t qlen,
-                 const unsigned char *gdata, size_t glen,
-                 const unsigned char *ydata, size_t ylen,
-                 const unsigned char *xdata, size_t xlen)
+                 const unsigned char *pdata, const size_t plen,
+                 const unsigned char *qdata, const size_t qlen,
+                 const unsigned char *gdata, const size_t glen,
+                 const unsigned char *ydata, const size_t ylen,
+                 const unsigned char *xdata, const size_t xlen)
 {
     BCRYPT_KEY_HANDLE hKey;
     BCRYPT_DSA_KEY_BLOB *dsakey;
@@ -1512,7 +1512,7 @@ int ssh2_dsa_new(ssh2_dsa_ctx **dsa, LIBSSH2_SESSION *session,
 
 static int wcng_dsa_new_priv_parse(ssh2_dsa_ctx **dsa,
                                    LIBSSH2_SESSION *session,
-                                   unsigned char *pbEncoded, size_t cbEncoded)
+                                   unsigned char *pbEncoded, const size_t cbEncoded)
 {
     unsigned char **rpbDecoded;
     DWORD *rcbDecoded, index, length;
@@ -1551,7 +1551,7 @@ static int wcng_dsa_new_priv_parse(ssh2_dsa_ctx **dsa,
 int ssh2_dsa_new_priv(ssh2_dsa_ctx **dsa,
                       LIBSSH2_SESSION *session,
                       const char *filename,
-                      const char *blob, size_t blob_len,
+                      const char *blob, const size_t blob_len,
                       const char *passphrase)
 {
     unsigned char *pbEncoded;
@@ -1566,14 +1566,14 @@ int ssh2_dsa_new_priv(ssh2_dsa_ctx **dsa,
 
 int ssh2_dsa_sha1_verify(ssh2_dsa_ctx *dsa, LIBSSH2_SESSION *session,
                          const unsigned char *sig,
-                         const unsigned char *m, size_t m_len)
+                         const unsigned char *m, const size_t m_len)
 {
     return wcng_key_sha_verify(dsa, session, SSH2_SHA1_DIG_LEN,
                                sig, 40, m, (ULONG)m_len, 0);
 }
 
 int ssh2_dsa_sha1_sign(ssh2_dsa_ctx *dsa, LIBSSH2_SESSION *session,
-                       const unsigned char *hash, size_t hash_len,
+                       const unsigned char *hash, const size_t hash_len,
                        unsigned char *signature)
 {
     unsigned char *data, *sig;
@@ -1638,7 +1638,7 @@ void ssh2_dsa_free(ssh2_dsa_ctx *dsa, LIBSSH2_SESSION *session)
  */
 static int wcng_ecdsa_decode_uncompressed_point(
     IN const unsigned char *encoded_point,
-    IN size_t encoded_point_len,
+    IN const size_t encoded_point_len,
     OUT struct ecdsa_point *point)
 {
     unsigned int curve;
@@ -1676,10 +1676,10 @@ static int wcng_ecdsa_decode_uncompressed_point(
  */
 static int wcng_p1363signature_from_point(IN LIBSSH2_SESSION *session,
                                           IN const unsigned char *r,
-                                          IN size_t r_len,
+                                          IN const size_t r_len,
                                           IN const unsigned char *s,
-                                          IN size_t s_len,
-                                          IN ssh2_curve_type curve,
+                                          IN const size_t s_len,
+                                          IN const ssh2_curve_type curve,
                                           OUT PUCHAR *signature,
                                           OUT size_t *signature_length)
 {
@@ -1732,7 +1732,7 @@ static int wcng_p1363signature_from_point(IN LIBSSH2_SESSION *session,
  * Create a CNG public key from an ECC point.
  */
 static int wcng_publickey_from_point(IN LIBSSH2_SESSION *session,
-                                     IN wcng_ecc_keytype keytype,
+                                     IN const wcng_ecc_keytype keytype,
                                      IN const struct ecdsa_point *point,
                                      OUT BCRYPT_KEY_HANDLE *key)
 {
@@ -1792,10 +1792,10 @@ cleanup:
  * Create a CNG private key from an ECC point.
  */
 static int wcng_privatekey_from_point(IN LIBSSH2_SESSION *session,
-                                      IN wcng_ecc_keytype keytype,
+                                      IN const wcng_ecc_keytype keytype,
                                       IN const struct ecdsa_point *q,
                                       IN const unsigned char *d,
-                                      IN size_t d_len,
+                                      IN const size_t d_len,
                                       OUT BCRYPT_KEY_HANDLE *key)
 {
     int result = LIBSSH2_ERROR_NONE;
@@ -1858,7 +1858,7 @@ cleanup:
  */
 static int wcng_uncompressed_point_from_publickey(
     IN LIBSSH2_SESSION *session,
-    IN ssh2_curve_type curve,
+    IN const ssh2_curve_type curve,
     IN BCRYPT_KEY_HANDLE key,
     OUT PUCHAR *encoded_point,
     OUT size_t *encoded_point_len)
@@ -1967,7 +1967,7 @@ int ssh2_ecdsa_create_key(OUT ssh2_ecdsa_ctx **ec_ctx,
                           IN LIBSSH2_SESSION *session,
                           OUT unsigned char **out_public_key_octal,
                           OUT size_t *out_public_key_octal_len,
-                          IN ssh2_curve_type curve)
+                          IN const ssh2_curve_type curve)
 {
     int result = LIBSSH2_ERROR_NONE;
     NTSTATUS status;
@@ -2043,8 +2043,8 @@ cleanup:
  */
 int ssh2_ecdsa_curve_name_with_octal_new(
     OUT ssh2_ecdsa_ctx **ec_ctx, IN LIBSSH2_SESSION *session,
-    IN const unsigned char *publickey_encoded, IN size_t publickey_encoded_len,
-    IN ssh2_curve_type curve)
+    IN const unsigned char *publickey_encoded, IN const size_t publickey_encoded_len,
+    IN const ssh2_curve_type curve)
 {
     int result = LIBSSH2_ERROR_NONE;
 
@@ -2098,7 +2098,7 @@ cleanup:
 int ssh2_ecdh_gen_k(OUT ssh2_bn **k, LIBSSH2_SESSION *session,
                     IN ssh2_ecdsa_ctx *private_key,
                     IN const unsigned char *server_public_key,
-                    IN size_t server_public_key_len)
+                    IN const size_t server_public_key_len)
 {
     int result = LIBSSH2_ERROR_NONE;
     NTSTATUS status;
@@ -2209,7 +2209,7 @@ cleanup:
 }
 
 static int wcng_ecdsa_curve_type_from_name(IN const char *name,
-                                           IN size_t name_len,
+                                           IN const size_t name_len,
                                            OUT ssh2_curve_type *out_curve)
 {
     unsigned int curve;
@@ -2234,9 +2234,9 @@ static int wcng_ecdsa_curve_type_from_name(IN const char *name,
  * Verifies the ECDSA signature of a hashed message
  */
 int ssh2_ecdsa_verify(IN ssh2_ecdsa_ctx *ec_ctx, LIBSSH2_SESSION *session,
-                      IN const unsigned char *r, IN size_t r_len,
-                      IN const unsigned char *s, IN size_t s_len,
-                      IN const unsigned char *m, IN size_t m_len)
+                      IN const unsigned char *r, IN const size_t r_len,
+                      IN const unsigned char *s, IN const size_t s_len,
+                      IN const unsigned char *m, IN const size_t m_len)
 {
     int result = LIBSSH2_ERROR_NONE;
     NTSTATUS status;
@@ -2323,7 +2323,7 @@ cleanup:
 static int wcng_ecdsa_new_priv_parse(ssh2_ecdsa_ctx **ec_ctx,
                                      LIBSSH2_SESSION *session,
                                      const unsigned char *privatekey,
-                                     size_t privatekey_len)
+                                     const size_t privatekey_len)
 {
     char *keytype = NULL;
     size_t keytype_len;
@@ -2443,7 +2443,7 @@ cleanup:
 int ssh2_ecdsa_new_priv(OUT ssh2_ecdsa_ctx **ec_ctx,
                         IN LIBSSH2_SESSION *session,
                         IN const char *filename,
-                        IN const char *blob, IN size_t blob_len,
+                        IN const char *blob, IN const size_t blob_len,
                         IN const char *passphrase)
 {
     int result;
@@ -2475,7 +2475,7 @@ cleanup:
  */
 int ssh2_ecdsa_sign(IN ssh2_ecdsa_ctx *ec_ctx,
                     IN LIBSSH2_SESSION *session,
-                    IN const unsigned char *hash, IN size_t hash_len,
+                    IN const unsigned char *hash, IN const size_t hash_len,
                     OUT unsigned char **signature, OUT size_t *signature_len)
 {
     NTSTATUS status;
@@ -2609,7 +2609,7 @@ static DWORD wcng_pub_priv_write(unsigned char *key, DWORD offset,
 static int wcng_pub_priv_parse(LIBSSH2_SESSION *session, char **method,
                                unsigned char **pubkeydata,
                                size_t *pubkeydata_len,
-                               unsigned char *pbEncoded, size_t cbEncoded)
+                               unsigned char *pbEncoded, const size_t cbEncoded)
 {
     unsigned char **rpbDecoded = NULL;
     DWORD *rcbDecoded = NULL;
@@ -2709,7 +2709,7 @@ cleanup:
 int ssh2_pub_privkey(LIBSSH2_SESSION *session, char **method,
                      unsigned char **pubkeydata, size_t *pubkeydata_len,
                      const char *privkeyfile,
-                     const char *privkeyblob, size_t privkeyblob_len,
+                     const char *privkeyblob, const size_t privkeyblob_len,
                      const char *passphrase)
 {
     unsigned char *pbEncoded;
@@ -2731,7 +2731,7 @@ int ssh2_pub_privkey(LIBSSH2_SESSION *session, char **method,
  * Windows CNG backend: Cipher functions
  */
 int ssh2_cipher_init(ssh2_cipher_ctx *ctx, SSH2_CIPHER_T(algo),
-                     unsigned char *iv, unsigned char *secret, int encrypt)
+                     unsigned char *iv, unsigned char *secret, const int encrypt)
 {
     BCRYPT_KEY_HANDLE hKey;
     BCRYPT_KEY_DATA_BLOB_HEADER *header;
@@ -2820,7 +2820,7 @@ int ssh2_cipher_init(ssh2_cipher_ctx *ctx, SSH2_CIPHER_T(algo),
 
 /* Increments an AES CTR buffer to prepare it for use with the
    next AES block. */
-static void wcng_aes_ctr_increment(unsigned char *ctr, size_t length)
+static void wcng_aes_ctr_increment(unsigned char *ctr, const size_t length)
 {
     unsigned char *pc;
     unsigned int val, carry;
@@ -2840,7 +2840,7 @@ static void wcng_aes_ctr_increment(unsigned char *ctr, size_t length)
 static void wcng_xor_data(unsigned char *dst,
                           const unsigned char *input1,
                           const unsigned char *input2,
-                          size_t length)
+                          const size_t length)
 {
     size_t i;
 
@@ -2849,8 +2849,8 @@ static void wcng_xor_data(unsigned char *dst,
 }
 
 int ssh2_cipher_crypt(ssh2_cipher_ctx *ctx, SSH2_CIPHER_T(algo),
-                      int encrypt, unsigned char *block, size_t blocksize,
-                      int firstlast)
+                      const int encrypt, unsigned char *block, const size_t blocksize,
+                      const int firstlast)
 {
     unsigned char *pbOutput, *pbInput;
     ULONG cbOutput, cbInput;
@@ -2954,7 +2954,7 @@ void ssh2_dh_dtor(ssh2_dh_ctx *dhctx)
     }
 }
 
-static size_t wcng_round_down(size_t number, size_t multiple)
+static size_t wcng_round_down(const size_t number, const size_t multiple)
 {
     return (number / multiple) * multiple;
 }
@@ -2964,7 +2964,7 @@ static size_t wcng_round_down(size_t number, size_t multiple)
  * private key is stored as opaque in the Diffie-Hellman context `*dhctx' and
  * the public key is returned in `pub'. 0 is returned upon success, else -1. */
 int ssh2_dh_key_pair(ssh2_dh_ctx *dhctx, ssh2_bn *pub, const ssh2_bn *g,
-                     const ssh2_bn *p, int group_order, ssh2_bn_ctx *bnctx)
+                     const ssh2_bn *p, const int group_order, ssh2_bn_ctx *bnctx)
 {
     const int hasAlgDHwithKDF = ssh2_wcng.hasAlgDHwithKDF;
 

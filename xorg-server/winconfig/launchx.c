@@ -19,8 +19,8 @@
 
 /* nuklear_gdi.h calls nk_cos/nk_sin, which are internal (static) nuklear
    helpers not exported by libnuklear.a; provide local wrappers. */
-static float nk_cos(float x) { return cosf(x); }
-static float nk_sin(float x) { return sinf(x); }
+static float nk_cos(const float x) { return cosf(x); }
+static float nk_sin(const float x) { return sinf(x); }
 
 #define NK_GDI_IMPLEMENTATION
 #include "../Nuklear/demo/gdi/nuklear_gdi.h"
@@ -268,7 +268,7 @@ struct options_network_and_access_control {
 };
 
 static void
-option_tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text)
+option_tooltip(struct nk_context *ctx, const struct nk_rect bounds, const char *text)
 {
     static float timer = 0.0f;
     nk_do_tooltip_delay(ctx, text, bounds, &timer);
@@ -288,7 +288,7 @@ focus_pick(struct nk_context *ctx, struct nk_rect *b)
 }
 
 static void
-focus_ring(struct nk_context *ctx, struct nk_rect b)
+focus_ring(struct nk_context *ctx, const struct nk_rect b)
 {
     nk_stroke_rect(nk_window_get_canvas(ctx),
         nk_rect(b.x - 1, b.y - 1, b.w + 2, b.h + 2),
@@ -329,7 +329,7 @@ checkbox_option(struct nk_context *ctx, const char *label, int *value, const cha
 }
 
 static void
-text_option(struct nk_context *ctx, const char *label, char *buffer, int buffer_size, const char *tooltip)
+text_option(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip)
 {
     struct nk_rect b;
     int focused;
@@ -351,7 +351,7 @@ text_option(struct nk_context *ctx, const char *label, char *buffer, int buffer_
 
 static void
 password_option(struct nk_context *ctx, const char *label, char *password,
-    char *mask, int size, const char *tooltip)
+    char *mask, const int size, const char *tooltip)
 {
     struct nk_rect b;
     int old_len = (int)strlen(mask);
@@ -403,7 +403,7 @@ password_option(struct nk_context *ctx, const char *label, char *password,
 }
 
 static void
-combobox_option(struct nk_context *ctx, const char *label, const char *const *items, int count, int *selected, const char *tooltip)
+combobox_option(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip)
 {
     struct nk_rect b;
     nk_layout_row_dynamic(ctx, 30, 2);
@@ -434,13 +434,13 @@ is_hex_color(const char *s)
 
 static int
 color_option(struct nk_context *ctx, const char *label, char *hex,
-    int hex_size, const char *tooltip)
+    const int hex_size, const char *tooltip)
 {
     struct nk_rect b;
     struct nk_colorf cf;
     struct nk_color col;
-    char tmp[8];
-    char old[8];
+    char tmp[12];
+    char old[12];
     int changed;
 
     if (!is_hex_color(hex)) {
@@ -1016,7 +1016,7 @@ struct options_fonts_rendering {
     int deferglyphs_sel;
     char fakescreenfps[16];
     int backingstore_sel;
-    char root_background[8];
+    char root_background[16];
     int retro_enabled;
     char color_visual_class[16];
     int nocursor_enabled;
@@ -1439,7 +1439,7 @@ cf_build(struct cfentry *e,
 }
 
 static int
-config_dir(char *out, size_t outsz)
+config_dir(char *out, const size_t outsz)
 {
     const char *appdata = getenv("APPDATA");
     if (!appdata || !appdata[0])
@@ -1718,7 +1718,7 @@ cl_opt(struct cmdline *c, const char *flag, const char *val, const char *def)
 
 /* Append a bare flag when cond is set. */
 static void
-cl_if(struct cmdline *c, int cond, const char *flag)
+cl_if(struct cmdline *c, const int cond, const char *flag)
 {
     if (cond)
         cl_arg(c, flag);

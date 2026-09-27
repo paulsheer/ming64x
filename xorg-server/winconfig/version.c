@@ -34,7 +34,7 @@
 
 #include "agent.h"
 
-const char *libssh2_version(int req_version_num)
+const char *libssh2_version(const int req_version_num)
 {
     if(req_version_num <= LIBSSH2_VERSION_NUM)
         return LIBSSH2_VERSION;

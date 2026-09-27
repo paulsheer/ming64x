@@ -23,7 +23,7 @@ struct pairheap {
     void *user_data;
 };
 
-struct pairheap *pairheap_alloc (pairheap_cmp_t fn, void *user_data, int off)
+struct pairheap *pairheap_alloc (pairheap_cmp_t fn, void *user_data, const int off)
 {
     struct pairheap *o;
     o = (struct pairheap *) malloc (sizeof (struct pairheap));

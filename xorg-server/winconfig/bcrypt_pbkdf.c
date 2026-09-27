@@ -93,9 +93,9 @@ static void bcrypt_hash(uint8_t *sha2pass, uint8_t *sha2salt, uint8_t *out)
     ssh2_explicit_zero(&state, sizeof(state));
 }
 
-static int bcrypt_pbkdf(const char *pass, size_t passlen,
-                        const uint8_t *salt, size_t saltlen,
-                        uint8_t *key, size_t keylen, unsigned int rounds)
+static int bcrypt_pbkdf(const char *pass, const size_t passlen,
+                        const uint8_t *salt, const size_t saltlen,
+                        uint8_t *key, size_t keylen, const unsigned int rounds)
 {
     uint8_t sha2pass[SSH2_SHA512_DIG_LEN];
     uint8_t sha2salt[SSH2_SHA512_DIG_LEN];
@@ -184,12 +184,12 @@ static int bcrypt_pbkdf(const char *pass, size_t passlen,
 /* Wrapper */
 
 int ssh2_bcrypt_pbkdf(const char *pass,
-                      size_t passlen,
+                      const size_t passlen,
                       const uint8_t *salt,
-                      size_t saltlen,
+                      const size_t saltlen,
                       uint8_t *key,
-                      size_t keylen,
-                      unsigned int rounds)
+                      const size_t keylen,
+                      const unsigned int rounds)
 {
     return bcrypt_pbkdf(pass,
                         passlen,

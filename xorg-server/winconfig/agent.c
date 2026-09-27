@@ -465,14 +465,14 @@ cleanup:
     return rc;
 
 static int win32_openssh_send_all(LIBSSH2_AGENT *agent,
-                                  void *buffer, size_t length,
+                                  void *buffer, const size_t length,
                                   size_t *send_recv_total)
 {
     WIN32_RECV_SEND_ALL(WriteFile, agent, buffer, length, send_recv_total)
 }
 
 static int win32_openssh_recv_all(LIBSSH2_AGENT *agent,
-                                  void *buffer, size_t length,
+                                  void *buffer, const size_t length,
                                   size_t *send_recv_total)
 {
     WIN32_RECV_SEND_ALL(ReadFile, agent, buffer, length, send_recv_total)
@@ -640,15 +640,15 @@ static int agent_connect_unix(LIBSSH2_AGENT *agent)
     } while(0)
 
 static ssize_t agent_send_all(LIBSSH2_SEND_FUNC(func), libssh2_socket_t socket,
-                              const void *buffer, size_t length,
-                              int flags, void **abstract)
+                              const void *buffer, const size_t length,
+                              const int flags, void **abstract)
 {
     RECV_SEND_ALL(func, socket, SSH2_UNCONST(buffer), length, flags, abstract);
 }
 
 static ssize_t agent_recv_all(LIBSSH2_RECV_FUNC(func), libssh2_socket_t socket,
-                              void *buffer, size_t length,
-                              int flags, void **abstract)
+                              void *buffer, const size_t length,
+                              const int flags, void **abstract)
 {
     RECV_SEND_ALL(func, socket, buffer, length, flags, abstract);
 }
@@ -764,7 +764,7 @@ static struct {
 
 static int agent_sign(LIBSSH2_SESSION *session,
                       unsigned char **sig, size_t *sig_len,
-                      const unsigned char *data, size_t data_len,
+                      const unsigned char *data, const size_t data_len,
                       void **abstract)
 {
     LIBSSH2_AGENT *agent = (LIBSSH2_AGENT *)(*abstract);
@@ -1232,9 +1232,9 @@ int libssh2_agent_sign(LIBSSH2_AGENT *agent,
                        unsigned char **sig,
                        size_t *s_len,
                        const unsigned char *data,
-                       size_t d_len,
+                       const size_t d_len,
                        const char *method,
-                       unsigned int method_len)
+                       const unsigned int method_len)
 {
     void *abstract = agent;
     int rc;
