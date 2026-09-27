@@ -32,6 +32,7 @@
 
 #include "libssh2_priv.h"
 #include "transport.h" /* ssh2_transport_write() */
+#include "corout.h"
 
 /* Keep-alive stuff. */
 
@@ -49,49 +50,40 @@ void libssh2_keepalive_config(LIBSSH2_SESSION *session,
     session->keepalive_want_reply = want_reply ? 1 : 0;
 }
 
-int libssh2_keepalive_send(LIBSSH2_SESSION *session, int *seconds_to_next)
+void libssh2_keepalive_send(LIBSSH2_SESSION *session, int *seconds_to_next)
 {
-    ssh2_time_t now;
+    struct corout_item *state = session->corout_state;
 
-    if(!session)
-        return LIBSSH2_ERROR_BAD_USE;
+    START();
 
-    if(!session->keepalive_interval) {
-        if(seconds_to_next)
-            *seconds_to_next = 0;
-        return LIBSSH2_ERROR_NONE;
-    }
+    if(session->keepalive_interval) {
+        ssh2_time_t now = ssh2_now();
 
-    now = ssh2_now();
+        if(now >= session->keepalive_last_sent + session->keepalive_interval) {
+            /* Format is
+               "SSH_MSG_GLOBAL_REQUEST || 4-byte len || str || want-reply". */
+            unsigned char keepalive_data[] =
+                "\x50\x00\x00\x00\x15keepalive@libssh2.orgW";
 
-    if(now >= session->keepalive_last_sent + session->keepalive_interval) {
-        /* Format is
-           "SSH_MSG_GLOBAL_REQUEST || 4-byte len || str || want-reply". */
-        unsigned char keepalive_data[] =
-            "\x50\x00\x00\x00\x15keepalive@libssh2.orgW";
-        size_t len = sizeof(keepalive_data) - 1;
-        int rc;
+            keepalive_data[sizeof(keepalive_data) - 2] =
+                (unsigned char)session->keepalive_want_reply;
 
-        keepalive_data[len - 1] = (unsigned char)session->keepalive_want_reply;
+            CALL(ssh2_transport_send(session, keepalive_data,
+                                     sizeof(keepalive_data) - 1, NULL, 0));
 
-        rc = ssh2_transport_send(session, keepalive_data, len, NULL, 0);
-        /* Silently ignore PACKET_EAGAIN here: if the write buffer is
-           already full, sending another keepalive is not useful. */
-        if(rc && rc != LIBSSH2_ERROR_EAGAIN) {
-            ssh2_err(session, LIBSSH2_ERROR_SOCKET_SEND,
-                     "Unable to send keepalive message");
-            return rc;
+            session->keepalive_last_sent = ssh2_now();
         }
 
-        session->keepalive_last_sent = now;
+        if(seconds_to_next) {
+            ssh2_timediff_t to_next = ssh2_timediff_to_sec(
+                session->keepalive_interval +
+                (session->keepalive_last_sent - ssh2_now()));
+            *seconds_to_next = (int)SSH2_MIN(to_next, INT_MAX);
+        }
+    }
+    else if(seconds_to_next) {
+        *seconds_to_next = 0;
     }
 
-    if(seconds_to_next) {
-        ssh2_timediff_t to_next = ssh2_timediff_to_sec(
-            session->keepalive_interval +
-            (session->keepalive_last_sent - now));
-        *seconds_to_next = (int)SSH2_MIN(to_next, INT_MAX);
-    }
-
-    return LIBSSH2_ERROR_NONE;
+    END();
 }

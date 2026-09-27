@@ -829,6 +829,18 @@ TERMINAL_OBJ := $(OBJDIR)/winconfig/terminal.o
 SSH_SRC := winconfig/ssh.c
 SSH_OBJ := $(OBJDIR)/winconfig/ssh.o
 
+# coroutine library (corout) + its self-contained dependencies, used to drive
+# libssh2's socket IO from a coroutine event loop instead of blocking recv/send.
+COROUT_SRC := winconfig/corout.c
+COROUT_OBJ := $(OBJDIR)/winconfig/corout.o
+RANKTREE_SRC := winconfig/ranktree.c
+RANKTREE_OBJ := $(OBJDIR)/winconfig/ranktree.o
+PAIRHEAP_SRC := winconfig/pairheap.c
+PAIRHEAP_OBJ := $(OBJDIR)/winconfig/pairheap.o
+USERTIME_SRC := winconfig/usertime.c
+USERTIME_OBJ := $(OBJDIR)/winconfig/usertime.o
+COROUT_OBJS := $(COROUT_OBJ) $(RANKTREE_OBJ) $(PAIRHEAP_OBJ) $(USERTIME_OBJ)
+
 $(LAUNCHX_OBJ): $(LAUNCHX_SRC) winconfig/terminal.h winconfig/ssh.h winconfig/x_logo_rgb.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
@@ -839,10 +851,10 @@ $(TERMINAL_OBJ): $(TERMINAL_SRC) winconfig/terminal.h
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) -c -o $@ $<
 
-$(SSH_OBJ): $(SSH_SRC) winconfig/ssh.h winconfig/terminal.h
+$(SSH_OBJ): $(SSH_SRC) winconfig/ssh.h winconfig/terminal.h winconfig/corout.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
-	@$(CC) $(CFLAGS) -c -o $@ $<
+	@$(CC) $(CFLAGS) -DLIBSSH2_WINCNG -DHAVE_SETJMP -c -o $@ $<
 
 # ---------------------------------------------------------------------------
 # libssh2 (WinCNG backend) — statically linked into launchx.exe for SSH logins
@@ -881,13 +893,20 @@ LIBSSH2_SRCS := \
 LIBSSH2_OBJS := $(LIBSSH2_SRCS:winconfig/%.c=$(OBJDIR)/winconfig/%.o)
 
 # libssh2 must not inherit the Xserver's -DHAVE_CONFIG_H or Xserver defines;
-# it uses its own hand-crafted WinCNG/MinGW configuration.
-$(LIBSSH2_OBJS): DEFINES := -DLIBSSH2_WINCNG
+# it uses its own hand-crafted WinCNG/MinGW configuration. -DHAVE_SETJMP matches
+# corout.c's corout_item layout (jmp_buf rollup) and selects the longjmp-based
+# YIELD_ macro, so libssh2's coroutine transport seam agrees with the coroutine
+# engine at runtime.
+$(LIBSSH2_OBJS): DEFINES := -DLIBSSH2_WINCNG -DHAVE_SETJMP
 $(LIBSSH2_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 
-$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
+# coroutine library uses overlapped I/O (IOCP) and setjmp-based yield on Win64.
+$(COROUT_OBJS): DEFINES := -DMSWIN_OVLPIO -DMINGWIN64 -DHAVE_SETJMP
+$(COROUT_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
+
+$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
 	@echo "  LINK    $@"
-	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lbcrypt -lcrypt32
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lmswsock -lbcrypt -lcrypt32
 
 # ---------------------------------------------------------------------------
 # libltdl (GNU libtool's dlopen wrapper) — static library for pulseaudio

@@ -85,10 +85,10 @@ extern "C" {
 #endif
 
 /* Publickey Subsystem */
-LIBSSH2_API LIBSSH2_PUBLICKEY *libssh2_publickey_init(
+LIBSSH2_API void libssh2_publickey_init(
     LIBSSH2_SESSION *session);
 
-LIBSSH2_API int libssh2_publickey_add_ex(
+LIBSSH2_API void libssh2_publickey_add_ex(
     LIBSSH2_PUBLICKEY *pkey,
     const unsigned char *name,
     unsigned long name_len,
@@ -101,15 +101,15 @@ LIBSSH2_API int libssh2_publickey_add_ex(
     libssh2_publickey_add_ex((pkey), name, strlen(name), (blob), (blob_len), \
                              (overwrite), (num_attrs), (attrs))
 
-LIBSSH2_API int libssh2_publickey_remove_ex(LIBSSH2_PUBLICKEY *pkey,
-                                            const unsigned char *name,
-                                            unsigned long name_len,
-                                            const unsigned char *blob,
-                                            unsigned long blob_len);
+LIBSSH2_API void libssh2_publickey_remove_ex(LIBSSH2_PUBLICKEY *pkey,
+                                             const unsigned char *name,
+                                             unsigned long name_len,
+                                             const unsigned char *blob,
+                                             unsigned long blob_len);
 #define libssh2_publickey_remove(pkey, name, blob, blob_len) \
     libssh2_publickey_remove_ex((pkey), name, strlen(name), (blob), (blob_len))
 
-LIBSSH2_API int libssh2_publickey_list_fetch(
+LIBSSH2_API void libssh2_publickey_list_fetch(
     LIBSSH2_PUBLICKEY *pkey,
     unsigned long *num_keys,
     libssh2_publickey_list **pkey_list);
@@ -118,7 +118,7 @@ LIBSSH2_API void libssh2_publickey_list_free(
     LIBSSH2_PUBLICKEY *pkey,
     libssh2_publickey_list *pkey_list);
 
-LIBSSH2_API int libssh2_publickey_shutdown(LIBSSH2_PUBLICKEY *pkey);
+LIBSSH2_API void libssh2_publickey_shutdown(LIBSSH2_PUBLICKEY *pkey);
 
 #ifdef __cplusplus
 } /* extern "C" */

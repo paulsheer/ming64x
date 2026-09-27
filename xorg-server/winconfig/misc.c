@@ -149,61 +149,6 @@ int ssh2_wsa2errno(void)
 }
 #endif
 
-/*
- * Replacement for the standard recv, return -errno on failure.
- */
-ssize_t ssh2_recv(libssh2_socket_t socket, void *buffer, size_t length,
-                  int flags, void **abstract)
-{
-    ssize_t rc;
-
-    (void)abstract;
-
-    rc = SSH2_RECV_LOW(socket, buffer, length, flags);
-    if(rc < 0) {
-        int sockerr = SSH2_ERRNO();
-        /* Profiling tools that use SIGPROF can cause EINTR responses.
-           recv() does not modify its arguments when it returns EINTR,
-           but there may be data waiting, so the caller should try again */
-        if(sockerr == EINTR)
-            return -EAGAIN;
-        /* Sometimes the first recv() function call sets errno to ENOENT on
-           Solaris and HP-UX */
-        if(sockerr == ENOENT)
-            return -EAGAIN;
-        if(sockerr == EWOULDBLOCK)
-            return -EAGAIN;
-        return -sockerr;
-    }
-    return rc;
-}
-
-/*
- * Replacement for the standard send, return -errno on failure.
- */
-ssize_t ssh2_send(libssh2_socket_t socket,
-                  const void *buffer, size_t length,
-                  int flags, void **abstract)
-{
-    ssize_t rc;
-
-    (void)abstract;
-
-    rc = SSH2_SEND_LOW(socket, buffer, length, flags);
-    if(rc < 0) {
-        int sockerr = SSH2_ERRNO();
-        /* Profiling tools that use SIGPROF can cause EINTR responses.
-           send() is defined as not yet sending any data when it returns EINTR,
-           so the caller should try again */
-        if(sockerr == EINTR)
-            return -EAGAIN;
-        if(sockerr == EWOULDBLOCK)
-            return -EAGAIN;
-        return -sockerr;
-    }
-    return rc;
-}
-
 void ssh2_swap_bytes(unsigned char *buf, size_t len)
 {
 #if !defined(WORDS_BIGENDIAN) || !WORDS_BIGENDIAN

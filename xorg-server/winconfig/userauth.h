@@ -33,7 +33,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-int ssh2_userauth_publickey(
+void ssh2_userauth_publickey(
     LIBSSH2_SESSION *session,
     const char *username, size_t username_len,
     const unsigned char *pubkeydata, size_t pubkeydata_len,

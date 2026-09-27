@@ -100,6 +100,10 @@ struct _LIBSSH2_SFTP_HANDLE {
             size_t data_len;
             size_t data_left;
 
+            /* bytes copied into the caller's buffer so far during the current
+               sftp_read; survives coroutine yields. */
+            size_t bytes_in_buffer;
+
             char eof; /* we have read to the end */
         } file;
         struct ssh2_sftp_handle_dir_data {
@@ -117,6 +121,11 @@ struct _LIBSSH2_SFTP_HANDLE {
 
     /* list of outstanding packets sent to server */
     struct list_head packet_list;
+
+    /* coroutine result holders for the void-converted API */
+    ssize_t read_rc;
+    ssize_t write_rc;
+    int readdir_rc;
 };
 
 struct _LIBSSH2_SFTP {
@@ -151,15 +160,25 @@ struct _LIBSSH2_SFTP {
     uint32_t open_packet_len; /* 32-bit on the wire */
     size_t open_packet_sent;
     uint32_t open_request_id;
+    char open_file; /* LIBSSH2_SFTP_OPENFILE vs OPENDIR, survives yields */
 
     /* State variable used in sftp_read() */
     ssh2_NB_states read_state;
+    /* current pipeline chunk being sent/acked by sftp_read(); survives yields */
+    struct sftp_pipeline_chunk *read_chunk;
+    /* read-ahead window limit computed in sftp_read(); survives the
+       window-adjust yield */
+    size_t read_max_read_ahead;
 
     /* State variable used in sftp_packet_read() */
     ssh2_NB_states packet_state;
 
     /* State variable used in sftp_write() */
     ssh2_NB_states write_state;
+    /* current pipeline chunk and acked-byte tally for sftp_write(); survive
+       coroutine yields */
+    struct sftp_pipeline_chunk *write_chunk;
+    size_t write_acked;
 
     /* State variables used in sftp_fsync() */
     ssh2_NB_states fsync_state;
@@ -221,6 +240,11 @@ struct _LIBSSH2_SFTP {
     ssh2_NB_states symlink_state;
     unsigned char *symlink_packet;
     uint32_t symlink_request_id;
+
+    /* coroutine result holders for the void-converted API */
+    int packet_read_rc;              /* sftp_packet_read outcome (0/-1) */
+    LIBSSH2_SFTP_HANDLE *open_handle; /* result of sftp_open */
+    int rc;                          /* result of the simple int-return ops */
 };
 
 #endif /* LIBSSH2_SFTP_PRIV_H */

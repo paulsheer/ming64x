@@ -325,6 +325,18 @@ struct packet_requirev_state {
     ssh2_time_t start;
 };
 
+/* Coroutine state for ssh2_transport_read(). These locals are computed at the
+   top of the packet-collection loop and consumed after a READ_SOME() yield, so
+   they must live in the session (longjmp loses stack locals across a yield). */
+struct transport_read_state {
+    int blocksize;
+    int encrypted;
+    int etm;
+    unsigned int auth_len;
+    const struct mac_method *remote_mac;
+    ssize_t remainbuf;
+};
+
 struct kmdhgGPshakex_state {
     ssh2_NB_states state;
     unsigned char *e_packet;
@@ -346,6 +358,8 @@ struct kmdhgGPshakex_state {
     size_t f_value_len;
     size_t k_value_len;
     size_t h_sig_len;
+    ssh2_hash_alg hash_alg;     /* KEX hash algorithm across yields */
+    size_t digest_len;          /* KEX hash digest length across yields */
     struct packet_require_state req_state;
     ssh2_NB_states burn_state;
 };
@@ -362,7 +376,9 @@ struct key_exchange_state_low {
     unsigned char *data;
     size_t request_len;
     size_t data_len;
+    int group_order;            /* GEX modulus byte length across yields */
 #if LIBSSH2_ECDSA
+    ssh2_curve_type curve;      /* negotiated EC curve across yields */
     ssh2_ec_key *private_key;       /* SSH2 ecdh private key */
 #endif
     unsigned char *public_key_oct;  /* SSH2 ecdh public key octal value */
@@ -521,17 +537,22 @@ struct _LIBSSH2_CHANNEL {
     ssh2_NB_states adjust_state;
     unsigned char adjust_adjust[9];     /* packet_type(1) + channel(4) +
                                            adjustment(4) */
+    uint32_t adjust_adjustment;         /* combined adjustment across the send
+                                           yield */
 
     /* State variables used in libssh2_channel_read_ex() */
     ssh2_NB_states read_state;
 
     uint32_t read_local_id;
+    uint32_t read_adjustment;   /* window expansion across the adjust yield */
+    ssize_t read_bytes;     /* result of ssh2_channel_read (coroutine) */
 
     /* State variables used in libssh2_channel_write_ex() */
     ssh2_NB_states write_state;
     unsigned char write_packet[13];
     size_t write_packet_len;
     size_t write_bufwrite;
+    ssize_t write_bytes;    /* result of ssh2_channel_write (coroutine) */
 
     /* State variables used in libssh2_channel_close() */
     ssh2_NB_states close_state;
@@ -576,11 +597,13 @@ struct _LIBSSH2_LISTENER {
 
     int queue_size;
     int queue_maxsize;
+    LIBSSH2_CHANNEL *accepted_channel; /* result of channel_forward_accept() */
 
     /* State variables used in libssh2_channel_forward_cancel() */
     ssh2_NB_states chanFwdCncl_state;
     unsigned char *chanFwdCncl_data;
     size_t chanFwdCncl_data_len;
+    LIBSSH2_CHANNEL *chanFwdCncl_queued; /* queue cursor across the free yield */
 };
 #if defined(__clang__) && __clang_major__ >= 13
 #pragma clang diagnostic pop
@@ -644,6 +667,8 @@ struct transportpacket {
     size_t olen;            /* original size of the data we stored in
                                outbuf */
     size_t osent;           /* number of bytes already sent */
+    size_t osent_chunk;     /* size of the in-flight APPEND_BLOCK chunk that
+                               survives the WAIT_WRITE yield */
 };
 
 #if defined(__clang__) && __clang_major__ >= 13
@@ -693,6 +718,22 @@ struct flags {
     int sigpipe;     /* LIBSSH2_FLAG_SIGPIPE */
     int compress;    /* LIBSSH2_FLAG_COMPRESS */
     int quote_paths; /* LIBSSH2_FLAG_QUOTE_PATHS */
+};
+
+/* coroutine-library types (corout.h). Forward-declared here so the session can
+   carry them without dragging corout.h's socket typedefs/macros into every
+   translation unit. Only transport.c/session.c and the callers include
+   corout.h. */
+struct corout_item;
+struct socket;
+
+/* Callback data for the publickey sign function (userauth.c). Lifted into the
+   session so the values survive a coroutine yield. */
+struct privkey_info {
+    const char *filename;
+    const char *data;
+    size_t data_len;
+    const char *passphrase;
 };
 
 #if defined(__clang__) && __clang_major__ >= 13
@@ -794,6 +835,14 @@ struct _LIBSSH2_SESSION {
                                    when libssh2_session_handshake()
                                    is called */
 
+    /* Coroutine I/O seam: the transport layer reads/writes through this
+       coroutine socket instead of the raw socket_fd. socket_fd is retained
+       only for API compatibility (libssh2_session_socket_fd). corout_state
+       is the owning corout_item; every coroutine function re-derives its
+       local `state` from it. */
+    struct socket *corout_sock;
+    struct corout_item *corout_state;
+
     /* Error tracking */
     const char *err_msg;
     int err_code;
@@ -830,11 +879,14 @@ struct _LIBSSH2_SESSION {
 
     /* State variables used in libssh2_session_free() */
     ssh2_NB_states free_state;
+    LIBSSH2_CHANNEL *free_channel_cursor;
+    LIBSSH2_LISTENER *free_listener_cursor;
 
     /* State variables used in libssh2_session_disconnect_ex() */
     ssh2_NB_states disconnect_state;
     unsigned char disconnect_data[256 + 13];
     size_t disconnect_data_len;
+    size_t disconnect_lang_len;
 
     /* State variables used in ssh2_packet_add() */
     ssh2_NB_states readPack_state;
@@ -875,7 +927,15 @@ struct _LIBSSH2_SESSION {
     char *userauth_pblc_method;
     unsigned char *userauth_pblc_s;
     unsigned char *userauth_pblc_b;
+    unsigned char *userauth_pblc_pubkeydata;
+    int userauth_pblc_attempts;
     struct packet_requirev_state userauth_pblc_packet_requirev_state;
+
+    /* State variables used in libssh2_userauth_publickey_sk() */
+    LIBSSH2_PRIVKEY_SK userauth_sk_info;
+    unsigned char *userauth_sk_pubkeydata;
+    unsigned char *userauth_sk_tmp_publickeydata;
+    struct privkey_info userauth_privkey_info;
 
     /* State variables used in libssh2_userauth_keyboard_interactive_ex() */
     ssh2_NB_states userauth_kybd_state;
@@ -913,9 +973,11 @@ struct _LIBSSH2_SESSION {
     /* State variables used in libssh2_channel_forward_listen_ex() */
     ssh2_NB_states fwdLstn_state;
     unsigned char *fwdLstn_packet;
+    const char *fwdLstn_host;       /* resolved host across the requirev yield */
     uint32_t fwdLstn_host_len;
     uint32_t fwdLstn_packet_len;
     struct packet_requirev_state fwdLstn_packet_requirev_state;
+    LIBSSH2_LISTENER *fwdLstn_listener; /* result of channel_forward_listen() */
 
     /* State variables used in libssh2_publickey_init() */
     ssh2_NB_states pkeyInit_state;
@@ -931,16 +993,30 @@ struct _LIBSSH2_SESSION {
     ssh2_NB_states packAdd_state;
     LIBSSH2_CHANNEL *packAdd_channelp; /* keeper of the channel during EAGAIN
                                           states */
+    size_t packAdd_datalen;         /* truncated datalen that survives the
+                                          window-adjust yield */
+    unsigned char packAdd_reply[5]; /* CHANNEL_REQUEST want_reply failure
+                                       packet, survives the send yield */
+    int packAdd_rc;                 /* exit-status/exit-signal error, survives
+                                       the want_reply send yield */
     struct packet_queue_listener_state packAdd_Qlstn_state;
     struct packet_x11_open_state packAdd_x11open_state;
     struct packet_authagent_state packAdd_authagent_state;
+
+    /* State variables used in ssh2_transport_read() (coroutine) */
+    struct transport_read_state trs;
 
     /* State variables used in transport_fullpacket() */
     ssh2_NB_states fullpacket_state;
     int fullpacket_macstate;
     size_t fullpacket_payload_len;
-    int fullpacket_packet_type;
     uint32_t fullpacket_required_type;
+    uint32_t fullpacket_seq;    /* incoming packet seqno (captured before the
+                                   post-MAC increment, survives the
+                                   ssh2_packet_add() yield) */
+    unsigned char *fullpacket_data; /* owns the incoming payload across the
+                                   ssh2_packet_add() yield; packet.payload is
+                                   NULLed first so cleanup never double-frees */
 
     /* State variables used in libssh2_sftp_init() */
     ssh2_NB_states sftpInit_state;
@@ -962,6 +1038,8 @@ struct _LIBSSH2_SESSION {
     time_t scpRecv_mtime;
     time_t scpRecv_atime;
     LIBSSH2_CHANNEL *scpRecv_channel;
+    char *scpRecv_err_msg;   /* remote error message, survives the read yield */
+    size_t scpRecv_err_len;
 
     /* State variables used in libssh2_scp_send_ex() */
     ssh2_NB_states scpSend_state;
@@ -970,6 +1048,8 @@ struct _LIBSSH2_SESSION {
     unsigned char scpSend_response[SSH2_SCP_RESPONSE_BUFLEN];
     size_t scpSend_response_len;
     LIBSSH2_CHANNEL *scpSend_channel;
+    char *scpSend_err_msg;   /* remote error message, survives the read yield */
+    size_t scpSend_err_len;
 
     /* Keepalive variables used by keepalive.c. */
     ssh2_timediff_t keepalive_interval;
@@ -1010,10 +1090,10 @@ struct _LIBSSH2_SESSION {
 struct kex_method {
     const char *name;
 
-    /* Key exchange, populates session->* and returns 0 on success, non-0 on
-       error */
-    int (*exchange_keys)(LIBSSH2_SESSION *session,
-                         struct key_exchange_state_low *key_state);
+    /* Key exchange, populates session->*. Coroutine form: yields during I/O,
+       propagates errors via COROUT_EXIT(). */
+    void (*exchange_keys)(LIBSSH2_SESSION *session,
+                          struct key_exchange_state_low *key_state);
 
     void (*cleanup)(LIBSSH2_SESSION *session,
                     struct key_exchange_state_low *key_state);
@@ -1204,13 +1284,8 @@ void ssh2_deb_low(LIBSSH2_SESSION *session, int context,
 #define SSH_OPEN_UNKNOWN_CHANNELTYPE         3
 #define SSH_OPEN_RESOURCE_SHORTAGE           4
 
-ssize_t ssh2_recv(libssh2_socket_t socket, void *buffer,
-                  size_t length, int flags, void **abstract);
-ssize_t ssh2_send(libssh2_socket_t socket, const void *buffer,
-                  size_t length, int flags, void **abstract);
-
-int ssh2_kex_exchange(LIBSSH2_SESSION *session, int reexchange,
-                      struct key_exchange_state *key_state);
+void ssh2_kex_exchange(LIBSSH2_SESSION *session, int reexchange,
+                       struct key_exchange_state *key_state);
 
 const char *ssh2_kex_agree_instr(const char *haystack, size_t haystack_len,
                                  const char *needle, size_t needle_len);

@@ -41,36 +41,27 @@
 #include "packet.h"
 
 /*
- * Send a packet, encrypting it and adding a MAC code if necessary
- * Returns 0 on success, non-zero on failure.
+ * Send a packet, encrypting it and adding a MAC code if necessary.
  *
  * The data is provided as _two_ data areas that are combined by this
  * function.  The 'data' part is sent immediately before 'data2'. 'data2' can
  * be set to NULL (or data2_len to 0) to only use a single part.
  *
- * Returns LIBSSH2_ERROR_EAGAIN if it would block or if the whole packet was
- * not sent yet. If it does so, the caller should call this function again as
- * soon as it is likely that more data can be sent, and this function MUST
- * then be called with the same argument set (same data pointer and same
- * data_len) until ERROR_NONE or failure is returned.
- *
- * This function DOES NOT call ssh2_err() on any errors.
+ * Coroutine form: builds the packet into the session outbuf then flushes it
+ * through the socket write buffer, yielding as needed. On error it records the
+ * error with ssh2_err() and exits the coroutine (COROUT_ERROR).
  */
-int ssh2_transport_send(LIBSSH2_SESSION *session,
-                        const unsigned char *data, size_t data_len,
-                        const unsigned char *data2, size_t data2_len);
+void ssh2_transport_send(LIBSSH2_SESSION *session,
+                         const unsigned char *data, size_t data_len,
+                         const unsigned char *data2, size_t data2_len);
 
 /*
- * Collect a packet into the input brigade block only controls whether or not
- * to wait for a packet to start.
+ * Collect a packet into the input queue.
  *
- * Returns packet type added to input brigade (PACKET_NONE if nothing added),
- * or PACKET_FAIL on failure and PACKET_EAGAIN if it could not process a full
- * packet.
- *
- * This function reads the binary stream as specified in chapter 6 of RFC4253
- * "The Secure Shell (SSH) Transport Layer Protocol"
+ * Coroutine form: reads the binary stream (RFC4253 chapter 6) one buffered
+ * chunk at a time, yielding whenever more data is needed. On error it records
+ * the error with ssh2_err() and exits the coroutine (COROUT_ERROR).
  */
-int ssh2_transport_read(LIBSSH2_SESSION *session);
+void ssh2_transport_read(LIBSSH2_SESSION *session);
 
 #endif /* LIBSSH2_TRANSPORT_H */

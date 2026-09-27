@@ -38,6 +38,14 @@
 #include "userauth.h"
 #include "session.h"
 
+/* coroutine I/O seam: START/END/CALL. */
+#include "corout.h"
+/* corout.h leaks socket helper macros that would rewrite libssh2's own
+   ioctl/perror calls; keep only the coroutine macros. */
+#undef ioctl
+#undef perror
+#undef RETRY
+
 #if defined(SSH2_AGENT_BACKEND_WIN32_OPENSSH) || \
     defined(SSH2_AGENT_BACKEND_UNIX)
 #include <stdlib.h>  /* for getenv(), getenv_s(), _wgetenv_s() */
@@ -1190,26 +1198,28 @@ int libssh2_agent_get_identity(LIBSSH2_AGENT *agent,
  *
  * Returns 0 if succeeded, or a negative value for error.
  */
-int libssh2_agent_userauth(LIBSSH2_AGENT *agent,
-                           const char *username,
-                           struct libssh2_agent_publickey *identity)
+void libssh2_agent_userauth(LIBSSH2_AGENT *agent,
+                            const char *username,
+                            struct libssh2_agent_publickey *identity)
 {
+    struct corout_item *state = agent->session->corout_state;
     void *abstract = agent;
-    int rc;
+
+    START();
 
     if(agent->session->userauth_pblc_state == ssh2_NB_state_idle) {
         memset(&agent->transctx, 0, sizeof(agent->transctx));
         agent->identity = identity->node;
     }
 
-    BLOCK_ADJUST(rc, agent->session,
-                 ssh2_userauth_publickey(agent->session, username,
-                                         strlen(username),
-                                         identity->blob,
-                                         identity->blob_len,
-                                         agent_sign,
-                                         &abstract));
-    return rc;
+    CALL(ssh2_userauth_publickey(agent->session, username,
+                                 strlen(username),
+                                 identity->blob,
+                                 identity->blob_len,
+                                 agent_sign,
+                                 &abstract));
+
+    END();
 }
 
 /*

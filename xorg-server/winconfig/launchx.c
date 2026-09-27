@@ -485,6 +485,7 @@ struct options_ssh_login {
     char username[128];
     char password[128];
     char password_mask[128];
+    int x11_forwarding;
 };
 
 static void
@@ -504,6 +505,13 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
         sizeof(opt->password),
         "Password to authenticate with on the SSH server");
 
+    if (ssh_session_is_active(ssh))
+        nk_widget_disable_begin(ctx);
+    checkbox_option(ctx, "X11 forwarding", &opt->x11_forwarding,
+        "Enable X11 forwarding over the SSH connection so X11 clients on the\nremote host can connect back to this X server");
+    if (ssh_session_is_active(ssh))
+        nk_widget_disable_end(ctx);
+
     nk_layout_row_dynamic(ctx, 30, 1);
     if (ssh->display_error_pending) {
         nk_style_push_color(ctx, &ctx->style.text.color, nk_rgb(255, 0, 0));
@@ -520,7 +528,7 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
     }
     else if (button_option(ctx, "Connect")) {
         ssh_session_start(ssh, opt->host, opt->username, opt->password,
-            net->listeningport_sel);
+            net->listeningport_sel, opt->x11_forwarding);
         ssh_request_resize(ssh, term->ncols, term->nrows);
     }
 
@@ -1127,7 +1135,9 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     struct options_logging_extensions *logging_opt,
     struct options_audio *audio_opt)
 {
-    *ssh_opt = (struct options_ssh_login) {0};
+    *ssh_opt = (struct options_ssh_login) {
+        .x11_forwarding = 1,
+    };
 
     *net_opt = (struct options_network_and_access_control) {
         .ac_enabled = 0,
@@ -1319,6 +1329,7 @@ cf_build(struct cfentry *e,
 
     e[n++] = CF_STR("sshlogin", "sshconnectip", ssh->host);
     e[n++] = CF_STR("sshlogin", "loginusername", ssh->username);
+    e[n++] = CF_BOOL("sshlogin", "x11forwarding", ssh->x11_forwarding);
     /* login password is intentionally not persisted */
 
     e[n++] = CF_BOOL("networkingaccesscontrol", "disableaccesscontrol", net->ac_enabled);

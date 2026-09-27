@@ -39,60 +39,57 @@
  *
  * Always non-blocking.
  */
-int ssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
-                                       uint32_t adjustment,
-                                       unsigned char force,
-                                       unsigned int *store);
+void ssh2_channel_receive_window_adjust(LIBSSH2_CHANNEL *channel,
+                                        uint32_t adjustment,
+                                        unsigned char force,
+                                        unsigned int *store);
 
 /*
  * Flush data from one (or all) stream
- * Returns number of bytes flushed, or negative on failure
+ * Stores the number of bytes flushed in channel->flush_flush_bytes.
  */
-int ssh2_channel_flush(LIBSSH2_CHANNEL *channel, int streamid);
+void ssh2_channel_flush(LIBSSH2_CHANNEL *channel, int streamid);
 
 /*
  * Make sure a channel is closed, then remove the channel from the session
  * and free its resource(s)
- *
- * Returns 0 on success, negative on failure
  */
-int ssh2_channel_free(LIBSSH2_CHANNEL *channel);
+void ssh2_channel_free(LIBSSH2_CHANNEL *channel);
 
-int ssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, int ignore_mode);
+void ssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, int ignore_mode);
 
 /*
- * Send data to a channel
+ * Send data to a channel.  Stores the number of bytes written in
+ * channel->write_bytes.
  */
-ssize_t ssh2_channel_write(LIBSSH2_CHANNEL *channel, int stream_id,
-                           const unsigned char *buf, size_t buflen);
+void ssh2_channel_write(LIBSSH2_CHANNEL *channel, int stream_id,
+                        const unsigned char *buf, size_t buflen);
 
 /*
- * Establish a generic session channel
+ * Establish a generic session channel.  Stores the resulting channel in
+ * session->open_channel (NULL on failure).
  */
-LIBSSH2_CHANNEL *ssh2_channel_open(LIBSSH2_SESSION *session,
-                                   const char *channel_type,
-                                   uint32_t channel_type_len,
-                                   uint32_t window_size,
-                                   uint32_t packet_size,
-                                   const unsigned char *message,
-                                   size_t message_len);
+void ssh2_channel_open(LIBSSH2_SESSION *session,
+                       const char *channel_type,
+                       uint32_t channel_type_len,
+                       uint32_t window_size,
+                       uint32_t packet_size,
+                       const unsigned char *message,
+                       size_t message_len);
 
 /*
  * Primitive for libssh2_channel_(shell|exec|subsystem)
  */
-int ssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
-                                 const char *request, size_t request_len,
-                                 const char *message, size_t message_len);
+void ssh2_channel_process_startup(LIBSSH2_CHANNEL *channel,
+                                  const char *request, size_t request_len,
+                                  const char *message, size_t message_len);
 
 /*
- * Read data from a channel
- *
- * It is important to not return 0 until the currently read channel is
- * complete. If we read stuff from the wire but it was no payload data to fill
- * in the buffer with, we MUST make sure to return PACKET_EAGAIN.
+ * Read data from a channel.  Stores the number of bytes read in
+ * channel->read_bytes (0 on EOF/remote close).
  */
-ssize_t ssh2_channel_read(LIBSSH2_CHANNEL *channel, int stream_id,
-                          char *buf, size_t buflen);
+void ssh2_channel_read(LIBSSH2_CHANNEL *channel, int stream_id,
+                       char *buf, size_t buflen);
 
 uint32_t ssh2_channel_nextid(LIBSSH2_SESSION *session);
 
@@ -102,14 +99,12 @@ LIBSSH2_CHANNEL *ssh2_channel_locate(LIBSSH2_SESSION *session,
 size_t ssh2_channel_packet_data_len(LIBSSH2_CHANNEL *channel,
                                     int stream_id);
 
-int ssh2_channel_close(LIBSSH2_CHANNEL *channel);
+void ssh2_channel_close(LIBSSH2_CHANNEL *channel);
 
 /*
  * Stop listening on a remote port and free the listener
  * Toss out any pending (un-accept()ed) connections
- *
- * Return 0 on success, LIBSSH2_ERROR_EAGAIN if would block, -1 on error
  */
-int ssh2_channel_forward_cancel(LIBSSH2_LISTENER *listener);
+void ssh2_channel_forward_cancel(LIBSSH2_LISTENER *listener);
 
 #endif /* LIBSSH2_CHANNEL_H */

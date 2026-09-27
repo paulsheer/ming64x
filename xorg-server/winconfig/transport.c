@@ -43,6 +43,14 @@
 #include "transport.h"
 #include "mac.h"
 
+/* coroutine I/O seam: START/END/CALL/READ_SOME/APPEND_BLOCK/WAIT_WRITE. */
+#include "corout.h"
+/* corout.h leaks socket helper macros that would rewrite libssh2's own
+   ioctl/perror calls; keep only the coroutine macros. */
+#undef ioctl
+#undef perror
+#undef RETRY
+
 #ifdef LIBSSH2DEBUG
 #define UNPRINTABLE_CHAR '.'
 static void transport_debugdump(LIBSSH2_SESSION *session, const char *desc,
@@ -185,16 +193,24 @@ static int transport_decrypt(LIBSSH2_SESSION *session, unsigned char *source,
 /*
  * transport_fullpacket() gets called when a full packet has been received and
  * properly collected.
+ *
+ * Coroutine form: the MAC check, decrypt and decompress are pure CPU work; the
+ * only yield is inside ssh2_packet_add(). seq is captured into
+ * session->fullpacket_seq before the post-MAC increment so the value survives
+ * that yield. The payload is handed to ssh2_packet_add() through
+ * session->fullpacket_data and packet.payload is NULLed up front so session
+ * cleanup never double-frees it.
  */
-static int transport_fullpacket(LIBSSH2_SESSION *session,
-                                int encrypted /* 1 or 0 */)
+static void transport_fullpacket(LIBSSH2_SESSION *session, int encrypted)
 {
+    struct corout_item *state = session->corout_state;
     unsigned char macbuf[MAX_MACSIZE];
     struct transportpacket *p = &session->packet;
     int rc;
     int compressed;
     const struct mac_method *remote_mac = NULL;
-    uint32_t seq = session->remote.seqno;
+
+    START();
 
     memset(macbuf, '\0', sizeof(macbuf));
 
@@ -203,367 +219,311 @@ static int transport_fullpacket(LIBSSH2_SESSION *session,
         !CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_INTEGRATED_MAC)))
         remote_mac = session->remote.mac;
 
-    if(session->fullpacket_state == ssh2_NB_state_idle) {
-        session->fullpacket_macstate = SSH2_MAC_CONFIRMED;
-        session->fullpacket_payload_len = p->packet_length - 1;
+    session->fullpacket_macstate = SSH2_MAC_CONFIRMED;
+    session->fullpacket_payload_len = p->packet_length - 1;
 
-        if(encrypted && remote_mac) {
+    /* Capture the incoming seqno before the post-MAC increment below; it is
+       passed to ssh2_packet_add() (strict-KEX "first packet" check) after that
+       call may yield. */
+    session->fullpacket_seq = session->remote.seqno;
 
-            /* Calculate MAC hash */
-            int etm = remote_mac->etm;
-            size_t mac_len = remote_mac->mac_len;
-            if(etm)  /* store hash here */
-                remote_mac->hash(session, macbuf,
-                                 session->remote.seqno,
-                                 p->payload, p->total_num - mac_len,
-                                 NULL, 0,
-                                 &session->remote.mac_abstract);
-            else  /* store hash here */
-                remote_mac->hash(session, macbuf,
-                                 session->remote.seqno,
-                                 p->init, 5,
-                                 p->payload,
-                                 session->fullpacket_payload_len,
-                                 &session->remote.mac_abstract);
+    if(encrypted && remote_mac) {
 
-            /* Compare the calculated hash with the MAC we read from
-             * the network. The read one is at the end of the payload
-             * buffer. Note that 'payload_len' here is the packet_length
-             * field which includes the padding but not the MAC.
-             */
-            if(ssh2_timingsafe_bcmp(macbuf,
-                                    p->payload + p->total_num - mac_len,
-                                    mac_len)) {
-                ssh2_deb((session, LIBSSH2_TRACE_SOCKET, "Failed MAC check"));
-                session->fullpacket_macstate = SSH2_MAC_INVALID;
-            }
-            else if(etm) {
-                /* MAC was ok and we start by decrypting the first block that
-                   contains padding length since this allows us to decrypt
-                   all other blocks to the right location in memory
-                   avoiding moving a larger block of memory one byte. */
-                unsigned char first_block[MAX_BLOCKSIZE];
-                ssize_t decrypt_size;
-                unsigned char *decrypt_buffer;
-                int blocksize = session->remote.crypt->blocksize;
-
-                if(p->total_num < mac_len + 4 + (size_t)blocksize) {
-                    SSH2_SAFEFREE(session, p->payload);
-                    return LIBSSH2_ERROR_DECRYPT;
-                }
-                decrypt_size = (ssize_t)(p->total_num - mac_len - 4);
-
-                first_block[0] = 0;
-
-                rc = transport_decrypt(session, p->payload + 4,
-                                       first_block, blocksize, FIRST_BLOCK);
-                if(rc)
-                    return rc;
-
-                /* we need buffer for decrypt */
-                decrypt_buffer = SSH2_ALLOC(session, decrypt_size);
-                if(!decrypt_buffer) {
-                    SSH2_SAFEFREE(session, p->payload);
-                    return LIBSSH2_ERROR_ALLOC;
-                }
-
-                /* grab padding length and copy anything else
-                   into target buffer */
-                p->padding_length = first_block[0];
-
-                if(p->padding_length > p->packet_length - 1) {
-                    SSH2_FREE(session, decrypt_buffer);
-                    SSH2_SAFEFREE(session, p->payload);
-                    return LIBSSH2_ERROR_PROTO;
-                }
-
-                if(blocksize > 1)
-                    memcpy(decrypt_buffer, first_block + 1, blocksize - 1);
-
-                /* decrypt all other blocks packet */
-                if(blocksize < decrypt_size) {
-                    rc = transport_decrypt(session,
-                                           p->payload + blocksize + 4,
-                                           decrypt_buffer + blocksize - 1,
-                                           decrypt_size - blocksize,
-                                           LAST_BLOCK);
-                    if(rc) {
-                        SSH2_FREE(session, decrypt_buffer);
-                        return rc;
-                    }
-                }
-
-                /* replace encrypted payload with plain text payload */
-                SSH2_FREE(session, p->payload);
-                p->payload = decrypt_buffer;
-            }
-        }
-        else if(encrypted &&
-                CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET))
-            /* etm trim off padding byte from payload */
-            memmove(p->payload, &p->payload[1], p->packet_length - 1);
-
-        session->remote.seqno++;
-
-        /* ignore the padding */
-        session->fullpacket_payload_len -= p->padding_length;
-
-        /* Check for and deal with decompression */
-        compressed = session->local.comp &&
-                     session->local.comp->compress &&
-                     ((session->state & SSH2_STATE_AUTHENTICATED) ||
-                      session->local.comp->use_in_auth);
-
-        if(compressed && session->remote.comp_abstract) {
-            /*
-             * The buffer for the decompression (remote.comp_abstract) is
-             * initialised in time when it is needed so as long it is NULL we
-             * cannot decompress.
-             */
-
-            unsigned char *data = NULL;
-            size_t data_len = 0;
-            rc = session->remote.comp->decomp(session,
-                                              &data, &data_len,
-                                              LIBSSH2_PACKET_MAXDECOMP,
-                                              p->payload,
-                                              session->fullpacket_payload_len,
-                                              &session->remote.comp_abstract);
-            SSH2_SAFEFREE(session, p->payload);
-            if(rc)
-                return rc;
-
-            p->payload = data;
-            session->fullpacket_payload_len = data_len;
-        }
-
-        session->fullpacket_packet_type = p->payload[0];
-
-        transport_debugdump(session, "ssh2_transport_read() plain",
-                            p->payload, session->fullpacket_payload_len);
-
-        session->fullpacket_state = ssh2_NB_state_created;
-    }
-
-    if(session->fullpacket_state == ssh2_NB_state_created) {
-        rc = ssh2_packet_add(session, p->payload,
+        /* Calculate MAC hash */
+        int etm = remote_mac->etm;
+        size_t mac_len = remote_mac->mac_len;
+        if(etm)  /* store hash here */
+            remote_mac->hash(session, macbuf,
+                             session->remote.seqno,
+                             p->payload, p->total_num - mac_len,
+                             NULL, 0,
+                             &session->remote.mac_abstract);
+        else  /* store hash here */
+            remote_mac->hash(session, macbuf,
+                             session->remote.seqno,
+                             p->init, 5,
+                             p->payload,
                              session->fullpacket_payload_len,
-                             session->fullpacket_macstate, seq);
-        if(rc == LIBSSH2_ERROR_EAGAIN) {
-            /* ssh2_packet_add() queues the packet into session->packets before
-             * attempting follow-up work like key re-exchange. If EAGAIN occurs
-             * during that work, packAdd_state is reset to idle and the data is
-             * already owned by the packet queue. Clear p->payload to prevent
-             * double-free in session cleanup. */
-            if(session->packAdd_state == ssh2_NB_state_idle)
-                p->payload = NULL;
-            return rc;
+                             &session->remote.mac_abstract);
+
+        /* Compare the calculated hash with the MAC we read from
+         * the network. The read one is at the end of the payload
+         * buffer. Note that 'payload_len' here is the packet_length
+         * field which includes the padding but not the MAC.
+         */
+        if(ssh2_timingsafe_bcmp(macbuf,
+                                p->payload + p->total_num - mac_len,
+                                mac_len)) {
+            ssh2_deb((session, LIBSSH2_TRACE_SOCKET, "Failed MAC check"));
+            session->fullpacket_macstate = SSH2_MAC_INVALID;
         }
-        /* ssh2_packet_add() takes ownership of the payload on all non-EAGAIN
-         * paths, so clear the pointer */
-        p->payload = NULL;
-        if(rc) {
-            session->fullpacket_state = ssh2_NB_state_idle;
-            return rc;
+        else if(etm) {
+            /* MAC was ok and we start by decrypting the first block that
+               contains padding length since this allows us to decrypt
+               all other blocks to the right location in memory
+               avoiding moving a larger block of memory one byte. */
+            unsigned char first_block[MAX_BLOCKSIZE];
+            ssize_t decrypt_size;
+            unsigned char *decrypt_buffer;
+            int blocksize = session->remote.crypt->blocksize;
+
+            if(p->total_num < mac_len + 4 + (size_t)blocksize) {
+                SSH2_SAFEFREE(session, p->payload);
+                ssh2_err(session, LIBSSH2_ERROR_DECRYPT, "Failed MAC check");
+                COROUT_EXIT();
+            }
+            decrypt_size = (ssize_t)(p->total_num - mac_len - 4);
+
+            first_block[0] = 0;
+
+            rc = transport_decrypt(session, p->payload + 4,
+                                   first_block, blocksize, FIRST_BLOCK);
+            if(rc) {
+                ssh2_err(session, rc, "transport_decrypt failed");
+                COROUT_EXIT();
+            }
+
+            /* we need buffer for decrypt */
+            decrypt_buffer = SSH2_ALLOC(session, decrypt_size);
+            if(!decrypt_buffer) {
+                SSH2_SAFEFREE(session, p->payload);
+                ssh2_err(session, LIBSSH2_ERROR_ALLOC, "alloc decrypt buffer");
+                COROUT_EXIT();
+            }
+
+            /* grab padding length and copy anything else
+               into target buffer */
+            p->padding_length = first_block[0];
+
+            if(p->padding_length > p->packet_length - 1) {
+                SSH2_FREE(session, decrypt_buffer);
+                SSH2_SAFEFREE(session, p->payload);
+                ssh2_err(session, LIBSSH2_ERROR_PROTO, "padding length");
+                COROUT_EXIT();
+            }
+
+            if(blocksize > 1)
+                memcpy(decrypt_buffer, first_block + 1, blocksize - 1);
+
+            /* decrypt all other blocks packet */
+            if(blocksize < decrypt_size) {
+                rc = transport_decrypt(session,
+                                       p->payload + blocksize + 4,
+                                       decrypt_buffer + blocksize - 1,
+                                       decrypt_size - blocksize,
+                                       LAST_BLOCK);
+                if(rc) {
+                    SSH2_FREE(session, decrypt_buffer);
+                    ssh2_err(session, rc, "transport_decrypt failed");
+                    COROUT_EXIT();
+                }
+            }
+
+            /* replace encrypted payload with plain text payload */
+            SSH2_FREE(session, p->payload);
+            p->payload = decrypt_buffer;
         }
     }
+    else if(encrypted &&
+            CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET))
+        /* etm trim off padding byte from payload */
+        memmove(p->payload, &p->payload[1], p->packet_length - 1);
 
-    session->fullpacket_state = ssh2_NB_state_idle;
+    session->remote.seqno++;
+
+    /* ignore the padding */
+    session->fullpacket_payload_len -= p->padding_length;
+
+    /* Check for and deal with decompression */
+    compressed = session->local.comp &&
+                 session->local.comp->compress &&
+                 ((session->state & SSH2_STATE_AUTHENTICATED) ||
+                  session->local.comp->use_in_auth);
+
+    if(compressed && session->remote.comp_abstract) {
+        /*
+         * The buffer for the decompression (remote.comp_abstract) is
+         * initialised in time when it is needed so as long it is NULL we
+         * cannot decompress.
+         */
+
+        unsigned char *data = NULL;
+        size_t data_len = 0;
+        rc = session->remote.comp->decomp(session,
+                                          &data, &data_len,
+                                          LIBSSH2_PACKET_MAXDECOMP,
+                                          p->payload,
+                                          session->fullpacket_payload_len,
+                                          &session->remote.comp_abstract);
+        SSH2_SAFEFREE(session, p->payload);
+        if(rc) {
+            ssh2_err(session, rc, "decompression failed");
+            COROUT_EXIT();
+        }
+
+        p->payload = data;
+        session->fullpacket_payload_len = data_len;
+    }
+
+    state->stack[state->depth].fullpacket_packet_type = p->payload[0];
+
+    transport_debugdump(session, "ssh2_transport_read() plain",
+                        p->payload, session->fullpacket_payload_len);
+
+    /* Hand ownership of the payload to ssh2_packet_add() via a session field
+       and NULL the packet.payload pointer first. ssh2_packet_add() frees (on
+       error) or queues (on success) the data exactly once; packet.payload stays
+       NULL so session_free() can never double-free. */
+    session->fullpacket_data = p->payload;
+    p->payload = NULL;
+
+    CALL(ssh2_packet_add(session, session->fullpacket_data,
+                         session->fullpacket_payload_len,
+                         session->fullpacket_macstate,
+                         session->fullpacket_seq));
 
     if(session->kex_strict &&
-       session->fullpacket_packet_type == SSH_MSG_NEWKEYS)
+       state->stack[state->depth].fullpacket_packet_type == SSH_MSG_NEWKEYS)
         session->remote.seqno = 0;
 
-    return session->fullpacket_packet_type;
+    END();
 }
 
 /*
  * Collect a packet into the input queue.
  *
- * Returns packet type added to input queue (0 if nothing added), or a
- * negative error number.
- *
- * This function reads the binary stream as specified in chapter 6 of RFC4253
- * "The Secure Shell (SSH) Transport Layer Protocol"
- *
- * DOES NOT call ssh2_err() for ANY error case.
+ * Coroutine form: reads the binary stream (RFC4253 chapter 6) one buffered
+ * chunk at a time via READ_SOME, yielding whenever more data is needed. The
+ * per-packet locals that survive a READ_SOME yield (blocksize, encrypted, etm,
+ * auth_len, remote_mac) live in session->trs; everything else is recomputed
+ * after each yield. The finished packet is handed to transport_fullpacket(),
+ * which records the packet type in the per-frame fullpacket slot.
  */
-int ssh2_transport_read(LIBSSH2_SESSION *session)
+void ssh2_transport_read(LIBSSH2_SESSION *session)
 {
-    int rc;
+    struct corout_item *state = session->corout_state;
+    struct socket *sock = session->corout_sock;
     struct transportpacket *p = &session->packet;
-    ssize_t remainpack; /* how much there is left to add to the current payload
-                           package */
-    ssize_t remainbuf;  /* how much data there is remaining in the buffer to
-                           deal with before we should read more from the
-                           network */
-    ssize_t numbytes;   /* how much data to deal with from the buffer on this
-                           iteration through the loop */
-    ssize_t numdecrypt; /* number of bytes to decrypt this iteration */
-    unsigned char block[MAX_BLOCKSIZE]; /* working block buffer */
-    int blocksize;  /* minimum number of bytes we need before we can
-                       use them */
-    int encrypted = 1; /* whether the packet is encrypted or not */
-    int firstlast = FIRST_BLOCK; /* if the first or last block to decrypt */
-    unsigned int auth_len = 0; /* length of the authentication tag */
-    const struct mac_method *remote_mac = NULL; /* The remote MAC, if used */
+    int rc;
+    ssize_t remainpack;
+    ssize_t numbytes;
+    ssize_t numdecrypt;
+    ssize_t nread;
+    unsigned char block[MAX_BLOCKSIZE];
+    int firstlast;
 
-    block[4] = 0;
-
-    /* default clear the bit */
-    session->socket_block_directions &= ~LIBSSH2_SESSION_BLOCK_INBOUND;
+    START();
 
     /*
-     * All channels, systems, subsystems, etc eventually make it down here
-     * when looking for more incoming data. If a key exchange is going on
-     * (SSH2_STATE_EXCHANGING_KEYS bit is set) then the remote end
-     * ONLY sends key exchange related traffic. In non-blocking mode, there is
-     * a chance to break out of the kex_exchange function with an EAGAIN
-     * status, and never come back to it. If SSH2_STATE_EXCHANGING_KEYS is
-     * active, then we must redirect to the key exchange. However, if
-     * kex_exchange is active (as in it is the one that calls this execution
-     * of packet_read, then do not redirect, as that would be an infinite loop!
+     * All channels, systems, subsystems, etc eventually make it down here when
+     * looking for more incoming data. If a key exchange is going on
+     * (SSH2_STATE_EXCHANGING_KEYS bit is set) then the remote end ONLY sends
+     * key exchange related traffic. Redirect to the key exchange first, unless
+     * kex is the one that called us (which would loop forever).
      */
-
     if(session->state & SSH2_STATE_EXCHANGING_KEYS &&
        !(session->state & SSH2_STATE_KEX_ACTIVE)) {
-
-        /* Whoever wants a packet does not get anything until the key
-         * re-exchange is done!
-         */
         ssh2_deb((session, LIBSSH2_TRACE_TRANS, "Redirecting into the"
                   " key re-exchange from ssh2_transport_read()"));
-        rc = ssh2_kex_exchange(session, 1, &session->startup_key_state);
-        if(rc)
-            return rc;
+        CALL(ssh2_kex_exchange(session, 1, &session->startup_key_state));
     }
 
-    /*
-     * =============================== NOTE ===============================
-     * I know this is ugly and not a really good use of "goto", but
-     * this case statement would be even uglier to do it any other way
-     */
-    if(session->readPack_state == ssh2_NB_state_jump1) {
-        session->readPack_state = ssh2_NB_state_idle;
-        encrypted = session->readPack_encrypted;
-        goto ssh2_transport_read_point1;
-    }
+    for(;;) {
+        if(session->socket_state == SSH2_SOCKET_DISCONNECTED) {
+            ssh2_err(session, LIBSSH2_ERROR_SOCKET_DISCONNECT,
+                     "socket disconnect");
+            COROUT_EXIT();
+        }
 
-    do {
-        int etm;
-        if(session->socket_state == SSH2_SOCKET_DISCONNECTED)
-            return LIBSSH2_ERROR_SOCKET_DISCONNECT;
-
-        if(session->state & SSH2_STATE_NEWKEYS)
-            blocksize = session->remote.crypt->blocksize;
+        if(session->state & SSH2_STATE_NEWKEYS) {
+            session->trs.blocksize = session->remote.crypt->blocksize;
+            session->trs.encrypted = 1;
+        }
         else {
-            encrypted = 0;      /* not encrypted */
-            blocksize = 5;      /* not strictly true, but we can use 5 here to
-                                   make the checks below work fine still */
+            session->trs.encrypted = 0;
+            session->trs.blocksize = 5;
         }
 
-        if(encrypted) {
+        session->trs.auth_len = 0;
+        session->trs.remote_mac = NULL;
+        if(session->trs.encrypted) {
             if(CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET))
-                auth_len = session->remote.crypt->auth_len;
+                session->trs.auth_len = session->remote.crypt->auth_len;
             else
-                remote_mac = session->remote.mac;
+                session->trs.remote_mac = session->remote.mac;
         }
 
-        etm = encrypted && remote_mac ? remote_mac->etm : 0;
+        session->trs.etm = session->trs.encrypted && session->trs.remote_mac ?
+                           session->trs.remote_mac->etm : 0;
 
-        /* read/use a whole big chunk into a temporary area stored in
-           the LIBSSH2_SESSION struct. We decrypt data from that
-           buffer into the packet buffer so this temp one does not have
-           to be able to keep a whole SSH packet, be large enough
-           so that we can read big chunks from the network layer. */
-
-        /* how much data there is remaining in the buffer to deal with
-           before we should read more from the network */
-        remainbuf = p->writeidx - p->readidx;
+        /* how much data there is remaining in the buffer to deal with before
+           we should read more from the network */
+        session->trs.remainbuf = p->writeidx - p->readidx;
 
         /* if remainbuf turns negative we have a bad internal error */
-        assert(remainbuf >= 0);
+        assert(session->trs.remainbuf >= 0);
 
-        if(remainbuf < blocksize ||
+        if(session->trs.remainbuf < session->trs.blocksize ||
            (CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET) &&
-            (ssize_t)p->total_num > remainbuf)) {
-            /* If we have less than a blocksize left, it is too
-               little data to deal with, read more */
-            ssize_t nread;
+            (ssize_t)p->total_num > session->trs.remainbuf)) {
+            /* If we have less than a blocksize left, it is too little data to
+               deal with, read more */
 
-            /* move any remainder to the start of the buffer so
-               that we can do a full refill */
-            if(remainbuf) {
-                memmove(p->buf, &p->buf[p->readidx], remainbuf);
+            /* move any remainder to the start of the buffer so that we can do
+               a full refill */
+            if(session->trs.remainbuf) {
+                memmove(p->buf, &p->buf[p->readidx], session->trs.remainbuf);
                 p->readidx = 0;
-                p->writeidx = remainbuf;
+                p->writeidx = session->trs.remainbuf;
             }
             else /* nothing to move, zero the indexes */
                 p->readidx = p->writeidx = 0;
 
             /* now read a big chunk from the network into the temp buffer */
-            nread = SSH2_RECV(session, &p->buf[remainbuf],
-                              PACKETBUFSIZE - remainbuf,
-                              SSH2_SOCKET_RECV_FLAGS(session));
-            if(nread <= 0) {
-                /* check if this is due to EAGAIN and return the special
-                   return code if so, error out normally otherwise */
-                if(nread < 0 && nread == -EAGAIN) {
-                    session->socket_block_directions |=
-                        LIBSSH2_SESSION_BLOCK_INBOUND;
-                    return LIBSSH2_ERROR_EAGAIN;
-                }
-                ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                          "Error recving %ld bytes (got %ld)",
-                          (long)(PACKETBUFSIZE - remainbuf), (long)-nread));
-                return LIBSSH2_ERROR_SOCKET_RECV;
-            }
+            READ_SOME(sock, &p->buf[session->trs.remainbuf], PACKETBUFSIZE - session->trs.remainbuf,
+                      &nread);
             ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
                       "Recved %ld/%ld bytes to %p+%ld", (long)nread,
-                      (long)(PACKETBUFSIZE - remainbuf), (void *)p->buf,
-                      (long)remainbuf));
+                      (long)(PACKETBUFSIZE - session->trs.remainbuf), (void *)p->buf,
+                      (long)session->trs.remainbuf));
 
             transport_debugdump(session, "ssh2_transport_read() raw",
-                                &p->buf[remainbuf], nread);
+                                &p->buf[session->trs.remainbuf], nread);
             /* advance write pointer */
             p->writeidx += nread;
 
             /* update remainbuf counter */
-            remainbuf = p->writeidx - p->readidx;
+            session->trs.remainbuf = p->writeidx - p->readidx;
         }
 
         /* how much data to deal with from the buffer */
-        numbytes = remainbuf;
+        numbytes = session->trs.remainbuf;
 
         if(!p->total_num) {
-            size_t total_num; /* the number of bytes following the initial
-                                 (5 bytes) packet length and padding length
-                                 fields */
+            size_t total_num;
 
-            /* packet length is not encrypted in encode-then-mac mode
-               and we do not need to decrypt first block */
-            ssize_t required_size = etm ? 4 : blocksize;
+            /* packet length is not encrypted in encode-then-mac mode and we do
+               not need to decrypt first block */
+            ssize_t required_size = session->trs.etm ? 4 :
+                                    session->trs.blocksize;
 
-            /* No payload package area allocated yet. To know the
-               size of this payload, we need enough to decrypt the first
-               blocksize data. */
+            block[4] = 0;
 
+            /* No payload package area allocated yet. To know the size of this
+               payload, we need enough to decrypt the first blocksize data. */
             if(numbytes < required_size) {
-                /* we cannot act on anything less than blocksize, but this
-                   check is only done for the initial block since once we have
-                   got the start of a block we can in fact deal with fractions
-                 */
-                session->socket_block_directions |=
-                    LIBSSH2_SESSION_BLOCK_INBOUND;
-                return LIBSSH2_ERROR_EAGAIN;
+                /* we cannot act on anything less than blocksize, but this check
+                   is only done for the initial block since once we have got the
+                   start of a block we can in fact deal with fractions */
+                continue;
             }
 
-            if(etm) {
+            if(session->trs.etm) {
                 /* etm size field is not encrypted */
                 memcpy(block, &p->buf[p->readidx], 4);
                 memcpy(p->init, &p->buf[p->readidx], 4);
             }
-            else if(encrypted && session->remote.crypt->get_len) {
+            else if(session->trs.encrypted && session->remote.crypt->get_len) {
                 unsigned int len = 0;
                 unsigned char *ptr = NULL;
 
@@ -576,7 +536,9 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
                     p->total_num = 0; /* no packet buffer available */
                     if(p->payload)
                         SSH2_SAFEFREE(session, p->payload);
-                    return LIBSSH2_ERROR_DECRYPT;
+                    ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                             "get_len failed");
+                    COROUT_EXIT();
                 }
 
                 /* store size in buffers for use below */
@@ -587,86 +549,106 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
                 ssh2_store_u32(&ptr, len);
             }
             else {
-                if(encrypted) {
+                if(session->trs.encrypted) {
                     /* first decrypted block */
                     rc = transport_decrypt(session, &p->buf[p->readidx],
-                                           block, blocksize, FIRST_BLOCK);
-                    if(rc != LIBSSH2_ERROR_NONE)
-                        return rc;
+                                           block, session->trs.blocksize,
+                                           FIRST_BLOCK);
+                    if(rc != LIBSSH2_ERROR_NONE) {
+                        ssh2_err(session, rc, "transport_decrypt failed");
+                        COROUT_EXIT();
+                    }
                     /* Save the first 5 bytes of the decrypted package, to be
-                       used in the hash calculation later down.
-                       This is ignored in the INTEGRATED_MAC case. */
+                       used in the hash calculation later down. This is ignored
+                       in the INTEGRATED_MAC case. */
                     memcpy(p->init, block, 5);
                 }
                 else {
-                    /* the data is plain, copy it verbatim to
-                       the working block buffer */
-                    memcpy(block, &p->buf[p->readidx], blocksize);
+                    /* the data is plain, copy it verbatim to the working block
+                       buffer */
+                    memcpy(block, &p->buf[p->readidx],
+                           session->trs.blocksize);
                 }
 
                 /* advance the read pointer */
-                p->readidx += blocksize;
+                p->readidx += session->trs.blocksize;
 
-                /* we now have the initial blocksize bytes decrypted,
-                 * and we can extract packet and padding length from it
-                 */
+                /* we now have the initial blocksize bytes decrypted, and we can
+                   extract packet and padding length from it */
                 p->packet_length = ssh2_ntohu32(block);
             }
 
-            if(!encrypted ||
+            if(!session->trs.encrypted ||
                !CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET)) {
-                if(p->packet_length < 1)
-                    return LIBSSH2_ERROR_DECRYPT;
-                else if(p->packet_length > LIBSSH2_PACKET_MAXPAYLOAD)
-                    return LIBSSH2_ERROR_OUT_OF_BOUNDARY;
+                if(p->packet_length < 1) {
+                    ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                             "packet length too small");
+                    COROUT_EXIT();
+                }
+                else if(p->packet_length > LIBSSH2_PACKET_MAXPAYLOAD) {
+                    ssh2_err(session, LIBSSH2_ERROR_OUT_OF_BOUNDARY,
+                             "packet length too large");
+                    COROUT_EXIT();
+                }
 
-                if(etm) {
+                if(session->trs.etm) {
                     /* do not know what padding is until we decrypt the full
                        packet */
                     p->padding_length = 0;
 
-                    /* we collect entire undecrypted packet including the
-                       packet length field that we run MAC over */
+                    /* we collect entire undecrypted packet including the packet
+                       length field that we run MAC over */
                     p->packet_length = ssh2_ntohu32(block);
-                    total_num = 4 + p->packet_length + remote_mac->mac_len;
+                    total_num = 4 + p->packet_length +
+                                session->trs.remote_mac->mac_len;
                 }
                 else {
-                    /* padding_length has not been authenticated yet, but it
-                       is not actually used (except for the sanity check
+                    /* padding_length has not been authenticated yet, but it is
+                       not actually used (except for the sanity check
                        immediately following) until after the entire packet is
                        authenticated, so this is safe. */
                     p->padding_length = block[4];
-                    if(p->padding_length > p->packet_length - 1)
-                        return LIBSSH2_ERROR_DECRYPT;
+                    if(p->padding_length > p->packet_length - 1) {
+                        ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                                 "padding length");
+                        COROUT_EXIT();
+                    }
 
                     /* total_num is the number of bytes following the initial
                        (5 bytes) packet length and padding length fields */
                     total_num = p->packet_length - 1 +
-                        (encrypted && remote_mac ? remote_mac->mac_len : 0);
+                        (session->trs.encrypted && session->trs.remote_mac ?
+                         session->trs.remote_mac->mac_len : 0);
                 }
             }
             else {
-                /* advance the read pointer past size field if the packet
-                   length is not required for decryption */
+                /* advance the read pointer past size field if the packet length
+                   is not required for decryption */
 
                 /* add size field to be included in total packet size
-                 * calculation so it does not get dropped off on subsequent
-                 * partial reads
-                 */
+                   calculation so it does not get dropped off on subsequent
+                   partial reads */
                 total_num = 4;
 
                 p->packet_length = ssh2_ntohu32(block);
-                if(p->packet_length < 1)
-                    return LIBSSH2_ERROR_DECRYPT;
-                else if(p->packet_length > LIBSSH2_PACKET_MAXPAYLOAD)
-                    return LIBSSH2_ERROR_OUT_OF_BOUNDARY;
+                if(p->packet_length < 1) {
+                    ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                             "packet length too small");
+                    COROUT_EXIT();
+                }
+                else if(p->packet_length > LIBSSH2_PACKET_MAXPAYLOAD) {
+                    ssh2_err(session, LIBSSH2_ERROR_OUT_OF_BOUNDARY,
+                             "packet length too large");
+                    COROUT_EXIT();
+                }
 
                 /* total_num may include size field, however due to existing
-                 * logic it needs to be removed after the entire packet is read
+                   logic it needs to be removed after the entire packet is read
                  */
-
                 total_num += p->packet_length +
-                    (remote_mac ? remote_mac->mac_len : 0) + auth_len;
+                    (session->trs.remote_mac ?
+                     session->trs.remote_mac->mac_len : 0) +
+                    session->trs.auth_len;
 
                 /* do not know what padding is until we decrypt the full
                    packet */
@@ -675,61 +657,68 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
 
             /* RFC4253 section 6.1 Maximum Packet Length says:
              *
-             * "All implementations MUST be able to process
-             * packets with uncompressed payload length of 32768
-             * bytes or less and total packet size of 35000 bytes
-             * or less (including length, padding length, payload,
-             * padding, and MAC.)."
+             * "All implementations MUST be able to process packets with
+             * uncompressed payload length of 32768 bytes or less and total
+             * packet size of 35000 bytes or less (including length, padding
+             * length, payload, padding, and MAC.)."
              */
-            if(total_num > LIBSSH2_PACKET_MAXPAYLOAD || total_num == 0)
-                return LIBSSH2_ERROR_OUT_OF_BOUNDARY;
+            if(total_num > LIBSSH2_PACKET_MAXPAYLOAD || total_num == 0) {
+                ssh2_err(session, LIBSSH2_ERROR_OUT_OF_BOUNDARY,
+                         "packet too large");
+                COROUT_EXIT();
+            }
 
-            /* Get a packet handle put data into. We get one to
-               hold all data, including padding and MAC. */
+            /* Get a packet handle put data into. We get one to hold all data,
+               including padding and MAC. */
             p->payload = SSH2_ALLOC(session, total_num);
-            if(!p->payload)
-                return LIBSSH2_ERROR_ALLOC;
+            if(!p->payload) {
+                ssh2_err(session, LIBSSH2_ERROR_ALLOC,
+                         "alloc packet buffer");
+                COROUT_EXIT();
+            }
             p->total_num = total_num;
             /* init write pointer to start of payload buffer */
             p->wptr = p->payload;
 
-            if(!encrypted ||
+            if(!session->trs.encrypted ||
                !CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET)) {
-                if(!etm && blocksize > 5) {
-                    /* copy the data from index 5 to the end of
-                       the blocksize from the temporary buffer to
-                       the start of the decrypted buffer */
-                    if(blocksize - 5 <= (int)total_num) {
-                        memcpy(p->wptr, &block[5], blocksize - 5);
-                        p->wptr += blocksize - 5; /* advance write pointer */
+                if(!session->trs.etm && session->trs.blocksize > 5) {
+                    /* copy the data from index 5 to the end of the blocksize
+                       from the temporary buffer to the start of the decrypted
+                       buffer */
+                    if(session->trs.blocksize - 5 <= (int)total_num) {
+                        memcpy(p->wptr, &block[5],
+                               session->trs.blocksize - 5);
+                        p->wptr += session->trs.blocksize - 5;
                     }
                     else {
                         if(p->payload)
                             SSH2_SAFEFREE(session, p->payload);
-                        return LIBSSH2_ERROR_OUT_OF_BOUNDARY;
+                        ssh2_err(session, LIBSSH2_ERROR_OUT_OF_BOUNDARY,
+                                 "packet too large");
+                        COROUT_EXIT();
                     }
                 }
 
-                /* init the data_num field to the number of bytes of
-                   the package read so far */
+                /* init the data_num field to the number of bytes of the
+                   package read so far */
                 p->data_num = p->wptr - p->payload;
 
                 /* we already dealt with a blocksize worth of data */
-                if(!etm)
-                    numbytes -= blocksize;
+                if(!session->trs.etm)
+                    numbytes -= session->trs.blocksize;
             }
             else {
                 /* have not started reading payload yet */
                 p->data_num = 0;
 
                 /* we already dealt with packet size worth of data */
-                if(!encrypted)
+                if(!session->trs.encrypted)
                     numbytes -= 4;
             }
         }
 
-        /* how much there is left to add to the current payload
-           package */
+        /* how much there is left to add to the current payload package */
         remainpack = p->total_num - p->data_num;
 
         if(numbytes > remainpack)
@@ -737,13 +726,11 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
                particular packet, we limit this round to this packet only */
             numbytes = remainpack;
 
-        if(encrypted &&
+        if(session->trs.encrypted &&
            CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET)) {
             if(numbytes < remainpack) {
                 /* need a full packet before checking MAC */
-                session->socket_block_directions |=
-                    LIBSSH2_SESSION_BLOCK_INBOUND;
-                return LIBSSH2_ERROR_EAGAIN;
+                continue;
             }
 
             /* we have a full packet, now remove the size field from numbytes
@@ -752,21 +739,22 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
             p->total_num -= 4;
         }
 
-        if(encrypted && !etm) {
-            /* At the end of the incoming stream, there is a MAC,
-               and we do not want to decrypt that since we need it
-               "raw". We MUST however decrypt the padding data
-               since it is used for the hash later on. */
-            int skip = (remote_mac ? remote_mac->mac_len : 0) + auth_len;
+        if(session->trs.encrypted && !session->trs.etm) {
+            /* At the end of the incoming stream, there is a MAC, and we do not
+               want to decrypt that since we need it "raw". We MUST however
+               decrypt the padding data since it is used for the hash later on.
+             */
+            int skip = (session->trs.remote_mac ?
+                        session->trs.remote_mac->mac_len : 0) +
+                       session->trs.auth_len;
 
             if(CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_INTEGRATED_MAC))
                 /* This crypto method DOES need the MAC to go through
                    decryption so it can be authenticated. */
                 skip = 0;
 
-            /* if what we have plus numbytes is bigger than the
-               total minus the skip margin, we should lower the
-               amount to decrypt even more */
+            /* if what we have plus numbytes is bigger than the total minus the
+               skip margin, we should lower the amount to decrypt even more */
             if((p->data_num + numbytes) >= (p->total_num - skip)) {
                 /* decrypt the entire rest of the package */
                 numdecrypt = SSH2_MAX(0,
@@ -776,20 +764,20 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
             else {
                 ssize_t frac;
                 numdecrypt = numbytes;
-                frac = numdecrypt % blocksize;
+                frac = numdecrypt % session->trs.blocksize;
                 if(frac) {
-                    /* not an aligned amount of blocks, align it by reducing
-                       the number of bytes processed this loop */
+                    /* not an aligned amount of blocks, align it by reducing the
+                       number of bytes processed this loop */
                     numdecrypt -= frac;
-                    /* and make it no unencrypted data
-                       after it */
+                    /* and make it no unencrypted data after it */
                     numbytes = 0;
                 }
                 if(CRYPT_FLAG_R(session, SSH2_CRYPT_FLAG_INTEGRATED_MAC)) {
                     /* Make sure that we save enough bytes to make the last
                        block large enough to hold the entire integrated MAC */
                     numdecrypt = SSH2_MIN(numdecrypt,
-                        (int)(p->total_num - skip - blocksize - p->data_num));
+                        (int)(p->total_num - skip - session->trs.blocksize -
+                              p->data_num));
                     numbytes = 0;
                 }
                 firstlast = MIDDLE_BLOCK;
@@ -811,7 +799,9 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
                                                &session->remote.crypt_abstract,
                                                0)) {
                     p->total_num = 0; /* no packet buffer available */
-                    return LIBSSH2_ERROR_DECRYPT;
+                    ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                             "crypt failed");
+                    COROUT_EXIT();
                 }
 
                 memcpy(p->wptr, &p->buf[p->readidx], numbytes);
@@ -821,14 +811,17 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
                 p->readidx += 4;
 
                 /* include auth tag in bytes decrypted */
-                numdecrypt += auth_len;
+                numdecrypt += session->trs.auth_len;
 
                 /* set padding now that the packet has been verified and
                    decrypted */
                 p->padding_length = p->wptr[0];
 
-                if(p->padding_length > p->packet_length - 1)
-                    return LIBSSH2_ERROR_DECRYPT;
+                if(p->padding_length > p->packet_length - 1) {
+                    ssh2_err(session, LIBSSH2_ERROR_DECRYPT,
+                             "padding length");
+                    COROUT_EXIT();
+                }
             }
             else {
                 rc = transport_decrypt(session, &p->buf[p->readidx], p->wptr,
@@ -836,7 +829,8 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
 
                 if(rc != LIBSSH2_ERROR_NONE) {
                     p->total_num = 0; /* no packet buffer available */
-                    return rc;
+                    ssh2_err(session, rc, "transport_decrypt failed");
+                    COROUT_EXIT();
                 }
             }
 
@@ -851,8 +845,8 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
             numbytes -= numdecrypt;
         }
 
-        /* if there are bytes to copy that are not decrypted,
-           copy them as-is to the target buffer */
+        /* if there are bytes to copy that are not decrypted, copy them as-is
+           to the target buffer */
         if(numbytes > 0) {
 
             if((size_t)numbytes <= (p->total_num - (p->wptr - p->payload)))
@@ -860,7 +854,9 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
             else {
                 if(p->payload)
                     SSH2_SAFEFREE(session, p->payload);
-                return LIBSSH2_ERROR_OUT_OF_BOUNDARY;
+                ssh2_err(session, LIBSSH2_ERROR_OUT_OF_BOUNDARY,
+                         "packet too large");
+                COROUT_EXIT();
             }
 
             /* advance the read pointer */
@@ -871,129 +867,40 @@ int ssh2_transport_read(LIBSSH2_SESSION *session)
             p->data_num += numbytes;
         }
 
-        /* now check how much data there is left to read to finish the
-           current packet */
+        /* now check how much data there is left to read to finish the current
+           packet */
         remainpack = p->total_num - p->data_num;
 
         if(!remainpack) {
             /* we have a full packet */
-ssh2_transport_read_point1:
-            rc = transport_fullpacket(session, encrypted);
-            if(rc == LIBSSH2_ERROR_EAGAIN) {
-
-                if(session->packAdd_state != ssh2_NB_state_idle) {
-                    /* transport_fullpacket() only returns LIBSSH2_ERROR_EAGAIN
-                     * if ssh2_packet_add() returns LIBSSH2_ERROR_EAGAIN. If
-                     * that returns LIBSSH2_ERROR_EAGAIN but the packAdd_state
-                     * is idle, then the packet has been added to the brigade,
-                     * but some immediate action that was taken based on the
-                     * packet type (such as key re-exchange) is not yet
-                     * complete.  Clear the way for a new packet to be read
-                     * in.
-                     */
-                    session->readPack_encrypted = encrypted;
-                    session->readPack_state = ssh2_NB_state_jump1;
-                }
-
-                return rc;
-            }
+            CALL(transport_fullpacket(session, session->trs.encrypted));
 
             p->total_num = 0; /* no packet buffer available */
 
-            return rc;
+            break;
         }
-    } while(1); /* loop */
-
-    return LIBSSH2_ERROR_SOCKET_RECV; /* we never reach this point */
-}
-
-static int transport_send_existing(LIBSSH2_SESSION *session,
-                                   const unsigned char *data,
-                                   size_t data_len, ssize_t *ret)
-{
-    ssize_t rc;
-    ssize_t length;
-    struct transportpacket *p = &session->packet;
-
-    if(!p->olen) {
-        *ret = 0;
-        return LIBSSH2_ERROR_NONE;
     }
 
-    /* send as much as possible of the existing packet */
-    if(data != p->odata || data_len != p->olen) {
-        /* When we are about to complete the sending of a packet, it is vital
-           that the caller does not try to send a new/different packet since
-           we do not add this one up until the previous one has been sent. To
-           make the caller really notice his/hers flaw, we return error for
-           this case */
-        ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                  "Address is different, returning EAGAIN"));
-        return LIBSSH2_ERROR_EAGAIN;
-    }
-
-    *ret = 1; /* set to make our parent return */
-
-    /* number of bytes left to send */
-    length = p->ototal_num - p->osent;
-
-    rc = SSH2_SEND(session, &p->outbuf[p->osent], length,
-                   SSH2_SOCKET_SEND_FLAGS(session));
-    if(rc < 0)
-        ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                  "Error sending %ld bytes: %ld", (long)length, (long)-rc));
-    else {
-        ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                  "Sent %ld/%ld bytes at %p+%lu", (long)rc, (long)length,
-                  (void *)p->outbuf, (unsigned long)p->osent));
-        transport_debugdump(session, "ssh2_transport_send()",
-                            &p->outbuf[p->osent], rc);
-    }
-
-    if(rc == length) {
-        /* the remainder of the package was sent */
-        p->ototal_num = 0;
-        p->olen = 0;
-        /* we leave *ret set so that the parent returns as we MUST return back
-           a send success now, so that we do not risk sending EAGAIN later
-           which then would confuse the parent function */
-        return LIBSSH2_ERROR_NONE;
-    }
-    else if(rc < 0) {
-        /* nothing was sent */
-        if(rc != -EAGAIN)
-            /* send failure! */
-            return LIBSSH2_ERROR_SOCKET_SEND;
-
-        session->socket_block_directions |= LIBSSH2_SESSION_BLOCK_OUTBOUND;
-        return LIBSSH2_ERROR_EAGAIN;
-    }
-
-    p->osent += rc; /* we sent away this much data */
-
-    return rc < length ? LIBSSH2_ERROR_EAGAIN : LIBSSH2_ERROR_NONE;
+    END();
 }
 
 /*
- * Send a packet, encrypting it and adding a MAC code if necessary
- * Returns 0 on success, non-zero on failure.
+ * Send a packet, encrypting it and adding a MAC code if necessary.
  *
- * The data is provided as _two_ data areas that are combined by this
- * function.  The 'data' part is sent immediately before 'data2'. 'data2' may
- * be set to NULL to only use a single part.
- *
- * Returns LIBSSH2_ERROR_EAGAIN if it would block or if the whole packet was
- * not sent yet. If it does so, the caller should call this function again as
- * soon as it is likely that more data can be sent, and this function MUST
- * then be called with the same argument set (same data pointer and same
- * data_len) until ERROR_NONE or failure is returned.
- *
- * This function DOES NOT call ssh2_err() on any errors.
+ * Coroutine form: the packet is built into p->outbuf as pure CPU work (no
+ * yields), then flushed through the socket write buffer in APPEND_BLOCK +
+ * WAIT_WRITE chunks. Progress lives in p->osent/p->ototal_num so it survives
+ * the WAIT_WRITE yields; the caller re-invokes this function with the same
+ * arguments and the resume label lands inside the flush loop, skipping the
+ * build. Errors are recorded with ssh2_err() and propagated via COROUT_EXIT().
  */
-int ssh2_transport_send(LIBSSH2_SESSION *session,
-                        const unsigned char *data, size_t data_len,
-                        const unsigned char *data2, size_t data2_len)
+void ssh2_transport_send(LIBSSH2_SESSION *session,
+                         const unsigned char *data, size_t data_len,
+                         const unsigned char *data2, size_t data2_len)
 {
+    struct corout_item *state = session->corout_state;
+    struct socket *sock = session->corout_sock;
+    struct transportpacket *p = &session->packet;
     int blocksize =
         (session->state & SSH2_STATE_NEWKEYS) ?
         session->local.crypt->blocksize : 8;
@@ -1004,17 +911,15 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
     int rand_max;
     int seed = data[0]; /* FIXME: make this random */
 #endif
-    struct transportpacket *p = &session->packet;
     int encrypted;
     int compressed;
     int etm;
-    ssize_t ret;
     int rc;
-    const unsigned char *orgdata = data;
     const struct mac_method *local_mac = NULL;
     unsigned int auth_len = 0;
-    size_t orgdata_len = data_len;
     size_t crypt_offset, etm_crypt_offset;
+
+    START();
 
     transport_debugdump(session, "ssh2_transport_send() plain",
                         data, data_len);
@@ -1022,42 +927,16 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
         transport_debugdump(session, "ssh2_transport_send() plain2",
                             data2, data2_len);
 
-    /* Finish flushing any partially-sent packet BEFORE redirecting into a key
-     * re-exchange. A packet already in transmission can only be completed by
-     * a transport_send call with that same packet (transport_send_existing()
-     * rejects a different data pointer with EAGAIN). If rekey runs first,
-     * a packet caught mid-send when rekey starts can never be flushed and
-     * the session deadlocks. RFC 4253 7.1 requires completing the in-flight
-     * packet; only NEW packets are withheld, which the rekey redirect (reached
-     * only once nothing is pending) still does.
-     *
-     * transport_send_existing() only sanity-checks data and data_len, not
-     * data2/data2_len.
-     */
-    rc = transport_send_existing(session, data, data_len, &ret);
-    if(rc)
-        return rc;
-
-    session->socket_block_directions &= ~LIBSSH2_SESSION_BLOCK_OUTBOUND;
-
-    if(ret)
-        /* set by transport_send_existing() if data was sent */
-        return rc;
-
     /*
-     * If the last read operation was interrupted in the middle of a key
-     * exchange, we must complete that key exchange before writing further
-     * *new* data. See the similar block in ssh2_transport_read().
+     * If a key exchange is in progress, complete it before sending any new
+     * packets (see the equivalent block in ssh2_transport_read()). kex that
+     * called us has SSH2_STATE_KEX_ACTIVE set so it will not loop.
      */
     if(session->state & SSH2_STATE_EXCHANGING_KEYS &&
        !(session->state & SSH2_STATE_KEX_ACTIVE)) {
-        /* Do not write any new packets if we are still in the middle of a key
-         * exchange. */
         ssh2_deb((session, LIBSSH2_TRACE_TRANS, "Redirecting into the"
                   " key re-exchange from ssh2_transport_send()"));
-        rc = ssh2_kex_exchange(session, 1, &session->startup_key_state);
-        if(rc)
-            return rc;
+        CALL(ssh2_kex_exchange(session, 1, &session->startup_key_state));
     }
 
     encrypted = (session->state & SSH2_STATE_NEWKEYS) ? 1 : 0;
@@ -1087,8 +966,10 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
                                        &p->outbuf[5], &dest_len,
                                        data, data_len,
                                        &session->local.comp_abstract);
-        if(rc)
-            return rc; /* compression failure */
+        if(rc) {
+            ssh2_err(session, rc, "compression failure");
+            COROUT_EXIT();
+        }
 
         if(data2 && data2_len) {
             /* compress directly to the target buffer right after where the
@@ -1103,16 +984,20 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
         }
         else
             dest2_len = 0;
-        if(rc)
-            return rc; /* compression failure */
+        if(rc) {
+            ssh2_err(session, rc, "compression failure");
+            COROUT_EXIT();
+        }
 
         data_len = dest_len + dest2_len; /* use the combined length */
     }
     else {
-        if((data_len + data2_len) >= (MAX_SSH_PACKET_LEN - 0x100))
+        if((data_len + data2_len) >= (MAX_SSH_PACKET_LEN - 0x100)) {
             /* too large packet, return error for this until we make this
                function split it up and send multiple SSH packets */
-            return LIBSSH2_ERROR_INVAL;
+            ssh2_err(session, LIBSSH2_ERROR_INVAL, "packet too large");
+            COROUT_EXIT();
+        }
 
         /* copy the payload data */
         memcpy(&p->outbuf[5], data, data_len);
@@ -1175,9 +1060,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
     p->outbuf[4] = (unsigned char)padding_length;
 
     /* fill the padding area with random junk */
-    if(ssh2_random(p->outbuf + 5 + data_len, padding_length))
-        return ssh2_err(session, LIBSSH2_ERROR_RANDGEN,
-                        "Unable to get random bytes for packet padding");
+    if(ssh2_random(p->outbuf + 5 + data_len, padding_length)) {
+        ssh2_err(session, LIBSSH2_ERROR_RANDGEN,
+                 "Unable to get random bytes for packet padding");
+        COROUT_EXIT();
+    }
 
     if(encrypted) {
         size_t i;
@@ -1193,9 +1080,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
             if(local_mac->hash(session, p->outbuf + packet_length,
                                session->local.seqno, p->outbuf,
                                packet_length, NULL, 0,
-                               &session->local.mac_abstract))
-                return ssh2_err(session, LIBSSH2_ERROR_MAC_FAILURE,
-                                "Failed to calculate MAC");
+                               &session->local.mac_abstract)) {
+                ssh2_err(session, LIBSSH2_ERROR_MAC_FAILURE,
+                         "Failed to calculate MAC");
+                COROUT_EXIT();
+            }
         }
 
         if(CRYPT_FLAG_L(session, SSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET)) {
@@ -1204,8 +1093,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
                                            p->outbuf,
                                            packet_length,
                                            &session->local.crypt_abstract,
-                                           0))
-                return LIBSSH2_ERROR_ENCRYPT;
+                                           0)) {
+                ssh2_err(session, LIBSSH2_ERROR_ENCRYPT,
+                         "encryption failure");
+                COROUT_EXIT();
+            }
         }
         else {
             /* Encrypt the whole packet data, one block size at a time.
@@ -1242,8 +1134,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
                           (unsigned long)(i + bsize - 1)));
                 if(session->local.crypt->crypt(session, 0, ptr, bsize,
                                                &session->local.crypt_abstract,
-                                               firstlast))
-                    return LIBSSH2_ERROR_ENCRYPT; /* encryption failure */
+                                               firstlast)) {
+                    ssh2_err(session, LIBSSH2_ERROR_ENCRYPT,
+                             "encryption failure");
+                    COROUT_EXIT();
+                }
             }
 
             /* Call crypt() one last time so it can be filled in with the
@@ -1256,8 +1151,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
                                                &p->outbuf[packet_length],
                                                authlen,
                                                &session->local.crypt_abstract,
-                                               LAST_BLOCK))
-                    return LIBSSH2_ERROR_ENCRYPT; /* encryption failure */
+                                               LAST_BLOCK)) {
+                    ssh2_err(session, LIBSSH2_ERROR_ENCRYPT,
+                             "encryption failure");
+                    COROUT_EXIT();
+                }
             }
         }
 
@@ -1268,9 +1166,11 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
         if(etm && local_mac->hash(session, p->outbuf + packet_length,
                                   session->local.seqno, p->outbuf,
                                   packet_length, NULL, 0,
-                                  &session->local.mac_abstract))
-            return ssh2_err(session, LIBSSH2_ERROR_MAC_FAILURE,
-                            "Failed to calculate MAC");
+                                  &session->local.mac_abstract)) {
+            ssh2_err(session, LIBSSH2_ERROR_MAC_FAILURE,
+                     "Failed to calculate MAC");
+            COROUT_EXIT();
+        }
     }
 
     session->local.seqno++;
@@ -1278,35 +1178,25 @@ int ssh2_transport_send(LIBSSH2_SESSION *session,
     if(session->kex_strict && data[0] == SSH_MSG_NEWKEYS)
         session->local.seqno = 0;
 
-    ret = SSH2_SEND(session, p->outbuf, total_length,
-                    SSH2_SOCKET_SEND_FLAGS(session));
-    if(ret < 0)
-        ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                  "Error sending %ld bytes: %ld",
-                  (long)total_length, (long)-ret));
-    else {
-        ssh2_deb((session, LIBSSH2_TRACE_SOCKET,
-                  "Sent %ld/%ld bytes at %p",
-                  (long)ret, (long)total_length, (void *)p->outbuf));
-        transport_debugdump(session, "ssh2_transport_send()", p->outbuf, ret);
+    transport_debugdump(session, "ssh2_transport_send()", p->outbuf,
+                        total_length);
+
+    /* Flush the whole packet through the fixed socket write buffer. Progress
+       lives in p->osent/p->ototal_num so it survives the WAIT_WRITE yields;
+       on resume the START() switch jumps straight back into this loop and the
+       (deterministic) build above is skipped, so the ciphertext is written
+       exactly once. */
+    p->ototal_num = total_length;
+    p->osent = 0;
+    while(p->osent < (size_t)p->ototal_num) {
+        p->osent_chunk = (size_t)SSH2_MIN(
+            (ssize_t)(p->ototal_num - (ssize_t)p->osent),
+            (ssize_t)(sock->s->bufwr->alloced - sock->s->bufwr->avail));
+        APPEND_BLOCK(sock, &p->outbuf[p->osent], p->osent_chunk);
+        WAIT_WRITE(sock);
+        p->osent += p->osent_chunk;
     }
+    p->ototal_num = 0;
 
-    if(ret != total_length) {
-        if(ret >= 0 || ret == -EAGAIN) {
-            /* the whole packet could not be sent, save the rest */
-            session->socket_block_directions |= LIBSSH2_SESSION_BLOCK_OUTBOUND;
-            p->odata = orgdata;
-            p->olen = orgdata_len;
-            p->osent = ret <= 0 ? 0 : ret;
-            p->ototal_num = total_length;
-            return LIBSSH2_ERROR_EAGAIN;
-        }
-        return LIBSSH2_ERROR_SOCKET_SEND;
-    }
-
-    /* the whole thing got sent away */
-    p->odata = NULL;
-    p->olen = 0;
-
-    return LIBSSH2_ERROR_NONE; /* all is good */
+    END();
 }

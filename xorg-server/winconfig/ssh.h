@@ -25,11 +25,13 @@ typedef struct ssh_session {
     char username[128];
     char password[128];
     int display_number;              /* :0 .. :12, set before start */
+    int x11_forwarding;              /* 1 = request X11 forwarding on start */
     char display_error[256];         /* DISPLAY setup error text for the UI */
     volatile LONG display_error_pending;  /* 1 = display_error is valid */
 
     HANDLE thread;
     volatile LONG running;
+    volatile HANDLE iocp_handle;    /* worker's IOCP; UI thread posts wakeups */
 
     byteq in;                       /* channel -> terminal (UTF-8 bytes) */
     byteq out;                      /* terminal -> channel (keystrokes) */
@@ -56,7 +58,8 @@ typedef struct ssh_session {
 void ssh_session_init(ssh_session *s);
 void ssh_session_free(ssh_session *s);
 void ssh_session_start(ssh_session *s, const char *host,
-    const char *username, const char *password, int display_number);
+    const char *username, const char *password, int display_number,
+    int x11_forwarding);
 void ssh_session_stop(ssh_session *s);
 int  ssh_session_is_active(const ssh_session *s);
 void ssh_pump(ssh_session *s, struct terminal *t);

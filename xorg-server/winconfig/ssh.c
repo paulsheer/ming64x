@@ -1,20 +1,55 @@
 #include "ssh.h"
 
+#include <assert.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 
-#include "libssh2.h"
+#include "libssh2_priv.h"
+#include "transport.h"
+#include "channel.h"
+
 #include "terminal.h"
 
-#define SSH_PORT       "22"
+/* coroutine I/O seam: START/END/CALL/WAIT_CONNECT/WAIT_WRITE/READ_SOME etc. */
+#include "corout.h"
+/* corout.h leaks socket helper macros that would rewrite libssh2's own
+   ioctl/perror calls; keep only the coroutine macros. */
+#undef ioctl
+#undef perror
+#undef RETRY
+
+/* Like the CALL macro, but a hard error (COROUT_EXIT) anywhere in the callee jumps to
+   ssh_run's own cleanup label instead of unwinding out of the coroutine. This
+   keeps the session-free cleanup reachable on every error path while staying
+   inside the START/END switch (CALL cannot be used after END()). */
+#define CALL_SOFT(f) \
+    do { \
+        state->stack[state->depth].line_no = __LINE__; \
+        state->stack[state->depth + 1].line_no = 0; \
+    case __LINE__: \
+        state->depth++; \
+        state->result = COROUT_NULL; \
+        f; \
+        state->depth--; \
+        if (state->result == COROUT_YIELD) \
+            return; \
+        if (state->result == COROUT_ERROR) \
+            goto out; \
+    } while(0)
+
 #define SSH_IN_CAP     (64 * 1024)
 #define SSH_OUT_CAP    (16 * 1024)
-#define SSH_IO_TIMEOUT 200   /* ms; bounds each blocking libssh2 call */
-#define SSH_CONNECT_TIMEOUT 15000  /* ms; handshake/auth/channel-open */
+#define SSH_POLL_MS    50     /* ms; idle poll interval for the worker */
 #define SSH_SEND_CHUNK 8192
+
+/* X11 forwarding relay (SSH x11 channel <-> local VcXsrv socket) */
+#define X11_MAX         1024
+#define X11_POLL_MS     2000
+#define X11_SIG         1
+#define X11_FORWARD_DISPLAY 10   /* remote DISPLAY number we request (screen 0) */
 
 /* ---- byte queue ---- */
 
@@ -354,145 +389,294 @@ hostkey_verify(ssh_session *s, LIBSSH2_SESSION *session)
     return 0;
 }
 
-/* Write the local endpoint IP address of sock as text (IPv4 dotted-quad
-   or IPv6).  Returns 0 on success, nonzero if the address can't be fetched. */
-static int
-get_local_ip(ssh_session *s, SOCKET sock, char *out, size_t outsz)
+static void
+ssh_report_error(ssh_session *s, LIBSSH2_SESSION *session, const char *stage)
 {
-    struct sockaddr_storage ss;
-    int len = sizeof ss;
+    char *errmsg = NULL;
+    int errlen = 0;
+    int err = libssh2_session_last_error(session, &errmsg, &errlen, 0);
+    char line[512];
 
-    if (outsz == 0)
-        return -1;
-    out[0] = '\0';
-
-    if (getsockname(sock, (struct sockaddr *)&ss, &len) != 0) {
-        int err = WSAGetLastError();
-        set_display_error(s, "Could not determine local IP (WSA error %d)",
-            err);
-        return -1;
-    }
-
-    if (ss.ss_family == AF_INET) {
-        struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
-        if (!inet_ntop(AF_INET, &sin->sin_addr, out, outsz)) {
-            set_display_error(s, "Could not format local IP address");
-            return -1;
-        }
-        return 0;
-    }
-    if (ss.ss_family == AF_INET6) {
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ss;
-        if (!inet_ntop(AF_INET6, &sin6->sin6_addr, out, outsz)) {
-            set_display_error(s, "Could not format local IP address");
-            return -1;
-        }
-        return 0;
-    }
-    set_display_error(s, "Unsupported address family %d", (int)ss.ss_family);
-    return -1;
+    snprintf(line, sizeof line, "%s: failed (%d: %.*s)\r\n",
+        stage, err, errlen, errmsg ? errmsg : "");
+    ssh_report(s, line);
+    set_display_error(s, "%s failed (%d: %.*s)",
+        stage, err, errlen, errmsg ? errmsg : "");
 }
 
-static DWORD WINAPI
-ssh_worker(LPVOID arg)
+struct ssh_ctx;
+
+/* One forwarded X11 connection. The VcXsrv socket is owned by x11_runner (a
+   pure corout.h coroutine); the LIBSSH2 x11 channel is owned and serviced by
+   ssh_run (the only coroutine permitted to touch libssh2). Data crosses the
+   two buffers. All relay progress lives here so it survives both coroutines'
+   yields. */
+typedef struct x11_conn {
+    LIBSSH2_CHANNEL *channel;
+    struct socket *xsock;
+    int display_number;             /* VcXsrv display :0..:12 */
+    struct ssh_ctx *ctx;            /* ssh_run's user_data (signal target) */
+
+    int rd_want;
+    int wr_n;
+    struct buffer *relay_buf;       /* held (ref++) across a channel write/read */
+    int ssh_ops;
+    int chan_done;                  /* ssh_run freed the channel */
+    int rd_space;
+    int wr_data;
+    int sock_done;                  /* runner exited */
+} x11_conn;
+
+/* Per-connection state that must survive a coroutine yield. corout_step()
+   re-enters ssh_run() fresh on every resume, so any value held in a C local of
+   ssh_run() is reset after each YIELD_. Everything that carries progress
+   across a yield (the libssh2 session/channel/socket pointers and the relay
+   buffers/counters) lives here instead, in the worker's own stack frame which
+   longjmp does not unwind. */
+struct ssh_ctx {
+    ssh_session *s;
+    LIBSSH2_SESSION *session;
+    LIBSSH2_CHANNEL *channel;
+    struct socket *sock;
+    const char *stage;
+    LIBSSH2_SESSION *tofree;    /* session held across the free's own yields */
+
+    /* outbound chunk being written (partial writes span yields) */
+    unsigned char wr_buf[SSH_SEND_CHUNK];
+    size_t wr_n;        /* bytes loaded into wr_buf */
+    size_t wr_off;      /* bytes of wr_buf already written */
+
+    /* inbound read target (buflen must stay stable across the read's yield) */
+    char rd_buf[SSH_SEND_CHUNK];
+    size_t rd_want;
+
+    /* one-shot setup values: CALL_SOFT re-evaluates its argument on resume, so
+       these must live in ctx rather than in a C local of ssh_run() */
+    char disp[80];      /* DISPLAY string built before setenv */
+    int pty_w, pty_h;   /* pty dimensions built before request_pty */
+
+    /* active forwarded X11 connections (serviced round-robin) */
+    struct x11_conn *x11[X11_MAX];
+    int x11_rr;
+    struct x11_conn *x11_cur;
+};
+
+/* Relay one forwarded X11 connection: VcXsrv socket <-> SSH x11 channel. Owns
+   the VcXsrv socket (pure corout.h I/O); the channel is serviced by ssh_run.
+   Data crosses the two buffers. The runner is always timer-wakeable while idle
+   so ssh_run's corout_signal can interrupt it (e.g. to notice chan_done). */
+static void
+x11_runner(struct corout_item *state, void *user_data, const struct sockevent *ev)
 {
-    ssh_session *s = (ssh_session*)arg;
-    LIBSSH2_SESSION *session = NULL;
-    LIBSSH2_CHANNEL *channel = NULL;
-    struct addrinfo hints, *res = NULL, *ai;
-    SOCKET sock = INVALID_SOCKET;
-    char buf[8192];
-    unsigned char obuf[8192];
+    x11_conn *x = (x11_conn *)user_data;
+    struct ssh_ctx *ctx = x->ctx;
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
+    START();
 
-    if (getaddrinfo(s->host, SSH_PORT, &hints, &res) != 0) {
+    x->xsock = corout_socket_client_alloc(state->o, COROUT_SOCKET_TYPE_TCP,
+                                          0, NULL, "127.0.0.1");
+    if (!x->xsock)
+        COROUT_EXIT();
+    corout_socket_link(state, x->xsock);
+    corout_no_delay(x->xsock);
+    {
+        int timeout = 0, cerr = 0;
+        WAIT_CONNECT(6000, &timeout, &cerr, x->xsock,
+                     6000 + x->display_number, "127.0.0.1");
+        if (timeout || cerr)
+            COROUT_EXIT();
+    }
+
+    for (;;) {
+        if (x->chan_done || !x->xsock->s)
+            break;
+
+        x->wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
+        assert(x->wr_data >= 0);
+        x->rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
+        assert(x->rd_space >= 0);
+
+        int can_read = x->rd_space || x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail;
+
+        if (can_read && x->wr_data) {
+            corout_readwrite(x->xsock);
+        } else if (x->wr_data) {
+            corout_write(x->xsock);
+        } else if (can_read) {
+            corout_read(x->xsock);
+        } else {
+            corout_clear(x->xsock); /* no-op on Windows */
+        }
+
+        corout_wait_wakeable(state, X11_POLL_MS);
+        YIELD_();
+
+        if (x->chan_done || !x->xsock->s)
+            break;
+
+        int work_done =
+            (x->rd_space != x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail) ||
+            (x->wr_data != x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written);
+        if (work_done)
+            corout_signal(state->o, ctx, X11_SIG);
+    }
+
+    END();
+}
+
+static void
+x11_runner_free(void *user_data)
+{
+    x11_conn *x = (x11_conn *)user_data;
+    if (x->xsock)
+        corout_socket_free(x->xsock);
+    x->xsock = NULL;
+    x->sock_done = 1;
+}
+
+/* Invoked (via SSH2_X11_OPEN) when the server opens an x11 channel. Runs on
+   ssh_run's coroutine stack, so it must not call any libssh2 function (that
+   would corrupt the shared stack[]). It only records the channel and spawns
+   the relay coroutine; ssh_run services the channel later. */
+static void
+x11_open_cb(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
+            const char *shost, int sport, void **abstract)
+{
+    struct ssh_ctx *ctx = (struct ssh_ctx *)*abstract;
+    struct x11_conn *x;
+    int i;
+
+    (void)shost;
+    (void)sport;
+
+    for (i = 0; i < X11_MAX; i++)
+        if (!ctx->x11[i])
+            break;
+    if (i == X11_MAX)
+        return;         /* no slot; channel stays linked until session free */
+
+    x = (struct x11_conn *)malloc(sizeof *x);
+    if (!x)
+        return;
+    memset(x, 0, sizeof *x);
+
+    x->channel = channel;
+    x->display_number = ctx->s->display_number;
+    x->ctx = ctx;
+    ctx->x11[i] = x;
+
+    corout_add(session->corout_state->o, x11_runner, x11_runner_free, x);
+}
+
+/* The SSH connection as a coroutine: connects, negotiates, authenticates,
+   opens a shell channel, then relays bytes between the byte queues and the
+   channel for as long as s->running stays set. On any terminal error it frees
+   the session (which closes and frees all channels) and terminates. */
+static void
+ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
+{
+    struct ssh_ctx *ctx = (struct ssh_ctx *)user_data;
+    ssh_session *s = ctx->s;
+
+    START();
+
+    ctx->sock = corout_socket_client_alloc(state->o, COROUT_SOCKET_TYPE_TCP, 0,
+                                           NULL, s->host);
+    if (!ctx->sock) {
         ssh_report(s, "connect: host lookup failed\r\n");
         set_display_error(s, "Could not resolve host \"%s\"", s->host);
         goto out;
     }
-
-    for (ai = res; ai; ai = ai->ai_next) {
-        sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (sock == INVALID_SOCKET)
-            continue;
-        if (connect(sock, ai->ai_addr, (int)ai->ai_addrlen) == 0)
-            break;
-        closesocket(sock);
-        sock = INVALID_SOCKET;
+    corout_socket_link(state, ctx->sock);
+    s->iocp_handle = corout_iocp_handle(state->o);
+    {
+        int timeout = 0, cerr = 0;
+        WAIT_CONNECT(CONNECT_DEFAULT_TIME, &timeout, &cerr, ctx->sock, 22,
+                     s->host);
+        if (timeout) {
+            ssh_report(s, "connect: connection timed out\r\n");
+            set_display_error(s, "Could not connect to \"%s\"", s->host);
+            goto out;
+        }
+        if (cerr) {
+            ssh_report(s, "connect: connection failed\r\n");
+            set_display_error(s, "Could not connect to \"%s\"", s->host);
+            goto out;
+        }
     }
-    freeaddrinfo(res);
 
-    if (sock == INVALID_SOCKET) {
-        ssh_report(s, "connect: connection failed\r\n");
-        set_display_error(s, "Could not connect to \"%s\"", s->host);
-        goto out;
-    }
-
-    session = libssh2_session_init();
-    if (!session) {
+    ctx->session = libssh2_session_init();
+    if (!ctx->session) {
         ssh_report(s, "session: init failed\r\n");
         goto out;
     }
-    libssh2_session_set_timeout(session, SSH_CONNECT_TIMEOUT);
+    ctx->session->corout_state = state;
+    ctx->session->corout_sock = ctx->sock;
+    ctx->session->abstract = ctx;   /* x11_open_cb reads it back via *abstract */
+    if (s->x11_forwarding)
+        libssh2_session_callback_set(ctx->session, LIBSSH2_CALLBACK_X11,
+                                     (void *)x11_open_cb);
 
-    if (libssh2_session_handshake(session, sock) != 0) {
-        char *errmsg = NULL;
-        int errlen = 0;
-        int err = libssh2_session_last_error(session, &errmsg, &errlen, 0);
-        char line[256];
-        snprintf(line, sizeof line,
-            "session: handshake failed (%d: %.*s)\r\n",
-            err, errlen, errmsg ? errmsg : "");
-        ssh_report(s, line);
-        set_display_error(s, "SSH handshake failed (%d: %.*s)",
-            err, errlen, errmsg ? errmsg : "");
+    ctx->stage = "handshake";
+    libssh2_session_set_last_error(ctx->session, 0, NULL);
+    CALL_SOFT(libssh2_session_handshake(ctx->session));
+    if (libssh2_session_last_errno(ctx->session))
         goto out;
-    }
-
-    if (!hostkey_verify(s, session))
+    if (!hostkey_verify(s, ctx->session))
         goto out;
 
-    if (libssh2_userauth_password(session, s->username, s->password) != 0) {
-        char *errmsg = NULL;
-        int errlen = 0;
-        int err = libssh2_session_last_error(session, &errmsg, &errlen, 0);
-        char line[256];
-        snprintf(line, sizeof line,
-            "auth: password rejected (%d: %.*s)\r\n",
-            err, errlen, errmsg ? errmsg : "");
-        ssh_report(s, line);
-        set_display_error(s, "Authentication failed (%d: %.*s)",
-            err, errlen, errmsg ? errmsg : "");
+    ctx->stage = "authentication";
+    libssh2_session_set_last_error(ctx->session, 0, NULL);
+    CALL_SOFT(libssh2_userauth_password(ctx->session, s->username,
+        s->password));
+    if (libssh2_session_last_errno(ctx->session))
         goto out;
-    }
 
-    channel = libssh2_channel_open_session(session);
-    if (!channel) {
+    ctx->stage = "channel open";
+    libssh2_session_set_last_error(ctx->session, 0, NULL);
+    CALL_SOFT(libssh2_channel_open_session(ctx->session));
+    if (libssh2_session_last_errno(ctx->session))
+        goto out;
+    ctx->channel = ctx->session->open_channel;
+    if (!ctx->channel) {
         ssh_report(s, "channel: open failed\r\n");
         goto out;
     }
 
-    {
+    if (s->x11_forwarding) {
+        /* Ask the server to forward X11 connections back over this session.
+           auth_cookie is NULL so libssh2 generates a random cookie; this only
+           reaches VcXsrv when it runs with access control disabled (-ac). A
+           denied x11-req is fatal here (COROUT_EXIT unwinds to `out`). */
+        ctx->stage = "x11 forwarding";
+        libssh2_session_set_last_error(ctx->session, 0, NULL);
+        CALL_SOFT(libssh2_channel_x11_req_ex(ctx->channel, 0, NULL, NULL, 0));
+        ctx->stage = "channel open";    /* restore for the pty/shell steps */
+
+        snprintf(ctx->disp, sizeof ctx->disp, "127.0.0.1:%d.0",
+            X11_FORWARD_DISPLAY);
+        libssh2_session_set_last_error(ctx->session, 0, NULL);
+        CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
+            ctx->disp, (unsigned int)strlen(ctx->disp)));
+        if (libssh2_session_last_errno(ctx->session))
+            set_display_error(s, "Could not set DISPLAY (libssh2 error %d)",
+                libssh2_session_last_errno(ctx->session));
+    } else {
+        union sockaddr_in4in6 la;
         char lip[64];
-        int gip = get_local_ip(s, sock, lip, sizeof lip);
-        if (gip != 0) {
-            /* get_local_ip already recorded the reason in s->display_error */
+
+        if (corout_socket_local_addr(ctx->sock, &la) == 0) {
+            inaddr_str(&la, lip, NULL);
+            snprintf(ctx->disp, sizeof ctx->disp, "%s:%d.0", lip,
+                s->display_number);
+            libssh2_session_set_last_error(ctx->session, 0, NULL);
+            CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
+                ctx->disp, (unsigned int)strlen(ctx->disp)));
+            if (libssh2_session_last_errno(ctx->session))
+                set_display_error(s, "Could not set DISPLAY (libssh2 error %d)",
+                    libssh2_session_last_errno(ctx->session));
         } else {
-            char disp[80];
-            int rc;
-            snprintf(disp, sizeof disp, "%s:%d.0", lip, s->display_number);
-            rc = libssh2_channel_setenv_ex(channel, "DISPLAY", 7, disp,
-                (unsigned int)strlen(disp));
-            if (rc == LIBSSH2_ERROR_CHANNEL_REQUEST_DENIED)
-                set_display_error(s, "DISPLAY rejected by server "
-                    "(add 'AcceptEnv DISPLAY' to sshd_config)");
-            else if (rc != 0)
-                set_display_error(s, "Could not set DISPLAY "
-                    "(libssh2 error %d)", rc);
+            set_display_error(s, "Could not determine local IP address");
         }
     }
 
@@ -512,74 +696,221 @@ ssh_worker(LPVOID arg)
 #endif
             0                   /* TTY_OP_END */
         };
-        int w = s->resize_cols > 0 ? s->resize_cols : 80;
-        int h = s->resize_rows > 0 ? s->resize_rows : 24;
+        ctx->pty_w = s->resize_cols > 0 ? s->resize_cols : 80;
+        ctx->pty_h = s->resize_rows > 0 ? s->resize_rows : 24;
 
-        if (libssh2_channel_request_pty_ex(channel, "xterm", 5,
-                (const char *)raw_modes, sizeof raw_modes,
-                w, h, 0, 0) != 0 ||
-            libssh2_channel_shell(channel) != 0) {
-            ssh_report(s, "channel: pty/shell failed\r\n");
+        libssh2_session_set_last_error(ctx->session, 0, NULL);
+        CALL_SOFT(libssh2_channel_request_pty_ex(ctx->channel, "xterm", 5,
+            (const char *)raw_modes, sizeof raw_modes, ctx->pty_w, ctx->pty_h,
+            0, 0));
+        if (libssh2_session_last_errno(ctx->session)) {
+            ssh_report(s, "channel: pty request failed\r\n");
+            set_display_error(s, "Could not start remote shell");
+            goto out;
+        }
+        libssh2_session_set_last_error(ctx->session, 0, NULL);
+        CALL_SOFT(libssh2_channel_shell(ctx->channel));
+        if (libssh2_session_last_errno(ctx->session)) {
+            ssh_report(s, "channel: shell failed\r\n");
             set_display_error(s, "Could not start remote shell");
             goto out;
         }
     }
 
     ssh_report(s, "connected\r\n");
+    ctx->stage = "connection";
+    ctx->wr_n = 0;
+    ctx->wr_off = 0;
 
-    libssh2_session_set_timeout(session, SSH_IO_TIMEOUT);
+    for (;;) {
+        if (!s->running)
+            break;
 
-    while (s->running) {
-        size_t n = byteq_pop(&s->out, obuf, sizeof obuf);
-        if (n > 0) {
-            size_t off = 0;
-            while (off < n && s->running) {
-                ssize_t w = libssh2_channel_write(channel,
-                    (const char*)obuf + off, n - off);
-                if (w > 0) {
-                    off += (size_t)w;
-                } else if (w == LIBSSH2_ERROR_EAGAIN ||
-                           w == LIBSSH2_ERROR_TIMEOUT) {
-                    /* session timeout (200 ms) paces the retry */
-                } else {
-                    break;
+        /* ---- X11 forwarding: service one forwarded connection (round-robin) ---- */
+        if (s->x11_forwarding) {
+            for (ctx->x11_rr = 0; ctx->x11_rr < X11_MAX; ctx->x11_rr++) {
+                if (!(ctx->x11_cur = ctx->x11[ctx->x11_rr]))
+                    continue;
+    
+                /* 1. both sides finished: drop the connection */
+                if (ctx->x11_cur->chan_done && ctx->x11_cur->sock_done) {
+                    free(ctx->x11_cur);
+                    ctx->x11[ctx->x11_rr] = NULL;
+                    continue;
                 }
+    
+                /* 2. runner exited or VcXsrv socket gone: close the channel */
+                if (ctx->x11_cur->sock_done || !ctx->x11_cur->xsock->s) {
+                    if (ctx->x11_cur->channel) {
+                        CALL_SOFT(libssh2_channel_free(ctx->x11_cur->channel));
+                        ctx->x11_cur->channel = NULL;
+                    }
+                    ctx->x11_cur->chan_done = 1;
+                    continue;
+                }
+    
+                /* 3. remote closed: close channel, wake runner to exit */
+                if (!ctx->x11_cur->channel ||
+                            ctx->x11_cur->channel->remote.eof ||
+                            ctx->x11_cur->channel->remote.close) {
+                    if (ctx->x11_cur->channel) {
+                        CALL_SOFT(libssh2_channel_free(ctx->x11_cur->channel));
+                        ctx->x11_cur->channel = NULL;
+                    }
+                    ctx->x11_cur->chan_done = 1;
+                    if (!ctx->x11_cur->sock_done)
+                        corout_signal(state->o, ctx->x11_cur, X11_SIG);
+                    continue;
+                }
+    
+                /* 4a. relay ming64x.exe -> channel */
+                ctx->x11_cur->ssh_ops = 0;
+                ctx->x11_cur->relay_buf = ctx->x11_cur->xsock->s->bufrd;
+                ctx->x11_cur->wr_n = ctx->x11_cur->relay_buf->avail -
+                                     ctx->x11_cur->relay_buf->written;
+                if (ctx->x11_cur->wr_n > 0) {
+                    ctx->x11_cur->relay_buf->ref++;
+                    ctx->x11_cur->relay_buf->writing = 1;
+                    __sync_synchronize();
+                    CALL_SOFT(libssh2_channel_write(ctx->x11_cur->channel,
+                                ctx->x11_cur->relay_buf->data +
+                                ctx->x11_cur->relay_buf->written,
+                                ctx->x11_cur->wr_n));
+                    if (ctx->x11_cur->channel->write_bytes > 0) {
+                        ctx->x11_cur->relay_buf->written += ctx->x11_cur->channel->write_bytes;
+                        ctx->x11_cur->ssh_ops++;
+                    }
+                    __sync_synchronize();
+                    ctx->x11_cur->relay_buf->writing = 0;
+                    corout_buffer_free(ctx->x11_cur->relay_buf);
+                    ctx->x11_cur->relay_buf = NULL;
+                }
+
+                /* the 4a write may have yielded long enough for the runner to
+                   drop xsock (or the socket to disconnect) */
+                if (ctx->x11_cur->sock_done || !ctx->x11_cur->xsock->s)
+                    continue;
+
+                /* 4b. relay channel -> ming64x.exe (only when the buffer has room) */
+                if (ssh2_channel_packet_data_len(ctx->x11_cur->channel, 0) > 0) {
+                    ctx->x11_cur->relay_buf = ctx->x11_cur->xsock->s->bufwr;
+                    ctx->x11_cur->rd_want = ctx->x11_cur->relay_buf->alloced -
+                                            ctx->x11_cur->relay_buf->avail;
+                    if (ctx->x11_cur->rd_want > ctx->x11_cur->relay_buf->alloced / 4) {
+                        ctx->x11_cur->relay_buf->ref++;
+                        ctx->x11_cur->relay_buf->reading = 1;
+                        __sync_synchronize();
+                        CALL_SOFT(libssh2_channel_read(ctx->x11_cur->channel,
+                                    ctx->x11_cur->relay_buf->data +
+                                    ctx->x11_cur->relay_buf->avail,
+                                    ctx->x11_cur->rd_want));
+                        if (ctx->x11_cur->channel->read_bytes > 0) {
+                            ctx->x11_cur->relay_buf->avail += ctx->x11_cur->channel->read_bytes;
+                            ctx->x11_cur->ssh_ops++;
+                        }
+                        __sync_synchronize();
+                        ctx->x11_cur->relay_buf->reading = 0;
+                        corout_buffer_free(ctx->x11_cur->relay_buf);
+                        ctx->x11_cur->relay_buf = NULL;
+                    }
+                }
+
+                /* wake the runner */
+                if (!ctx->x11_cur->sock_done && ctx->x11_cur->ssh_ops)
+                    corout_signal(state->o, ctx->x11_cur, X11_SIG);
             }
+        } else {
+            /* !s->x11_forwarding */
         }
 
-        if (InterlockedExchange(&s->resize_pending, 0)) {
-            libssh2_channel_request_pty_size_ex(channel,
-                s->resize_cols, s->resize_rows, 0, 0);
+        /* Pop a fresh outbound chunk only once the previous one is fully
+           written; wr_n/wr_off persist across yields so a partial write
+           resumes with the remainder of the same chunk. */
+        if (ctx->wr_n == 0)
+            ctx->wr_n = byteq_pop(&s->out, ctx->wr_buf, sizeof ctx->wr_buf);
+        while (ctx->wr_off < ctx->wr_n) {
+            CALL_SOFT(libssh2_channel_write(ctx->channel,
+                (const char *)ctx->wr_buf + ctx->wr_off,
+                ctx->wr_n - ctx->wr_off));
+            if (ctx->channel->write_bytes <= 0)
+                break;
+            ctx->wr_off += (size_t)ctx->channel->write_bytes;
         }
+        if (ctx->wr_off >= ctx->wr_n)
+            ctx->wr_off = ctx->wr_n = 0;
 
-        {
+        if (InterlockedExchange(&s->resize_pending, 0))
+            CALL_SOFT(libssh2_channel_request_pty_size_ex(ctx->channel,
+                s->resize_cols, s->resize_rows, 0, 0));
+
+        if (ssh2_channel_packet_data_len(ctx->channel, 0) > 0) {
             size_t space = byteq_space(&s->in);
             if (space > 0) {
-                size_t want = space < sizeof buf ? space : sizeof buf;
-                ssize_t rc = libssh2_channel_read(channel, buf, (size_t)want);
-                if (rc > 0) {
-                    byteq_push(&s->in, (const unsigned char*)buf, (size_t)rc);
-                }
-                else if (rc == 0)
-                    break;   /* remote closed the channel */
-                else if (rc != LIBSSH2_ERROR_EAGAIN && rc != LIBSSH2_ERROR_TIMEOUT)
-                    break;   /* genuine error */
-            } else {
-                Sleep(1);    /* in full: pause read -> SSH flow control */
+                ctx->rd_want = space < sizeof ctx->rd_buf ? space
+                                                          : sizeof ctx->rd_buf;
+                CALL_SOFT(libssh2_channel_read(ctx->channel, ctx->rd_buf,
+                    ctx->rd_want));
+                if (ctx->channel->read_bytes > 0)
+                    byteq_push(&s->in, (const unsigned char *)ctx->rd_buf,
+                        (size_t)ctx->channel->read_bytes);
+                continue;
             }
+            /* s->in is full: fall through so the x11_runner coroutine and the
+               UI-thread pump aren't starved while the terminal catches up */
         }
+
+        if (ctx->channel->remote.eof || ctx->channel->remote.close)
+            break;
+
+        if (ctx->sock->s->bufrd->avail > ctx->sock->s->bufrd->written ||
+            ctx->session->packet.writeidx > ctx->session->packet.readidx) {
+            CALL_SOFT(ssh2_transport_read(ctx->session));
+            continue;
+        }
+
+        corout_read(ctx->sock);
+        corout_wait_wakeable(state, SSH_POLL_MS);
+        YIELD_();
     }
 
 out:
-    if (channel)
-        libssh2_channel_free(channel);
-    if (session) {
-        libssh2_session_disconnect_ex(session, SSH_DISCONNECT_BY_APPLICATION,
-            "closing", "");
-        libssh2_session_free(session);
+    /* tear down any forwarded X11 connections before the session dies */
+    {
+        int i;
+        for (i = 0; i < X11_MAX; i++) {
+            if (ctx->x11[i]) {
+                corout_kill(state->o, ctx->x11[i]);
+                free(ctx->x11[i]);
+                ctx->x11[i] = NULL;
+            }
+        }
     }
-    if (sock != INVALID_SOCKET)
-        closesocket(sock);
+    if (ctx->session && libssh2_session_last_errno(ctx->session))
+        ssh_report_error(s, ctx->session, ctx->stage);
+    if (ctx->session) {
+        ctx->tofree = ctx->session;
+        ctx->session = NULL;
+        CALL_SOFT(libssh2_session_free(ctx->tofree));
+        ctx->tofree = NULL;
+    }
+    END();
+}
+
+static DWORD WINAPI
+ssh_worker(LPVOID arg)
+{
+    ssh_session *s = (ssh_session *)arg;
+    struct ssh_ctx ctx;
+    struct corout *o;
+
+    memset(&ctx, 0, sizeof ctx);
+    ctx.s = s;
+    ctx.stage = "connect";
+
+    o = corout_alloc();
+    corout_add(o, ssh_run, NULL, &ctx);
+    corout_run(o);
+    corout_free(o);
 
     InterlockedExchange(&s->running, 0);
     return 0;
@@ -608,24 +939,24 @@ ssh_session_free(ssh_session *s)
 
 void
 ssh_session_start(ssh_session *s, const char *host,
-    const char *username, const char *password, int display_number)
+    const char *username, const char *password, int display_number,
+    int x11_forwarding)
 {
-    static int wsa_ready = 0;
+    static int corout_ready = 0;
 
     if (s->running)
         return;
 
-    if (!wsa_ready) {
-        WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-            return;
-        wsa_ready = 1;
+    if (!corout_ready) {
+        corout_init();
+        corout_ready = 1;
     }
 
     snprintf(s->host, sizeof s->host, "%s", host);
     snprintf(s->username, sizeof s->username, "%s", username);
     snprintf(s->password, sizeof s->password, "%s", password);
     s->display_number = display_number;
+    s->x11_forwarding = x11_forwarding;
     s->display_error[0] = '\0';
     InterlockedExchange(&s->display_error_pending, 0);
 
@@ -668,11 +999,18 @@ ssh_session_is_active(const ssh_session *s)
 void
 ssh_send(ssh_session *s, const char *bytes, size_t n)
 {
+    int pushed = 0;
     while (s->running && n > 0) {
         size_t chunk = n < SSH_SEND_CHUNK ? n : SSH_SEND_CHUNK;
         byteq_push(&s->out, (const unsigned char*)bytes, chunk);
         bytes += chunk;
         n -= chunk;
+        pushed = 1;
+    }
+    if (pushed) {
+        HANDLE h = s->iocp_handle;
+        if (h)
+            PostQueuedCompletionStatus(h, 0, (ULONG_PTR)0, NULL);
     }
 }
 
@@ -781,10 +1119,16 @@ utf8_decode_seq(const unsigned char *p, int len)
 void
 ssh_pump(ssh_session *s, struct terminal *t)
 {
-    unsigned char buf[4096];
-    wchar_t wide[8192];
+    unsigned char buf[16384];
+    wchar_t wide[32768];
     size_t n = byteq_pop(&s->in, buf, sizeof buf);
     size_t i = 0, wi = 0;
+
+    if (n > 0) {
+        HANDLE h = s->iocp_handle;
+        if (h)
+            PostQueuedCompletionStatus(h, 0, (ULONG_PTR)0, NULL);
+    }
 
     if (n == 0 && s->utf8_npending == 0)
         return;
