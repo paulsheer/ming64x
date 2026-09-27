@@ -156,6 +156,7 @@ static int g_focus_on = 0;          /* focus nav active (SSH login tab, not conn
 static int g_unfocus_edits = 0;     /* Tab pressed: clear edit focus this frame */
 static int g_activate_pressed = 0;  /* Enter/Space pressed: activate focused button */
 static int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal) */
+static int g_confirm_exit = 0;      /* Exit-with-live-connections dialog is open (modal) */
 static char g_notice[512];          /* cross-tab conflict explanation (modal) */
 
 /* PuTTY's Ctrl-key method: translate the keydown ourselves with the Ctrl
@@ -2283,7 +2284,7 @@ int main(void)
             if (nk_begin(ctx, "LaunchX",
                 nk_rect(0, 0, (float)client.right, (float)client.bottom),
                 NK_WINDOW_NO_SCROLLBAR |
-                ((g_confirm_reset || g_notice[0]) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
+                ((g_confirm_reset || g_notice[0] || g_confirm_exit) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
             {
                 cr = nk_window_get_content_region(ctx);
                 W = cr.w;
@@ -2406,10 +2407,14 @@ int main(void)
                         }
                     }
                     if (nk_button_label(ctx, "Exit")) {
-                        save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
-                            &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt, &audio_opt);
-                        running = 0;
+                        if (ssh_x11_open_count(&ssh) > 0)
+                            g_confirm_exit = 1;
+                        else {
+                            save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
+                                &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
+                                &fonts_opt, &logging_opt, &audio_opt);
+                            running = 0;
+                        }
                     }
                     nk_group_end(ctx);
                 }
@@ -2487,6 +2492,37 @@ int main(void)
                 }
                 if (dialog_button(ctx, "No"))
                     g_confirm_reset = 0;
+            }
+            nk_end(ctx);
+        }
+
+        if (g_confirm_exit) {
+            RECT rc;
+            struct nk_rect pr;
+            char msg[128];
+
+            GetClientRect(wnd, &rc);
+            pr = nk_rect((rc.right - 640.0f) / 2.0f,
+                         (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
+
+            snprintf(msg, sizeof msg, "Exit and kill %d connections?",
+                ssh_x11_open_count(&ssh));
+
+            if (nk_begin(ctx, "Confirm exit", pr,
+                    NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+                nk_layout_row_dynamic(ctx, 15, 1);
+                nk_label_wrap(ctx, " ");
+                nk_layout_row_dynamic(ctx, 55, 1);
+                nk_label_wrap(ctx, msg);
+                nk_layout_row_dynamic(ctx, 34, 2);
+                if (dialog_button(ctx, "Confirm")) {
+                    save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
+                        &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
+                        &fonts_opt, &logging_opt, &audio_opt);
+                    running = 0;
+                }
+                if (dialog_button(ctx, "Cancel"))
+                    g_confirm_exit = 0;
             }
             nk_end(ctx);
         }

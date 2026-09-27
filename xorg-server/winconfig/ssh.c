@@ -564,6 +564,7 @@ x11_open_cb(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
     x->display_number = ctx->s->display_number;
     x->ctx = ctx;
     ctx->x11[i] = x;
+    ctx->s->x11_open_count++;
 
     corout_add(session->corout_state->o, x11_runner, x11_runner_free, x);
 }
@@ -736,6 +737,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
                 if (ctx->x11_cur->chan_done && ctx->x11_cur->sock_done) {
                     free(ctx->x11_cur);
                     ctx->x11[ctx->x11_rr] = NULL;
+                    s->x11_open_count--;
                     continue;
                 }
     
@@ -882,6 +884,7 @@ out:
                 corout_kill(state->o, ctx->x11[i]);
                 free(ctx->x11[i]);
                 ctx->x11[i] = NULL;
+                s->x11_open_count--;
             }
         }
     }
@@ -959,6 +962,7 @@ ssh_session_start(ssh_session *s, const char *host,
     s->x11_forwarding = x11_forwarding;
     s->display_error[0] = '\0';
     InterlockedExchange(&s->display_error_pending, 0);
+    s->x11_open_count = 0;
 
     InterlockedExchange(&s->running, 1);
     s->thread = CreateThread(NULL, 0, ssh_worker, s, 0, NULL);
@@ -994,6 +998,12 @@ int
 ssh_session_is_active(const ssh_session *s)
 {
     return s->running != 0;
+}
+
+int
+ssh_x11_open_count(const ssh_session *s)
+{
+    return (int)s->x11_open_count;
 }
 
 void

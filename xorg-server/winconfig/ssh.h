@@ -28,6 +28,7 @@ typedef struct ssh_session {
     int x11_forwarding;              /* 1 = request X11 forwarding on start */
     char display_error[256];         /* DISPLAY setup error text for the UI */
     volatile LONG display_error_pending;  /* 1 = display_error is valid */
+    volatile LONG x11_open_count;        /* open forwarded X11 connections */
 
     HANDLE thread;
     volatile LONG running;
@@ -62,6 +63,7 @@ void ssh_session_start(ssh_session *s, const char *host,
     int x11_forwarding);
 void ssh_session_stop(ssh_session *s);
 int  ssh_session_is_active(const ssh_session *s);
+int  ssh_x11_open_count(const ssh_session *s);
 void ssh_pump(ssh_session *s, struct terminal *t);
 void ssh_send(ssh_session *s, const char *bytes, size_t n);
 void ssh_request_resize(ssh_session *s, int cols, int rows);
