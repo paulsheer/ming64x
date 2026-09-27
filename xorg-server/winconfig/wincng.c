@@ -2590,6 +2590,273 @@ ssh2_curve_type ssh2_ecdsa_get_curve_type(const ssh2_ecdsa_ctx *ec_ctx)
 
 /*******************************************************************/
 /*
+ * Windows CNG backend: Ed25519 / Curve25519
+ *
+ * CNG does not expose Ed25519 or X25519, so these are implemented
+ * using the bundled pure-C curve25519.c (curve25519-donna + a
+ * TweetNaCl-derived Ed25519).
+ */
+
+#if LIBSSH2_ED25519
+
+int curve25519(unsigned char *mypublic, const unsigned char *secret,
+               const unsigned char *basepoint);
+int ed25519_publickey(const unsigned char *seed, unsigned char *pk);
+int ed25519_sign(unsigned char *sig, const unsigned char *m, size_t mlen,
+                 const unsigned char *seed, const unsigned char *pk);
+int ed25519_verify(const unsigned char *sig, const unsigned char *m,
+                   size_t mlen, const unsigned char *pk);
+
+int ssh2_curve25519_new(LIBSSH2_SESSION *session,
+                        uint8_t **out_public_key,
+                        uint8_t **out_private_key)
+{
+    static const unsigned char basepoint[SSH2_ED25519_KEY_LEN] = { 9 };
+    uint8_t *priv;
+    uint8_t *pub;
+
+    if(!out_public_key || !out_private_key)
+        return LIBSSH2_ERROR_INVAL;
+
+    *out_public_key = NULL;
+    *out_private_key = NULL;
+
+    priv = SSH2_ALLOC(session, SSH2_ED25519_KEY_LEN);
+    pub = SSH2_ALLOC(session, SSH2_ED25519_KEY_LEN);
+    if(!priv || !pub) {
+        if(priv)
+            SSH2_FREE(session, priv);
+        if(pub)
+            SSH2_FREE(session, pub);
+        return LIBSSH2_ERROR_ALLOC;
+    }
+
+    if(ssh2_random(priv, SSH2_ED25519_KEY_LEN)) {
+        SSH2_FREE(session, priv);
+        SSH2_FREE(session, pub);
+        return LIBSSH2_ERROR_ALLOC;
+    }
+
+    curve25519(pub, priv, basepoint);
+
+    *out_private_key = priv;
+    *out_public_key = pub;
+
+    return LIBSSH2_ERROR_NONE;
+}
+
+int ssh2_curve25519_gen_k(ssh2_bn **k,
+                          uint8_t private_key[SSH2_ED25519_KEY_LEN],
+                          uint8_t server_public_key[SSH2_ED25519_KEY_LEN])
+{
+    unsigned char shared_key[SSH2_ED25519_KEY_LEN];
+    int result;
+
+    if(!k)
+        return LIBSSH2_ERROR_INVAL;
+
+    curve25519(shared_key, private_key, server_public_key);
+
+    result = ssh2_bn_from_bin(k, shared_key, SSH2_ED25519_KEY_LEN);
+
+    ssh2_explicit_zero(shared_key, sizeof(shared_key));
+
+    return result ? LIBSSH2_ERROR_ALLOC : LIBSSH2_ERROR_NONE;
+}
+
+int ssh2_ed25519_new_public(ssh2_ed25519_ctx **ed_ctx,
+                            LIBSSH2_SESSION *session,
+                            const unsigned char *raw_pub_key,
+                            const size_t key_len)
+{
+    ssh2_ed25519_ctx *ctx;
+
+    if(!ed_ctx || !raw_pub_key || key_len != SSH2_ED25519_KEY_LEN)
+        return LIBSSH2_ERROR_INVAL;
+
+    *ed_ctx = NULL;
+
+    ctx = SSH2_ALLOC(session, sizeof(ssh2_ed25519_ctx));
+    if(!ctx)
+        return LIBSSH2_ERROR_ALLOC;
+
+    memcpy(ctx->pub_key, raw_pub_key, SSH2_ED25519_KEY_LEN);
+
+    *ed_ctx = ctx;
+
+    return LIBSSH2_ERROR_NONE;
+}
+
+static int wcng_ed25519_new_priv_parse(ssh2_ed25519_ctx **ed_ctx,
+                                       LIBSSH2_SESSION *session,
+                                       const unsigned char *privatekey,
+                                       const size_t privatekey_len)
+{
+    unsigned char *publickey = NULL;
+    size_t publickey_len;
+    unsigned char *private_blob = NULL;
+    size_t private_blob_len;
+    uint32_t check1, check2;
+    struct string_buf data_buffer;
+    int result;
+
+    *ed_ctx = SSH2_ALLOC(session, sizeof(ssh2_ed25519_ctx));
+    if(!*ed_ctx)
+        return LIBSSH2_ERROR_ALLOC;
+
+    data_buffer.data = SSH2_UNCONST(privatekey);
+    data_buffer.dataptr = data_buffer.data;
+    data_buffer.len = privatekey_len;
+
+    /* Read the 2 checkints and check that they match */
+    result = ssh2_get_u32(&data_buffer, &check1);
+    if(result != LIBSSH2_ERROR_NONE)
+        goto cleanup;
+
+    result = ssh2_get_u32(&data_buffer, &check2);
+    if(result != LIBSSH2_ERROR_NONE)
+        goto cleanup;
+
+    if(check1 != check2) {
+        result = LIBSSH2_ERROR_FILE;
+        goto cleanup;
+    }
+
+    /* key type "ssh-ed25519" */
+    if(ssh2_match_string(&data_buffer, "ssh-ed25519")) {
+        result = LIBSSH2_ERROR_FILE;
+        goto cleanup;
+    }
+
+    /* public key (32 bytes) */
+    result = ssh2_get_string(&data_buffer, &publickey, &publickey_len);
+    if(result != LIBSSH2_ERROR_NONE)
+        goto cleanup;
+
+    if(publickey_len != SSH2_ED25519_KEY_LEN) {
+        result = LIBSSH2_ERROR_FILE;
+        goto cleanup;
+    }
+
+    /* private key: seed (32 bytes) || public key (32 bytes) */
+    result = ssh2_get_string(&data_buffer, &private_blob, &private_blob_len);
+    if(result != LIBSSH2_ERROR_NONE)
+        goto cleanup;
+
+    if(private_blob_len != SSH2_ED25519_PRIVATE_KEY_LEN) {
+        result = LIBSSH2_ERROR_FILE;
+        goto cleanup;
+    }
+
+    memcpy((*ed_ctx)->pub_key, publickey, SSH2_ED25519_KEY_LEN);
+    memcpy((*ed_ctx)->priv_key, private_blob, SSH2_ED25519_KEY_LEN);
+
+    result = LIBSSH2_ERROR_NONE;
+
+cleanup:
+    if(result != LIBSSH2_ERROR_NONE) {
+        if(*ed_ctx)
+            SSH2_SAFEFREE(session, *ed_ctx);
+
+        result = ssh2_err(session, result,
+                          "wcng_ed25519_new_priv_parse() failed");
+    }
+
+    return result;
+}
+
+int ssh2_ed25519_new_priv(ssh2_ed25519_ctx **ed_ctx,
+                          LIBSSH2_SESSION *session,
+                          const char *filename,
+                          const char *blob, size_t blob_len,
+                          const char *passphrase)
+{
+    int result;
+    struct string_buf *decrypted = NULL;
+
+    if(!ed_ctx || !session || (!filename && !blob))
+        return LIBSSH2_ERROR_INVAL;
+
+    *ed_ctx = NULL;
+
+    result = ssh2_openssh_pem_parse(session, filename, blob, blob_len,
+                                    passphrase, &decrypted);
+    if(result)
+        goto cleanup;
+
+    result = wcng_ed25519_new_priv_parse(ed_ctx, session,
+                                         decrypted->data, decrypted->len);
+
+cleanup:
+    if(decrypted)
+        ssh2_string_buf_free(session, decrypted);
+
+    return result;
+}
+
+int ssh2_ed25519_sign(ssh2_ed25519_ctx *ed_ctx, LIBSSH2_SESSION *session,
+                      uint8_t **out_sig, size_t *out_sig_len,
+                      const uint8_t *message, size_t message_len)
+{
+    unsigned char raw_sig[SSH2_ED25519_SIG_LEN];
+    uint8_t *sig_blob;
+    uint8_t *ptr;
+
+    (void)session;
+
+    if(!ed_ctx || !out_sig || !out_sig_len)
+        return LIBSSH2_ERROR_INVAL;
+
+    *out_sig = NULL;
+    *out_sig_len = 0;
+
+    if(ed25519_sign(raw_sig, message, message_len,
+                    ed_ctx->priv_key, ed_ctx->pub_key))
+        return LIBSSH2_ERROR_ALLOC;
+
+    /* Wrap the raw signature in the SSH blob:
+       string("ssh-ed25519") || string(sig) */
+    sig_blob = SSH2_ALLOC(session, 19 + SSH2_ED25519_SIG_LEN);
+    if(!sig_blob)
+        return LIBSSH2_ERROR_ALLOC;
+
+    ptr = sig_blob;
+    ssh2_store_str(&ptr, "ssh-ed25519", 11);
+    ssh2_store_str(&ptr, raw_sig, SSH2_ED25519_SIG_LEN);
+
+    *out_sig = sig_blob;
+    *out_sig_len = 19 + SSH2_ED25519_SIG_LEN;
+
+    return LIBSSH2_ERROR_NONE;
+}
+
+int ssh2_ed25519_verify(ssh2_ed25519_ctx *ed_ctx, LIBSSH2_SESSION *session,
+                        const uint8_t *s, size_t s_len,
+                        const uint8_t *m, size_t m_len)
+{
+    (void)session;
+
+    if(!ed_ctx || !s || s_len != SSH2_ED25519_SIG_LEN)
+        return LIBSSH2_ERROR_INVAL;
+
+    if(ed25519_verify(s, m, m_len, ed_ctx->pub_key))
+        return LIBSSH2_ERROR_PUBLICKEY_PROTOCOL;
+
+    return LIBSSH2_ERROR_NONE;
+}
+
+void ssh2_ed25519_free(ssh2_ed25519_ctx *ed_ctx, LIBSSH2_SESSION *session)
+{
+    if(!ed_ctx)
+        return;
+
+    ssh2_zero_free(session, ed_ctx, sizeof(ssh2_ed25519_ctx));
+}
+
+#endif /* LIBSSH2_ED25519 */
+
+/*******************************************************************/
+/*
  * Windows CNG backend: Key functions
  */
 

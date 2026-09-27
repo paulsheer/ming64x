@@ -870,6 +870,7 @@ LIBSSH2_SRCS := \
 	winconfig/cipher-chachapoly.c \
 	winconfig/comp.c \
 	winconfig/crypt.c \
+	winconfig/curve25519.c \
 	winconfig/global.c \
 	winconfig/hostkey.c \
 	winconfig/keepalive.c \

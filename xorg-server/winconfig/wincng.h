@@ -65,7 +65,7 @@
 #define LIBSSH2_RSA_SHA1 1
 #define LIBSSH2_RSA_SHA2 1
 #define LIBSSH2_DSA 1
-#define LIBSSH2_ED25519 0
+#define LIBSSH2_ED25519 1
 #define LIBSSH2_MLKEM 0
 
 /*
@@ -211,6 +211,23 @@ struct wcng_ecdsa_ctx {
 
 #define ssh2_ecdsa_ctx struct wcng_ecdsa_ctx
 #define ssh2_ec_key    struct wcng_ecdsa_ctx
+#endif
+
+/*******************************************************************/
+/*
+ * Windows CNG backend: Ed25519 functions
+ *
+ * CNG exposes neither Ed25519 nor X25519, so these are implemented
+ * with the bundled pure-C curve25519.c primitives.
+ */
+
+#if LIBSSH2_ED25519
+struct wcng_ed25519_ctx {
+    unsigned char priv_key[32];  /* 32-byte secret seed */
+    unsigned char pub_key[32];   /* 32-byte public key */
+};
+
+#define ssh2_ed25519_ctx struct wcng_ed25519_ctx
 #endif
 
 /*******************************************************************/
