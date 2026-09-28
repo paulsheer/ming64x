@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <bcrypt.h>
 
 #include "libssh2.h"
 
@@ -481,6 +482,16 @@ heading(struct nk_context *ctx, const char *text)
     nk_style_pop_font(ctx);
 }
 
+struct options_audio {
+    int audio_enabled;
+    char pulseport[16];
+    int mic_enabled;
+    int speaker_enabled;
+};
+
+static void ensure_pulse_cookie(void);
+static int read_pulse_cookie(unsigned char out[256]);
+
 struct options_ssh_login {
     char host[128];
     char username[128];
@@ -492,7 +503,8 @@ struct options_ssh_login {
 static void
 tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
     terminal *term, ssh_session *ssh,
-    struct options_network_and_access_control *net)
+    struct options_network_and_access_control *net,
+    struct options_audio *audio)
 {
     int cols_before = term->ncols;
     int rows_before = term->nrows;
@@ -528,8 +540,17 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
             ssh_session_stop(ssh);
     }
     else if (button_option(ctx, "Connect")) {
+        unsigned char cookie[256];
+        int have_cookie;
+
+        if (audio->audio_enabled)
+            ensure_pulse_cookie();
+        have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
+
         ssh_session_start(ssh, opt->host, opt->username, opt->password,
-            net->listeningport_sel, opt->x11_forwarding);
+            net->listeningport_sel, opt->x11_forwarding,
+            have_cookie, atoi(audio->pulseport),
+            have_cookie ? cookie : NULL);
         ssh_request_resize(ssh, term->ncols, term->nrows);
     }
 
@@ -660,7 +681,11 @@ tab_screen_and_windowing(struct nk_context *ctx,
     lp = opt->lesspointer_enabled;
     resize_scrollbars = (opt->resize_sel == 1);
 
+    if (mw)
+        nk_widget_disable_begin(ctx);
     text_option(ctx, "Screen geometry (-screen)", opt->screen_geometry, (int)sizeof(opt->screen_geometry), "Create screen <n> with optional size and position. Add @<monitor> to\nplace it on a monitor. Examples: 0 800x600+100+100@2 ; 0 @1");
+    if (mw)
+        nk_widget_disable_end(ctx);
 
     if (mw || rl || nd || lp || resize_scrollbars)
         nk_widget_disable_begin(ctx);
@@ -1109,11 +1134,6 @@ tab_logging_extensions(struct nk_context *ctx,
     }
 }
 
-struct options_audio {
-    int audio_enabled;
-    char pulseport[16];
-};
-
 static void
 tab_audio(struct nk_context *ctx, struct options_audio *opt)
 {
@@ -1126,6 +1146,10 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
         nk_widget_disable_begin(ctx);
     text_option(ctx, "PulseAudio listen port", opt->pulseport, sizeof(opt->pulseport),
         "TCP port the embedded PulseAudio server listens on (default 4713).");
+    checkbox_option(ctx, "Microphone", &opt->mic_enabled,
+        "Expose the Windows recording device as the PulseAudio source (wavein).");
+    checkbox_option(ctx, "Speaker", &opt->speaker_enabled,
+        "Expose the Windows playback device as the PulseAudio sink (waveout).");
     if (!opt->audio_enabled)
         nk_widget_disable_end(ctx);
 }
@@ -1287,6 +1311,8 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     *audio_opt = (struct options_audio) {
         .audio_enabled = 1,
         .pulseport = "4713",
+        .mic_enabled = 1,
+        .speaker_enabled = 1,
     };
 }
 
@@ -1445,6 +1471,8 @@ cf_build(struct cfentry *e,
 
     e[n++] = CF_BOOL("audio", "enablepulseaudioserver", audio->audio_enabled);
     e[n++] = CF_STR("audio", "pulseaudiolistenport", audio->pulseport);
+    e[n++] = CF_BOOL("audio", "microphone", audio->mic_enabled);
+    e[n++] = CF_BOOL("audio", "speaker", audio->speaker_enabled);
 
     return n;
 }
@@ -1807,7 +1835,7 @@ build_server_cmdline(struct cmdline *c,
     }
 
     /* Screen & windowing modes */
-    if (screen->screen_geometry[0]) {
+    if (screen->screen_geometry[0] && !screen->multiwindow_enabled) {
         char geo[256];
         char *p;
         strcpy(geo, screen->screen_geometry);
@@ -2029,21 +2057,108 @@ write_commandline_file(const char *cmdline)
 }
 
 static void
-write_default_pa(const char *port)
+write_default_pa(const char *port, int speaker, int mic)
 {
-    char dir[512], path[512];
+    char dir[512], path[512], cookie[512], cookie_esc[512];
     FILE *f;
+    const char *s;
+    char *d;
 
     if (config_dir(dir, sizeof dir))
         return;
     CreateDirectoryA(dir, NULL);
     snprintf(path, sizeof path, "%s\\default.pa", dir);
+    snprintf(cookie, sizeof cookie, "%s\\pulse-cookie", dir);
+
+    /* load-module args are unescaped by pa_unescape, which drops every
+       backslash, so a Windows path must be written with each one doubled. */
+    d = cookie_esc;
+    for (s = cookie; *s && d < cookie_esc + sizeof cookie_esc - 1; s++) {
+        if (*s == '\\')
+            *d++ = '\\';
+        *d++ = *s;
+    }
+    *d = '\0';
+
     f = fopen(path, "wb");
     if (!f)
         return;
-    fprintf(f, "load-module module-native-protocol-tcp port=%s auth-anonymous=1\r\n",
-        port[0] ? port : "4713");
+    if (speaker || mic) {
+        fputs("load-module module-waveout", f);
+        fputs(speaker ? " playback=1 sink_name=waveout" : " playback=0", f);
+        fputs(mic ? " record=1 source_name=wavein" : " record=0", f);
+        fputs("\r\n", f);
+    }
+    fprintf(f, "load-module module-native-protocol-tcp port=%s listen=127.0.0.1 auth-cookie=%s\r\n",
+        port[0] ? port : "4713", cookie_esc);
     fclose(f);
+}
+
+/* Generate the PulseAudio auth cookie at %APPDATA%\Ming64X\pulse-cookie.  The
+   daemon reads this exact file (see write_default_pa) and launchx ships the
+   same bytes to the remote over SSH.  The cookie is PA_NATIVE_COOKIE_LENGTH
+   (256) printable [A-Za-z0-9] bytes; it is regenerated if missing or short. */
+static void
+ensure_pulse_cookie(void)
+{
+    static const char charset[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    char dir[512], path[512];
+    FILE *f;
+    unsigned char cookie[256], raw[256];
+    long sz;
+    int i;
+
+    if (config_dir(dir, sizeof dir))
+        return;
+    CreateDirectoryA(dir, NULL);
+    snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
+
+    /* keep it only if a full-length cookie already exists */
+    f = fopen(path, "rb");
+    if (f) {
+        if (fseek(f, 0, SEEK_END) == 0) {
+            sz = ftell(f);
+            if (sz == (long)sizeof cookie) {
+                fclose(f);
+                return;
+            }
+        }
+        fclose(f);
+    }
+
+    if (BCryptGenRandom(NULL, raw, sizeof raw,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+        return;
+    for (i = 0; i < (int)sizeof cookie; i++)
+        cookie[i] = (unsigned char)charset[raw[i] % (sizeof charset - 1)];
+
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    fwrite(cookie, 1, sizeof cookie, f);
+    fclose(f);
+}
+
+/* Read the 256-byte PulseAudio cookie back.  Returns 1 on success. */
+static int
+read_pulse_cookie(unsigned char out[256])
+{
+    char dir[512], path[512];
+    FILE *f;
+
+    if (config_dir(dir, sizeof dir))
+        return 0;
+    snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
+    f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    if (fread(out, 1, 256, f) != 256) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return 1;
 }
 
 /* Set the working directory to the launcher's own folder, verify
@@ -2366,7 +2481,7 @@ int main(void)
                         g_unfocus_edits = 0;
                     }
                     if (current_tab == 0) {
-                        tab_ssh_login(ctx, &ssh_opt, &term, &ssh, &net_opt);
+                        tab_ssh_login(ctx, &ssh_opt, &term, &ssh, &net_opt, &audio_opt);
                     } else if (current_tab == 1) {
                         tab_network_and_access_control(ctx, &net_opt);
                     } else if (current_tab == 2) {
@@ -2431,8 +2546,11 @@ int main(void)
                                 &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt,
                                 &logging_opt, &audio_opt);
                             write_commandline_file(c.buf);
-                            if (audio_opt.audio_enabled)
-                                write_default_pa(audio_opt.pulseport);
+                            if (audio_opt.audio_enabled) {
+                                ensure_pulse_cookie();
+                                write_default_pa(audio_opt.pulseport,
+                                    audio_opt.speaker_enabled, audio_opt.mic_enabled);
+                            }
                             launch_ming64x(c.buf);
                         }
                     }

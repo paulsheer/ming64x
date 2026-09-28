@@ -51,6 +51,10 @@
 #define X11_SIG         1
 #define X11_FORWARD_DISPLAY 10   /* remote DISPLAY number we request (screen 0) */
 
+/* PulseAudio reverse-forward relay (SSH forwarded-tcpip <-> local daemon) */
+#define AUDIO_MAX       32
+#define AUDIO_COOKIE_LEN 256     /* PA_NATIVE_COOKIE_LENGTH (bytes) */
+
 /* ---- byte queue ---- */
 
 static void
@@ -427,6 +431,28 @@ typedef struct x11_conn {
     int sock_done;                  /* runner exited */
 } x11_conn;
 
+/* One PulseAudio reverse-forwarded connection: the SSH forwarded-tcpip channel
+   (remote app <-> us) is relayed to a plain TCP socket (us <-> the local
+   PulseAudio daemon).  The socket is owned by audio_runner (a pure corout.h
+   coroutine); the channel is owned and serviced by ssh_run.  Data crosses the
+   two buffers, exactly like the X11 relay. */
+typedef struct audio_conn {
+    LIBSSH2_CHANNEL *channel;       /* forwarded-tcpip: remote app <-> us */
+
+    struct socket *xsock;           /* plain TCP to the local PulseAudio daemon */
+    int pulseaudio_port;            /* local daemon TCP port (default 4713) */
+    struct ssh_ctx *ctx;            /* ssh_run's user_data (signal target) */
+
+    int rd_want;
+    int wr_n;
+    struct buffer *relay_buf;       /* held (ref++) across a channel write/read */
+    int ssh_ops;
+    int chan_done;                  /* ssh_run freed the channel */
+    int rd_space;
+    int wr_data;
+    int sock_done;                  /* runner exited */
+} audio_conn;
+
 /* Per-connection state that must survive a coroutine yield. corout_step()
    re-enters ssh_run() fresh on every resume, so any value held in a C local of
    ssh_run() is reset after each YIELD_. Everything that carries progress
@@ -439,6 +465,7 @@ struct ssh_ctx {
     LIBSSH2_CHANNEL *channel;
     struct socket *sock;
     const char *stage;
+    char fail_hint[192];        /* if non-empty, overrides the red UI error */
     LIBSSH2_SESSION *tofree;    /* session held across the free's own yields */
 
     /* outbound chunk being written (partial writes span yields) */
@@ -459,6 +486,16 @@ struct ssh_ctx {
     struct x11_conn *x11[X11_MAX];
     int x11_rr;
     struct x11_conn *x11_cur;
+
+    /* PulseAudio reverse-forward (listener + active relay connections) */
+    LIBSSH2_LISTENER *audio_listener;
+    struct audio_conn *audio[AUDIO_MAX];
+    int audio_rr;
+    struct audio_conn *audio_cur;
+    size_t audio_off;                       /* bytes of cookie already written */
+    LIBSSH2_CHANNEL *exec_channel;          /* one-shot cookie-write channel */
+    char audio_path[512];                   /* concrete remote cookie path */
+    int audio_path_len;
 };
 
 /* Relay one forwarded X11 connection: VcXsrv socket <-> SSH x11 channel. Owns
@@ -569,6 +606,121 @@ x11_open_cb(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
     corout_add(session->corout_state->o, x11_runner, x11_runner_free, x);
 }
 
+
+
+
+
+
+/* Relay one forwarded PulseAudio connection: local daemon socket <-> SSH
+   forwarded-tcpip channel. Owns the daemon socket (pure corout.h I/O); the
+   channel is serviced by ssh_run. Data crosses the two buffers. The runner is
+   always timer-wakeable while idle so ssh_run's corout_signal can interrupt it
+   (e.g. to notice chan_done). */
+static void
+audio_runner(struct corout_item *state, void *user_data, const struct sockevent *ev)
+{
+    audio_conn *x = (audio_conn *)user_data;
+    struct ssh_ctx *ctx = x->ctx;
+
+    START();
+
+    x->xsock = corout_socket_client_alloc(state->o, COROUT_SOCKET_TYPE_TCP,
+                                          0, NULL, "127.0.0.1");
+    if (!x->xsock)
+        COROUT_EXIT();
+    corout_socket_link(state, x->xsock);
+    corout_no_delay(x->xsock);
+    {
+        int timeout = 0, cerr = 0;
+        WAIT_CONNECT(6000, &timeout, &cerr, x->xsock,
+                     x->pulseaudio_port, "127.0.0.1");
+        if (timeout || cerr)
+            COROUT_EXIT();
+    }
+
+    for (;;) {
+        if (x->chan_done || !x->xsock->s)
+            break;
+
+        x->wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
+        assert(x->wr_data >= 0);
+        x->rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
+        assert(x->rd_space >= 0);
+
+        int can_read = x->rd_space || x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail;
+
+        if (can_read && x->wr_data) {
+            corout_readwrite(x->xsock);
+        } else if (x->wr_data) {
+            corout_write(x->xsock);
+        } else if (can_read) {
+            corout_read(x->xsock);
+        } else {
+            corout_clear(x->xsock); /* no-op on Windows */
+        }
+
+        corout_wait_wakeable(state, X11_POLL_MS);
+        YIELD_();
+
+        if (x->chan_done || !x->xsock->s)
+            break;
+
+        int work_done =
+            (x->rd_space != x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail) ||
+            (x->wr_data != x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written);
+        if (work_done)
+            corout_signal(state->o, ctx, X11_SIG);
+    }
+
+    END();
+}
+
+static void
+audio_runner_free(void *user_data)
+{
+    audio_conn *x = (audio_conn *)user_data;
+    if (x->xsock)
+        corout_socket_free(x->xsock);
+    x->xsock = NULL;
+    x->sock_done = 1;
+}
+
+/* Invoked by ssh_run after accepting a forwarded-tcpip connection. Runs on
+   ssh_run's coroutine stack, so it must not call any libssh2 function (that
+   would corrupt the shared stack[]). It only records the channel and spawns
+   the relay coroutine; ssh_run services the channel later. */
+static void
+audio_open_cb(LIBSSH2_SESSION *session, LIBSSH2_CHANNEL *channel,
+            const char *shost, const int sport, void **abstract)
+{
+    struct ssh_ctx *ctx = (struct ssh_ctx *)*abstract;
+    struct audio_conn *x;
+    int i;
+
+    (void)shost;
+    (void)sport;
+
+    for (i = 0; i < AUDIO_MAX; i++)
+        if (!ctx->audio[i])
+            break;
+    if (i == AUDIO_MAX)
+        return;         /* no slot; channel stays linked until session free */
+
+    x = (struct audio_conn *)malloc(sizeof *x);
+    if (!x)
+        return;
+    memset(x, 0, sizeof *x);
+
+    x->channel = channel;
+    x->pulseaudio_port = ctx->s->audio_port;
+    x->ctx = ctx;
+    ctx->audio[i] = x;
+
+    corout_add(session->corout_state->o, audio_runner, audio_runner_free, x);
+}
+
+
+
 /* The SSH connection as a coroutine: connects, negotiates, authenticates,
    opens a shell channel, then relays bytes between the byte queues and the
    channel for as long as s->running stays set. On any terminal error it frees
@@ -657,11 +809,13 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
         snprintf(ctx->disp, sizeof ctx->disp, "127.0.0.1:%d.0",
             X11_FORWARD_DISPLAY);
         libssh2_session_set_last_error(ctx->session, 0, NULL);
+        ctx->stage = "setenv DISPLAY";
+        snprintf(ctx->fail_hint, sizeof ctx->fail_hint,
+            "Failed to set DISPLAY - add \"AcceptEnv DISPLAY\" to the "
+            "server's sshd_config and restart sshd");
         CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
             ctx->disp, (unsigned int)strlen(ctx->disp)));
-        if (libssh2_session_last_errno(ctx->session))
-            set_display_error(s, "Could not set DISPLAY (libssh2 error %d)",
-                libssh2_session_last_errno(ctx->session));
+        ctx->fail_hint[0] = '\0';
     } else {
         union sockaddr_in4in6 la;
         char lip[64];
@@ -671,13 +825,95 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
             snprintf(ctx->disp, sizeof ctx->disp, "%s:%d.0", lip,
                 s->display_number);
             libssh2_session_set_last_error(ctx->session, 0, NULL);
+            ctx->stage = "setenv DISPLAY";
+            snprintf(ctx->fail_hint, sizeof ctx->fail_hint,
+                "Failed to set DISPLAY - add \"AcceptEnv DISPLAY\" to the "
+                "server's sshd_config and restart sshd");
             CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
                 ctx->disp, (unsigned int)strlen(ctx->disp)));
-            if (libssh2_session_last_errno(ctx->session))
-                set_display_error(s, "Could not set DISPLAY (libssh2 error %d)",
-                    libssh2_session_last_errno(ctx->session));
+            ctx->fail_hint[0] = '\0';
         } else {
             set_display_error(s, "Could not determine local IP address");
+        }
+    }
+
+    if (s->audio_enabled) {
+        /* Ask the server to listen on its own loopback for PulseAudio and
+           forward those connections back here; the relay connects them to the
+           local daemon at 127.0.0.1:audio_port. */
+        ctx->stage = "audio forward";
+        libssh2_session_set_last_error(ctx->session, 0, NULL);
+        CALL_SOFT(libssh2_channel_forward_listen_ex(ctx->session,
+                    "127.0.0.1", s->audio_port, NULL, 16));
+        ctx->audio_listener = ctx->session->fwdLstn_listener;
+        if (!ctx->audio_listener) {
+            set_display_error(s, "Could not set up PulseAudio forwarding");
+        } else {
+            char ps[64];
+
+            snprintf(ps, sizeof ps, "tcp:127.0.0.1:%d", s->audio_port);
+            libssh2_session_set_last_error(ctx->session, 0, NULL);
+            ctx->stage = "setenv PULSE_SERVER";
+            snprintf(ctx->fail_hint, sizeof ctx->fail_hint,
+                "Failed to set PULSE_SERVER - add \"AcceptEnv "
+                "PULSE_SERVER PULSE_COOKIE\" to the server's sshd_config "
+                "and restart sshd");
+            CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "PULSE_SERVER", 12,
+                ps, (unsigned int)strlen(ps)));
+            ctx->fail_hint[0] = '\0';
+
+            /* One-shot exec channel: install the cookie on the remote and
+               report its concrete path on stdout (PULSE_COOKIE needs an
+               absolute path; $HOME is expanded by the remote shell). */
+            libssh2_session_set_last_error(ctx->session, 0, NULL);
+            CALL_SOFT(libssh2_channel_open_session(ctx->session));
+            ctx->exec_channel = ctx->session->open_channel;
+            if (ctx->exec_channel) {
+                static const char cookie_cmd[] =
+                    "f=$HOME/.ming64x-pulse-cookie; umask 077; "
+                    "cat > \"$f\" && chmod 600 \"$f\" && printf '%s' \"$f\"";
+
+                CALL_SOFT(libssh2_channel_exec(ctx->exec_channel, cookie_cmd));
+
+                for (ctx->audio_off = 0; ctx->audio_off < AUDIO_COOKIE_LEN; ) {
+                    CALL_SOFT(libssh2_channel_write(ctx->exec_channel,
+                        (const char *)s->audio_cookie + ctx->audio_off,
+                        AUDIO_COOKIE_LEN - ctx->audio_off));
+                    if (ctx->exec_channel->write_bytes <= 0)
+                        break;
+                    ctx->audio_off += (size_t)ctx->exec_channel->write_bytes;
+                }
+                CALL_SOFT(libssh2_channel_send_eof(ctx->exec_channel));
+
+                ctx->audio_path_len = 0;
+                for (;;) {
+                    CALL_SOFT(libssh2_channel_read(ctx->exec_channel,
+                        ctx->audio_path + ctx->audio_path_len,
+                        sizeof ctx->audio_path - 1 - ctx->audio_path_len));
+                    if (ctx->exec_channel->read_bytes <= 0)
+                        break;
+                    ctx->audio_path_len += (int)ctx->exec_channel->read_bytes;
+                    if (ctx->audio_path_len >= (int)sizeof ctx->audio_path - 1)
+                        break;
+                }
+                ctx->audio_path[ctx->audio_path_len] = '\0';
+
+                CALL_SOFT(libssh2_channel_free(ctx->exec_channel));
+                ctx->exec_channel = NULL;
+
+                if (ctx->audio_path_len > 0) {
+                    libssh2_session_set_last_error(ctx->session, 0, NULL);
+                    ctx->stage = "setenv PULSE_COOKIE";
+                    snprintf(ctx->fail_hint, sizeof ctx->fail_hint,
+                        "Failed to set PULSE_COOKIE - add \"AcceptEnv "
+                        "PULSE_SERVER PULSE_COOKIE\" to the server's sshd_config "
+                        "and restart sshd");
+                    CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel,
+                        "PULSE_COOKIE", 12, ctx->audio_path,
+                        (unsigned int)ctx->audio_path_len));
+                    ctx->fail_hint[0] = '\0';
+                }
+            }
         }
     }
 
@@ -825,6 +1061,110 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
             /* !s->x11_forwarding */
         }
 
+        /* ---- PulseAudio: accept + relay reverse-forwarded connections ---- */
+        if (s->audio_enabled && ctx->audio_listener) {
+            /* Accept any connection the server has queued for us. */
+            if (ssh2_list_first(&ctx->audio_listener->queue)) {
+                CALL_SOFT(libssh2_channel_forward_accept(ctx->audio_listener));
+                audio_open_cb(ctx->session, ctx->audio_listener->accepted_channel,
+                              "127.0.0.1", 0, &ctx->session->abstract);
+            }
+
+            for (ctx->audio_rr = 0; ctx->audio_rr < AUDIO_MAX; ctx->audio_rr++) {
+                ctx->audio_cur = ctx->audio[ctx->audio_rr];
+                if (!ctx->audio_cur)
+                    continue;
+
+                /* 1. both sides finished: drop the connection */
+                if (ctx->audio_cur->chan_done && ctx->audio_cur->sock_done) {
+                    free(ctx->audio_cur);
+                    ctx->audio[ctx->audio_rr] = NULL;
+                    ctx->audio_cur = NULL;
+                    continue;
+                }
+
+                /* 2. runner exited or daemon socket gone: close the channel */
+                if (ctx->audio_cur->sock_done || !ctx->audio_cur->xsock->s) {
+                    if (ctx->audio_cur->channel) {
+                        CALL_SOFT(libssh2_channel_free(ctx->audio_cur->channel));
+                        ctx->audio_cur->channel = NULL;
+                    }
+                    ctx->audio_cur->chan_done = 1;
+                    continue;
+                }
+
+                /* 3. remote closed: close channel, wake runner to exit */
+                if (!ctx->audio_cur->channel ||
+                            ctx->audio_cur->channel->remote.eof ||
+                            ctx->audio_cur->channel->remote.close) {
+                    if (ctx->audio_cur->channel) {
+                        CALL_SOFT(libssh2_channel_free(ctx->audio_cur->channel));
+                        ctx->audio_cur->channel = NULL;
+                    }
+                    ctx->audio_cur->chan_done = 1;
+                    if (!ctx->audio_cur->sock_done)
+                        corout_signal(state->o, ctx->audio_cur, X11_SIG);
+                    continue;
+                }
+
+                /* 4a. relay ming64x.exe -> channel */
+                ctx->audio_cur->ssh_ops = 0;
+                ctx->audio_cur->relay_buf = ctx->audio_cur->xsock->s->bufrd;
+                ctx->audio_cur->wr_n = ctx->audio_cur->relay_buf->avail -
+                                     ctx->audio_cur->relay_buf->written;
+                if (ctx->audio_cur->wr_n > 0) {
+                    ctx->audio_cur->relay_buf->ref++;
+                    ctx->audio_cur->relay_buf->writing = 1;
+                    __sync_synchronize();
+                    CALL_SOFT(libssh2_channel_write(ctx->audio_cur->channel,
+                                ctx->audio_cur->relay_buf->data +
+                                ctx->audio_cur->relay_buf->written,
+                                ctx->audio_cur->wr_n));
+                    if (ctx->audio_cur->channel->write_bytes > 0) {
+                        ctx->audio_cur->relay_buf->written += ctx->audio_cur->channel->write_bytes;
+                        ctx->audio_cur->ssh_ops++;
+                    }
+                    __sync_synchronize();
+                    ctx->audio_cur->relay_buf->writing = 0;
+                    corout_buffer_free(ctx->audio_cur->relay_buf);
+                    ctx->audio_cur->relay_buf = NULL;
+                }
+
+                /* the 4a write may have yielded long enough for the runner to
+                   drop xsock (or the socket to disconnect) */
+                if (ctx->audio_cur->sock_done || !ctx->audio_cur->xsock->s)
+                    continue;
+
+                /* 4b. relay channel -> ming64x.exe (only when the buffer has room) */
+                if (ssh2_channel_packet_data_len(ctx->audio_cur->channel, 0) > 0) {
+                    ctx->audio_cur->relay_buf = ctx->audio_cur->xsock->s->bufwr;
+                    ctx->audio_cur->rd_want = ctx->audio_cur->relay_buf->alloced -
+                                            ctx->audio_cur->relay_buf->avail;
+                    if (ctx->audio_cur->rd_want > ctx->audio_cur->relay_buf->alloced / 4) {
+                        ctx->audio_cur->relay_buf->ref++;
+                        ctx->audio_cur->relay_buf->reading = 1;
+                        __sync_synchronize();
+                        CALL_SOFT(libssh2_channel_read(ctx->audio_cur->channel,
+                                    ctx->audio_cur->relay_buf->data +
+                                    ctx->audio_cur->relay_buf->avail,
+                                    ctx->audio_cur->rd_want));
+                        if (ctx->audio_cur->channel->read_bytes > 0) {
+                            ctx->audio_cur->relay_buf->avail += ctx->audio_cur->channel->read_bytes;
+                            ctx->audio_cur->ssh_ops++;
+                        }
+                        __sync_synchronize();
+                        ctx->audio_cur->relay_buf->reading = 0;
+                        corout_buffer_free(ctx->audio_cur->relay_buf);
+                        ctx->audio_cur->relay_buf = NULL;
+                    }
+                }
+
+                /* wake the runner */
+                if (!ctx->audio_cur->sock_done && ctx->audio_cur->ssh_ops)
+                    corout_signal(state->o, ctx->audio_cur, X11_SIG);
+            }
+        }
+
         /* Pop a fresh outbound chunk only once the previous one is fully
            written; wr_n/wr_off persist across yields so a partial write
            resumes with the remainder of the same chunk. */
@@ -888,8 +1228,22 @@ out:
             }
         }
     }
-    if (ctx->session && libssh2_session_last_errno(ctx->session))
+    /* tear down any forwarded PulseAudio connections before the session dies */
+    {
+        int i;
+        for (i = 0; i < AUDIO_MAX; i++) {
+            if (ctx->audio[i]) {
+                corout_kill(state->o, ctx->audio[i]);
+                free(ctx->audio[i]);
+                ctx->audio[i] = NULL;
+            }
+        }
+    }
+    if (ctx->session && libssh2_session_last_errno(ctx->session)) {
         ssh_report_error(s, ctx->session, ctx->stage);
+        if (ctx->fail_hint[0])
+            set_display_error(s, "%s", ctx->fail_hint);
+    }
     if (ctx->session) {
         ctx->tofree = ctx->session;
         ctx->session = NULL;
@@ -943,7 +1297,8 @@ ssh_session_free(ssh_session *s)
 void
 ssh_session_start(ssh_session *s, const char *host,
     const char *username, const char *password, const int display_number,
-    const int x11_forwarding)
+    const int x11_forwarding, const int audio_enabled, const int audio_port,
+    const unsigned char *audio_cookie)
 {
     static int corout_ready = 0;
 
@@ -960,6 +1315,12 @@ ssh_session_start(ssh_session *s, const char *host,
     snprintf(s->password, sizeof s->password, "%s", password);
     s->display_number = display_number;
     s->x11_forwarding = x11_forwarding;
+    s->audio_enabled = audio_enabled;
+    s->audio_port = audio_port;
+    if (audio_cookie)
+        memcpy(s->audio_cookie, audio_cookie, sizeof s->audio_cookie);
+    else
+        memset(s->audio_cookie, 0, sizeof s->audio_cookie);
     s->display_error[0] = '\0';
     InterlockedExchange(&s->display_error_pending, 0);
     s->x11_open_count = 0;

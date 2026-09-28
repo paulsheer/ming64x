@@ -26,6 +26,9 @@ typedef struct ssh_session {
     char password[128];
     int display_number;              /* :0 .. :12, set before start */
     int x11_forwarding;              /* 1 = request X11 forwarding on start */
+    int audio_enabled;               /* 1 = set up PulseAudio reverse-forward */
+    int audio_port;                  /* PulseAudio TCP port (forward + daemon) */
+    unsigned char audio_cookie[256]; /* cookie installed on the remote */
     char display_error[256];         /* DISPLAY setup error text for the UI */
     volatile LONG display_error_pending;  /* 1 = display_error is valid */
     volatile LONG x11_open_count;        /* open forwarded X11 connections */
@@ -60,7 +63,8 @@ void ssh_session_init(ssh_session *s);
 void ssh_session_free(ssh_session *s);
 void ssh_session_start(ssh_session *s, const char *host,
     const char *username, const char *password, int display_number,
-    int x11_forwarding);
+    int x11_forwarding, int audio_enabled, int audio_port,
+    const unsigned char *audio_cookie);
 void ssh_session_stop(ssh_session *s);
 int  ssh_session_is_active(const ssh_session *s);
 int  ssh_x11_open_count(const ssh_session *s);
