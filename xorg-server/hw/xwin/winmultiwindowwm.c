@@ -872,7 +872,6 @@ UpdateState(WMInfoPtr pWMInfo, xcb_window_t iWindow, int state)
                     (pAtom[i] != pWMInfo->ewmh._NET_WM_STATE_MAXIMIZED_HORZ))
                     netwmstate[o++] = pAtom[i];
             }
-            free(reply);
 
             // if iconized, add _NET_WM_HIDDEN
             if (state == XCB_ICCCM_WM_STATE_ICONIC) {
@@ -898,12 +897,14 @@ UpdateState(WMInfoPtr pWMInfo, xcb_window_t iWindow, int state)
                             }
                     }
 
+            free(reply);
+
             if (changed)
                 xcb_change_property(pWMInfo->conn, XCB_PROP_MODE_REPLACE,
                                     iWindow,
                                     pWMInfo->ewmh._NET_WM_STATE,
                                     XCB_ATOM_ATOM, 32,
-                                    o, (unsigned char *) &netwmstate);
+                                    o, (unsigned char *) netwmstate);
         }
     }
 }
