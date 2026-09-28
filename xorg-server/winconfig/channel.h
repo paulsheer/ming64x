@@ -32,6 +32,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#define MAXCHANNELBUF           32700
+
 /*
  * Adjust the receive window for a channel by adjustment bytes. If the amount
  * to be adjusted is less than LIBSSH2_CHANNEL_MINADJUST and force is 0 the

@@ -2032,8 +2032,8 @@ void ssh2_channel_write(LIBSSH2_CHANNEL *channel, const int stream_id,
         /* Clamp after the window-wait yield: buflen is a parameter re-passed
            on resume, and anything before the CALL above is skipped when
            corout_step() re-enters this function fresh. */
-        if(buflen > 32700)
-            buflen = 32700;
+        if(buflen > MAXCHANNELBUF)
+            buflen = MAXCHANNELBUF;
 
         channel->write_bufwrite = buflen;
 
