@@ -98,6 +98,10 @@ fbCopyWindowProc(DrawablePtr pSrcDrawable,
         }
         else
         {
+            int srcXoffset = pbox->x1 + dx + srcXoff;
+            int dstXoffset = pbox->x1 + dstXoff;
+            int copyWidth = (pbox->x2 - pbox->x1);
+
             if (srcYoffset < 0 )
             {
                 copyLines_src += srcYoffset+1;
@@ -119,15 +123,40 @@ fbCopyWindowProc(DrawablePtr pSrcDrawable,
             }
             copyLines = copyLines_src < copyLines_dst ? copyLines_src : copyLines_dst;
 
-            fbBlt(src + srcYoffset * srcStride,
-                  srcStride,
-                  (pbox->x1 + dx + srcXoff) * srcBpp,
-                  dst + dstYoffset * dstStride,
-                  dstStride,
-                  (pbox->x1 + dstXoff) * dstBpp,
-                  (pbox->x2 - pbox->x1) * dstBpp,
-                  copyLines,
-                  GXcopy, FB_ALLONES, dstBpp, reverse, upsidedown);
+            if (srcXoffset < 0 )
+            {
+                dstXoffset -= srcXoffset;
+                copyWidth += srcXoffset;
+                srcXoffset = 0;
+            }
+            else if ( (srcXoffset+copyWidth) > pSrcDrawable->width )
+            {
+                copyWidth = pSrcDrawable->width - srcXoffset;
+            }
+
+            if (dstXoffset < 0 )
+            {
+                srcXoffset -= dstXoffset;
+                copyWidth += dstXoffset;
+                dstXoffset = 0;
+            }
+            else if ( (dstXoffset+copyWidth) > pDstDrawable->width )
+            {
+                copyWidth = pDstDrawable->width - dstXoffset;
+            }
+
+            if (copyWidth > 0 && copyLines > 0)
+            {
+                fbBlt(src + srcYoffset * srcStride,
+                      srcStride,
+                      srcXoffset * srcBpp,
+                      dst + dstYoffset * dstStride,
+                      dstStride,
+                      dstXoffset * dstBpp,
+                      copyWidth * dstBpp,
+                      copyLines,
+                      GXcopy, FB_ALLONES, dstBpp, reverse, upsidedown);
+            }
         }
         pbox++;
     }
