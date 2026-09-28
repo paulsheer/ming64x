@@ -75,19 +75,39 @@ END
  */
 
 /* About */
-ABOUT_BOX DIALOGEX 32, 32, 260, 95
+ABOUT_BOX DIALOGEX 32, 32, 380, 339
 STYLE WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | WS_TABSTOP  | DS_CENTERMOUSE
 CAPTION "About Ming64x"
 FONT 8, "MS Shell Dlg 2"
 BEGIN
   CONTROL			IDI_XWIN, IDC_STATIC, "Static", SS_ICON, 8, 8, 32, 32
-  LTEXT			"Ming64x X Window Server ", IDC_STATIC, 36, 8, 220, 8
-  LTEXT			"https://github.com/paulsheer/ming64x", IDC_STATIC, 36, 18, 220, 8
-  LTEXT			"Version "VER_PRODUCTVERSION_STR" (22 Sep 2026)", IDC_STATIC, 36, 28, 220, 8
-  LTEXT			"Base on VcXsrv by Marc Haesen", IDC_STATIC, 36, 44, 220, 8
-  DEFPUSHBUTTON		"OK", IDOK, 105, 70, 50, 15
+  LTEXT			"Ming64x X Window Server ", IDC_STATIC,                                                                                         36, 8,   380, 8
+  LTEXT			"https://github.com/paulsheer/ming64x", IDC_STATIC,                                                                             36, 18,  380, 8
+  LTEXT			"Version "VER_PRODUCTVERSION_STR" (22 Sep 2026)", IDC_STATIC,                                                                   36, 28,  380, 8
+  LTEXT			"By Paul Sheer", IDC_STATIC,                                                                                                    36, 44,  380, 8
+  LTEXT			"Based on VcXsrv by Marc Haesen", IDC_STATIC,                                                                                   36, 60,  380, 8
+  LTEXT			"Based on PulseAudio by", IDC_STATIC,                                                                                           36, 76,  380, 8
+  LTEXT			"    Lennart Poettering, and", IDC_STATIC,                                                                                      36, 86,  380, 8
+  LTEXT			"    Tanu Kaskinen, Arun Raghavan, Pierre Ossman, Peter Meerwald, Colin Guthrie, David Henningsson,", IDC_STATIC,               36, 96,  380, 8
+  LTEXT			"    João Paulo Rechi Vita, Maarten Bosmans, Igor V. Kovalenko, Georg Chini, Mikel Astiz,", IDC_STATIC,                         36, 106, 380, 8
+  LTEXT			"    Marc-André Lureau, Arnaud Rebillout, Wim Taymans, Damir Jelic, Luiz Augusto von Dentz,", IDC_STATIC,                       36, 116, 380, 8
+  LTEXT			"    and many others", IDC_STATIC,                                                                                              36, 126, 380, 8
+  LTEXT			"Based on X.Org Server and XFree86 by", IDC_STATIC,                                                                             36, 142, 380, 8
+  LTEXT			"    Peter Hutterer, and", IDC_STATIC,                                                                                          36, 152, 380, 8
+  LTEXT			"    Adam Jackson, Keith Packard, Alan Coopersmith, Jeremy Huddleston, Eric Anholt, Daniel Stone,", IDC_STATIC,                 36, 162, 380, 8
+  LTEXT			"    Enrico Weigelt, Jon Turney, Olivier Fourdan, Eamon Walsh, Dave Airlie, Zhigang Gong, ", IDC_STATIC,                        36, 172, 380, 8
+  LTEXT			"    Ian Romanick, Tiago Vignatti, Julien Cristau, Aaron Plattner, Ben Byer, ", IDC_STATIC,                                     36, 182, 380, 8
+  LTEXT			"    Gaetan Nadon, Matthieu Herrb, Jamey Sharp, Hans de Goede, Alexander Gottwald, ", IDC_STATIC,                               36, 192, 380, 8
+  LTEXT			"    Egbert Eich, Roland Mainz, Colin Harrison, Kevin E Martin, Alan Hourihane, ", IDC_STATIC,                                  36, 202, 380, 8
+  LTEXT			"    Maarten Maathuis, David Dawes, Glenn Lai, Jim Tsillas, David Wexelblat, ", IDC_STATIC,                                     36, 212, 380, 8
+  LTEXT			"    and many others", IDC_STATIC,                                                                                              36, 222, 380, 8
+  LTEXT			"Based on X386 by Thomas Roell and Mark W. Snitily", IDC_STATIC,                                                                36, 238, 380, 8
+  LTEXT			"Based on the X Window System X11 sample server by", IDC_STATIC,                                                                36, 254, 380, 8
+  LTEXT			"    Robert W. Scheifler, Jim Gettys, Ron Newman, Tony Della Fera, William A. Inman, and Keith Packard", IDC_STATIC,            36, 264, 380, 8
+  LTEXT			"Based on libssh2 by Sara Golemon and Daniel Stenberg", IDC_STATIC,                                                             36, 280, 380, 8
+  LTEXT			"With code by Daniel J. Bernstein", IDC_STATIC,                                                                                 36, 294, 380, 8
+  DEFPUSHBUTTON		"OK", IDOK, 125, 314, 50, 15
 END
-
 
 /* Depth change */
 
