@@ -1091,14 +1091,21 @@ static int run_tests(int sock_fd, xcb_connection_t *conn, xcb_window_t win,
                 continue;
             }
 
-            /* Give VcXsrv time to process the TARGETS reply and add
-               CF_DIB/CF_DIBV5 to the Windows clipboard via
-               handleSelectionNotify before win32cliptest calls
-               GetClipboardData.  Without this delay GetClipboardData
-               returns NULL and WM_RENDERFORMAT goes to fake_paste. */
-            usleep(300000);
+            /* VcXsrv now eagerly fetches the image (during its owner-change
+               handler) before advertising CF_DIB to the Windows clipboard.
+               Serve X11 events until the image SelectionRequest has been
+               fully served (g_sel_delivered), then give VcXsrv a margin to
+               decode and SetClipboardData before telling win32cliptest to
+               paste.  Without this, win32cliptest (like MSPaint) would
+               OpenClipboard while VcXsrv's slow INCR render still holds the
+               clipboard, failing with ERROR_ACCESS_DENIED. */
+            while (!g_sel_delivered && !timed_out(t_start)) {
+                wait_events(x11_fd, sock_fd, 1000);
+                process_x11(conn);
+            }
+            usleep(1000000);
 #ifdef VERBOSE
-            log_msg(" [CF_DIB wait done]");
+            log_msg(" [eager fetch wait done]");
 #endif
 
             /* 4. Send request to Windows */

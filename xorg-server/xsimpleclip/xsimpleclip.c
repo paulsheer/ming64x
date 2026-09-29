@@ -4,7 +4,7 @@
  * Loads a PNG file, asserts CLIPBOARD ownership, and serves the image
  * via the INCR protocol when a requestor asks for image/png.
  * Logs every significant event to stdout with millisecond timestamps.
- * Exits after a successful paste or SelectionClear.
+ * Exits after a successful paste or SelectionClear (unless -hold is given).
  *
  * Build:  make -f Makefile.linux
  * Usage:  ./xsimpleclip image.png
@@ -53,12 +53,11 @@ static xcb_atom_t ATOM_IMAGE_BMP;
 static xcb_atom_t ATOM_IMAGE_JPEG;
 static xcb_atom_t ATOM_IMAGE_GIF;
 static xcb_atom_t ATOM_INCR;
-static xcb_atom_t ATOM_UTF8_STRING;
 
 /* ---------- image data ---------- */
 static unsigned char *g_image_data = NULL;
 static size_t        g_image_size = 0;
-static const char   *g_filename   = NULL;  /* argv[1] for text mode         */
+static const char   *g_filename   = NULL;  /* argv[1] = image path          */
 
 /* ---------- X11 state ---------- */
 static xcb_connection_t *g_conn = NULL;
@@ -68,10 +67,6 @@ static int                g_running = 1;
 /* ---------- INCR transfer state ---------- */
 static int         g_incr_active    = 0;    /* 1 while sending chunks          */
 static int         g_incr_done      = 0;    /* 1 after final zero-length chunk */
-static double      g_incr_done_time = 0;    /* when the transfer completed     */
-static int         g_text_mode      = 0;    /* 0=image 1=countdown 2=text-copied */
-static int         g_countdown_next = 0;    /* next phase# to print (1..5)       */
-static int         g_text_served    = 0;    /* filename text sent to requestor   */
 static xcb_window_t g_incr_requestor;
 static xcb_atom_t   g_incr_property;
 static xcb_atom_t   g_incr_selection;
@@ -84,6 +79,7 @@ static unsigned int g_incr_total_chunks;
 static double       g_incr_start_time;
 static double       g_incr_delete_wait_start;
 static int          g_abort            = 0;    /* -abort: _exit(1) halfway through INCR */
+static int          g_hold             = 0;    /* -hold: keep serving pastes indefinitely */
 
 /* ---------- paste mode state ---------- */
 static int          g_paste_mode         = 0;
@@ -247,9 +243,8 @@ static void incr_send_next(void)
             g_incr_total, g_incr_chunk_num);
         g_incr_active      = 0;
         g_incr_done        = 1;
-        g_incr_done_time   = now_ms();
-        g_countdown_next   = 1;
-        g_text_mode        = 1;  /* enter countdown phase */
+        if (!g_hold)
+            g_running      = 0;  /* successful paste - exit */
         return;
     }
 
@@ -457,11 +452,9 @@ static void handle_selection_request(xcb_selection_request_event_t *e)
             send_selection_notify(e->requestor, e->selection,
                                   e->target, e->property, e->time);
             LOG("Direct transfer complete: %zu bytes", g_image_size);
-            /* Start countdown → text-mode exit, same as INCR path */
             g_incr_done        = 1;
-            g_incr_done_time   = now_ms();
-            g_countdown_next   = 1;
-            g_text_mode        = 1;
+            if (!g_hold)
+                g_running      = 0;  /* successful paste - exit */
         } else {
             /* Large image - INCR protocol */
             LOG("SelectionRequest %s: too large for single request "
@@ -469,50 +462,6 @@ static void handle_selection_request(xcb_selection_request_event_t *e)
                 get_atom_name(e->target), g_image_size, max_size);
             incr_start(e);
         }
-        return;
-    }
-
-    /* Text mode: after image INCR completes we switch to offering the
-       filename.  Non-INCR since filenames are always small. */
-    if (g_text_mode == 2 && g_filename &&
-        (e->target == XCB_ATOM_STRING ||
-         e->target == ATOM_UTF8_STRING)) {
-        size_t len = strlen(g_filename);
-        LOG("SelectionRequest %s: serving filename \"%s\" (%zu bytes, "
-            "non-INCR)",
-            get_atom_name(e->target), g_filename, len);
-        xcb_change_property(g_conn, XCB_PROP_MODE_REPLACE,
-                            e->requestor, e->property,
-                            e->target, 8, len, g_filename);
-        send_selection_notify(e->requestor, e->selection,
-                              e->target, e->property, e->time);
-        g_text_served = 1;
-        return;
-    }
-
-    /* Text-mode TARGETS */
-    if (g_text_mode == 2 && e->target == ATOM_TARGETS) {
-        xcb_atom_t targets[4];
-        int n = 0;
-        targets[n++] = ATOM_TARGETS;
-        targets[n++] = ATOM_TIMESTAMP;
-        targets[n++] = XCB_ATOM_STRING;
-        targets[n++] = ATOM_UTF8_STRING;
-        {
-            char tgtlist[256];
-            int off = 0, i;
-            for (i = 0; i < n; i++)
-                off += snprintf(tgtlist + off, sizeof(tgtlist) - off, "%s%s",
-                                i ? " " : " [", get_atom_name(targets[i]));
-            snprintf(tgtlist + off, sizeof(tgtlist) - off, "]");
-            LOG("SelectionRequest TARGETS (text mode): offering %d formats%s",
-                n, tgtlist);
-        }
-        xcb_change_property(g_conn, XCB_PROP_MODE_REPLACE,
-                            e->requestor, e->property,
-                            XCB_ATOM_ATOM, 32, n, targets);
-        send_selection_notify(e->requestor, e->selection,
-                              e->target, e->property, e->time);
         return;
     }
 
@@ -565,7 +514,9 @@ static void main_loop(void)
                     g_incr_active = 0;
                 }
 
-                if (g_incr_done || g_text_mode) {
+                if (g_hold) {
+                    LOG("SelectionClear - (hold) staying alive");
+                } else if (g_incr_done) {
                     LOG("SelectionClear - exiting");
                     g_running = 0;
                 } else if (!g_incr_active) {
@@ -635,49 +586,13 @@ static void main_loop(void)
             continue;
         }
 
-        /* Countdown after INCR completes: print "waiting to exit N/5"
-           every 200 ms for 1 second, then switch clipboard to the
-           filename as text and exit. */
-        if (g_text_mode == 1) {
-            double elapsed = now_ms() - g_incr_done_time;
-            int phase = (int)(elapsed / 0.200) + 1;
-            if (phase > 5) phase = 5;
-
-            if (phase >= g_countdown_next) {
-                LOG("waiting to exit %d/5", phase);
-                g_countdown_next = phase + 1;
-
-                if (phase >= 5) {
-                    /* Re-take CLIPBOARD ownership - this signals VcXsrv
-                       that clipboard content has changed to text. */
-                    xcb_void_cookie_t ck = xcb_set_selection_owner_checked(
-                        g_conn, g_win, ATOM_CLIPBOARD, XCB_CURRENT_TIME);
-                    xcb_generic_error_t *err =
-                        xcb_request_check(g_conn, ck);
-                    if (err) free(err);
-                    xcb_flush(g_conn);
-                    g_text_mode = 2;
-                    LOG("TEXT-COPY: filename \"%s\" now on CLIPBOARD, "
-                        "exiting", g_filename);
-                    g_running = 0;
-                }
-            }
-        }
-
-        /* Text mode: after filename has been served to a requestor,
-           exit immediately. */
-        if (g_text_mode == 2 && g_text_served) {
-            LOG("Text served, exiting");
-            g_running = 0;
-        }
-
-        /* Block briefly (100 ms) so the countdown fires promptly.
-           When nothing is in progress this acts as a heartbeat. */
+        /* Block briefly (200 ms) as a heartbeat while waiting for
+           paste requests or SelectionClear. */
         {
             fd_set fds;
             FD_ZERO(&fds);
             FD_SET(fd, &fds);
-            struct timeval tv = {0, 100000};
+            struct timeval tv = {0, 200000};
             select(fd + 1, &fds, NULL, NULL, &tv);
         }
     }
@@ -893,7 +808,6 @@ static int setup_atoms(void)
     ATOM_IMAGE_JPEG = intern("image/jpeg");
     ATOM_IMAGE_GIF  = intern("image/gif");
     ATOM_INCR        = intern("INCR");
-    ATOM_UTF8_STRING = intern("UTF8_STRING");
 
     if (!ATOM_CLIPBOARD || !ATOM_TARGETS || !ATOM_TIMESTAMP ||
         !ATOM_IMAGE_PNG || !ATOM_INCR) {
@@ -912,7 +826,7 @@ int main(int argc, char **argv)
     int w, h, channels;
 
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s [-abort] <image.png>\n"
+        fprintf(stderr, "Usage: %s [-hold] [-abort] <image.png>\n"
                 "       %s -paste <output.png|.bmp|.jpg|.gif>\n",
                 argv[0], argv[0]);
         return 1;
@@ -926,11 +840,18 @@ int main(int argc, char **argv)
             return 1;
         }
         g_output_file = argv[2];
+    } else if (strcmp(argv[1], "-hold") == 0) {
+        g_hold = 1;
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s [-hold] <image.png>\n", argv[0]);
+            return 1;
+        }
+        g_filename = argv[2];
     } else if (strcmp(argv[1], "-abort") == 0) {
         g_abort = 1;
         LOG("ABORT mode: will _exit(1) halfway through INCR transfer");
         if (argc < 3) {
-            fprintf(stderr, "Usage: %s [-abort] <image.png>\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-hold] [-abort] <image.png>\n", argv[0]);
             return 1;
         }
         g_filename = argv[2];

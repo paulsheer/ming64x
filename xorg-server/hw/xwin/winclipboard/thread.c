@@ -125,19 +125,19 @@ BOOL
 winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
 {
     ClipboardAtoms atoms;
-    int iReturn;
+    int iReturn = 0;
     HWND hwnd = NULL;
     int iConnectionNumber = 0;
 #ifdef HAS_DEVWINDOWS
     int fdMessageQueue = 0;
 #else
-    struct timeval tvTimeout;
+    struct timeval tvTimeout = {0, 0};
 #endif
     fd_set fdsRead;
-    int iMaxDescriptor;
-    xcb_connection_t *conn;
+    int iMaxDescriptor = 0;
+    xcb_connection_t *conn = NULL;
     xcb_window_t iWindow = XCB_NONE;
-    int iSelectError;
+    int iSelectError = 0;
     BOOL fShutdown = FALSE;
 
     pthread_cleanup_push(&winClipboardThreadExit, NULL);
@@ -196,7 +196,6 @@ winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
     atoms.atomImageBmp = intern_atom(conn, "image/bmp");
     atoms.atomImageJpeg = intern_atom(conn, "image/jpeg");
     atoms.atomImageGif  = intern_atom(conn, "image/gif");
-    atoms.atomImageProbe = intern_atom(conn, "CYGX_IMAGE_PROBE");
 #ifdef CLIPDEBUG
     atoms.atomDebugOn = intern_atom(conn, "CLIPTEST_DBG_ON");
     atoms.atomDebugOff = intern_atom(conn, "CLIPTEST_DBG_OFF");
@@ -293,8 +292,7 @@ winClipboardProc(char *szDisplay, xcb_auth_info_t *auth_info)
         }
     }
 
-    data.incr = NULL;
-    data.incrsize = 0;
+    memset(&data, 0, sizeof(data));
     winDebug ("winClipboardProc - Started\n");
     /* Signal that the clipboard client has started */
     g_fClipboardStarted = TRUE;

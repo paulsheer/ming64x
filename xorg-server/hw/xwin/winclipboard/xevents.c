@@ -66,7 +66,19 @@
 
 extern int xfixes_event_base;
 BOOL fPrimarySelection = TRUE;
-static BOOL g_fPendingImageCheck = FALSE;
+
+/* Guard against reentering the owner-change TARGETS probe: a nested
+   winProcessXEventsTimeout() can dispatch another owner-change event while we
+   are still probing the previous owner. */
+static BOOL g_fProbingTargets = FALSE;
+
+/* Eager-render state: when g_fEagerFetch is TRUE, winClipboardSelectionNotifyData
+   stashes the decoded DIB here instead of calling SetClipboardData.  The Windows
+   clipboard is not open during the owner-change eager fetch, so the actual
+   SetClipboardData is deferred to the owner-change handler. */
+static BOOL g_fEagerFetch = FALSE;
+static void *g_pvEagerDib = NULL;
+static SIZE_T g_cbEagerDib = 0;
 
 /*
  * Local variables
@@ -198,6 +210,35 @@ static char *get_atom_name(xcb_connection_t *conn, xcb_atom_t atom)
     }
     free(reply);
     return ret;
+}
+
+/* Pick the most preferred image target offered by the selection owner,
+   matching the priority order used by the WM_RENDERFORMAT handler. */
+static xcb_atom_t
+winClipboardBestImageTarget(const xcb_atom_t *targetList, ClipboardAtoms *atoms)
+{
+    struct {
+        xcb_atom_t target;
+        int priority;
+    } prio[] = {
+        { atoms->atomImagePng,   0 },
+        { atoms->atomImageBmp,   1 },
+        { atoms->atomImageJpeg,  2 },
+        { atoms->atomImageGif,   3 },
+    };
+    int best_priority = INT_MAX;
+    xcb_atom_t best = XCB_NONE;
+    int i, j;
+
+    for (i = 0; targetList && targetList[i]; i++) {
+        for (j = 0; j < (int) (sizeof(prio) / sizeof(prio[0])); j++) {
+            if (targetList[i] == prio[j].target && prio[j].priority < best_priority) {
+                best_priority = prio[j].priority;
+                best = prio[j].target;
+            }
+        }
+    }
+    return best;
 }
 
 static int
@@ -387,6 +428,20 @@ winClipboardSelectionNotifyData(HWND hwnd, xcb_window_t iWindow, xcb_connection_
                                           xtpText_value, xtpText_nitems,
                                           &pvDib, &cbDib, fV5)
             && pvDib && cbDib) {
+            if (g_fEagerFetch) {
+                /* Eager render: hand the decoded DIB to the owner-change
+                   handler, which will SetClipboardData it once the clipboard
+                   is open.  The clipboard is not open here. */
+                g_pvEagerDib = pvDib;
+                g_cbEagerDib = cbDib;
+                free(reply);
+                if (data->incr) {
+                    free(data->incr);
+                    data->incr = NULL;
+                    data->incrsize = 0;
+                }
+                return WIN_XEVENTS_NOTIFY_DATA;
+            }
             HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, cbDib);
             if (hDib) {
                 void *pDst = GlobalLock(hDib);
@@ -1339,57 +1394,6 @@ handleSelectionNotify(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                       xcb_atom_t atomTargets,
                       xcb_selection_notify_event_t *selection_notify)
 {
-    /* Intercept the async image-probe TARGETS reply.  This SelectionNotify
-       uses a dedicated property (atomImageProbe) so it cannot collide with
-       WM_RENDERFORMAT's TARGETS query on atomLocalProperty.
-       Always consume replies on this property, even stale ones, so they
-       never fall through to winClipboardSelectionNotifyTargets (which
-       would read the wrong property). */
-    if (selection_notify->property == atoms->atomImageProbe) {
-        if (g_fPendingImageCheck) {
-            g_fPendingImageCheck = FALSE;
-
-            if (selection_notify->target == atomTargets) {
-                xcb_get_property_cookie_t cookie =
-                    xcb_get_property(conn, TRUE, iWindow,
-                                     atoms->atomImageProbe,
-                                     XCB_GET_PROPERTY_TYPE_ANY, 0, INT_MAX);
-                xcb_get_property_reply_t *reply =
-                    xcb_get_property_reply(conn, cookie, NULL);
-                if (reply) {
-                    xcb_atom_t *prop = xcb_get_property_value(reply);
-                    int nitems = xcb_get_property_value_length(reply)
-                                 / sizeof(xcb_atom_t);
-                    BOOL fHasImage = FALSE;
-                    int i;
-                    for (i = 0; i < nitems; i++) {
-                        if (prop[i] == atoms->atomImagePng
-                            || prop[i] == atoms->atomImageBmp
-                            || prop[i] == atoms->atomImageJpeg
-                            || prop[i] == atoms->atomImageGif) {
-                            fHasImage = TRUE;
-                            break;
-                        }
-                    }
-                    free(reply);
-
-                    if (fHasImage) {
-                        if (OpenClipboard(hwnd)) {
-                            if (GetClipboardOwner() == hwnd) {
-                                SetClipboardData(CF_DIBV5, NULL);
-                                SetClipboardData(CF_DIB, NULL);
-                            }
-                            CloseClipboard();
-                        }
-                    }
-                }
-            }
-        }
-
-        free(selection_notify);
-        return WIN_XEVENTS_SUCCESS;
-    }
-
     if (selection_notify->property == XCB_NONE) {
         ErrorF("winClipboardFlushXEvents - SelectionNotify - Conversion to format %d refused.\n", selection_notify->target);
         free(selection_notify);
@@ -1554,6 +1558,94 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
+                /* A nested owner-change arriving while we are synchronously
+                   probing the previous owner's targets must not empty the
+                   clipboard and advertise a text-only clipboard: the outer
+                   probe is still in progress and will advertise based on its
+                   own result. */
+                if (g_fProbingTargets) {
+                    break;
+                }
+
+                /* Determine synchronously whether the new owner offers image
+                   and/or text targets, so we only advertise the formats it
+                   can actually render.  Advertising a format the owner cannot
+                   supply makes apps like MSPaint request it first, receive
+                   NULL, and fail instead of falling back to a supported
+                   format. */
+                BOOL fHasImage = FALSE;
+                BOOL fHasText = FALSE;
+                xcb_atom_t bestImageTarget = XCB_NONE;
+                void *pvEagerDib = NULL;
+                SIZE_T cbEagerDib = 0;
+                {
+                    ClipboardConversionData probe;
+                    int iProbe;
+
+                    g_fProbingTargets = TRUE;
+                    memset(&probe, 0, sizeof(probe));
+                    xcb_convert_selection(conn, iWindow, e->selection,
+                                          atoms->atomTargets,
+                                          atoms->atomLocalProperty,
+                                          XCB_CURRENT_TIME);
+                    iProbe = winProcessXEventsTimeout(hwnd, iWindow, conn,
+                                                      &probe, atoms,
+                                                      WIN_POLL_TIMEOUT);
+                    if (iProbe == WIN_XEVENTS_NOTIFY_TARGETS) {
+                        int i;
+                        for (i = 0; probe.targetList && probe.targetList[i]; i++) {
+                            xcb_atom_t t = probe.targetList[i];
+                            if (t == atoms->atomImagePng
+                                || t == atoms->atomImageBmp
+                                || t == atoms->atomImageJpeg
+                                || t == atoms->atomImageGif) {
+                                fHasImage = TRUE;
+                            }
+                            else if (t == atoms->atomUTF8String
+                                     || t == XCB_ATOM_STRING
+                                     || t == atoms->atomCompoundText) {
+                                fHasText = TRUE;
+                            }
+                        }
+                        bestImageTarget = winClipboardBestImageTarget(probe.targetList, atoms);
+                        free(probe.targetList);
+                    }
+                    free(probe.incr);
+                    g_fProbingTargets = FALSE;
+                }
+
+                /* Eager render: fetch and decode the image now so the Win32
+                   clipboard holds real CF_DIB data.  This avoids delayed
+                   rendering, where GetClipboardData() triggers WM_RENDERFORMAT
+                   and a slow INCR fetch that holds the clipboard open and makes
+                   other apps' OpenClipboard() fail with ERROR_ACCESS_DENIED. */
+                if (fHasImage && bestImageTarget != XCB_NONE) {
+                    ClipboardConversionData imgData;
+                    int iImg;
+
+                    memset(&imgData, 0, sizeof(imgData));
+                    imgData.requestedFmt = CF_DIB;
+                    g_fEagerFetch = TRUE;
+                    g_pvEagerDib = NULL;
+                    g_cbEagerDib = 0;
+                    xcb_convert_selection(conn, iWindow, e->selection,
+                                          bestImageTarget,
+                                          atoms->atomLocalProperty,
+                                          XCB_CURRENT_TIME);
+                    iImg = winProcessXEventsTimeout(hwnd, iWindow, conn,
+                                                    &imgData, atoms,
+                                                    WIN_POLL_TIMEOUT);
+                    g_fEagerFetch = FALSE;
+                    if (iImg == WIN_XEVENTS_NOTIFY_DATA
+                        && g_pvEagerDib && g_cbEagerDib) {
+                        pvEagerDib = g_pvEagerDib;
+                        cbEagerDib = g_cbEagerDib;
+                        g_pvEagerDib = NULL;
+                        g_cbEagerDib = 0;
+                    }
+                    free(imgData.incr);
+                }
+
                 /* Close clipboard in case we already have it open */
                 CloseClipboard();
 
@@ -1570,10 +1662,38 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
-                /* Advertise text formats.  CF_DIB is added later only
-                   if a background TARGETS probe finds image types. */
-                SetClipboardData(CF_UNICODETEXT, NULL);
-                SetClipboardData(CF_TEXT, NULL);
+                /* Advertise only the formats the X11 owner can actually
+                   render: the eagerly-decoded CF_DIB when it offers an image
+                   target (falling back to delayed rendering if the fetch
+                   failed), and text formats when it offers a text target. */
+                if (fHasImage) {
+                    if (pvEagerDib && cbEagerDib) {
+                        HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, cbEagerDib);
+                        if (hDib) {
+                            void *pDst = GlobalLock(hDib);
+                            if (pDst) {
+                                memcpy(pDst, pvEagerDib, cbEagerDib);
+                                GlobalUnlock(hDib);
+                                if (!SetClipboardData(CF_DIB, hDib)) {
+                                    GlobalFree(hDib);
+                                }
+                            } else {
+                                GlobalFree(hDib);
+                            }
+                        }
+                        free(pvEagerDib);
+                        pvEagerDib = NULL;
+                        /* CF_DIBV5 remains a delayed-render fallback */
+                        SetClipboardData(CF_DIBV5, NULL);
+                    } else {
+                        SetClipboardData(CF_DIBV5, NULL);
+                        SetClipboardData(CF_DIB, NULL);
+                    }
+                }
+                if (fHasText) {
+                    SetClipboardData(CF_UNICODETEXT, NULL);
+                    SetClipboardData(CF_TEXT, NULL);
+                }
 
                 /* Release the clipboard */
                 if (!CloseClipboard()) {
@@ -1581,15 +1701,6 @@ winClipboardFlushXEvents(HWND hwnd,
                     break;
                 }
 
-                /* Issue async TARGETS probe so we can decide whether to
-                   also advertise CF_DIB.  Uses a dedicated property so the
-                   reply is distinguishable from WM_RENDERFORMAT's query. */
-                xcb_convert_selection(conn, iWindow, e->selection,
-                                      atoms->atomTargets,
-                                      atoms->atomImageProbe,
-                                      XCB_CURRENT_TIME);
-                xcb_flush(conn);
-                g_fPendingImageCheck = TRUE;
             }
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_WINDOW_DESTROY */
             /* XCB_XFIXES_SELECTION_EVENT_SELECTION_CLIENT_CLOSE */

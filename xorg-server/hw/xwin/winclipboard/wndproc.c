@@ -56,7 +56,6 @@
  * Constants
  */
 
-#define WIN_POLL_TIMEOUT	1
 #define WIN_POLL_TIMEOUT_DATA	30
 
 /*
@@ -72,7 +71,7 @@ extern HWND g_hwndClipboard;
  * Process X events up to specified timeout
  */
 
-static int
+int
 winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                          ClipboardConversionData *data, ClipboardAtoms *atoms, int iTimeoutSec)
 {
@@ -321,6 +320,14 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         } else {
             dbg_write("WM_CBUPDATE: OpenClipboard FAILED: %lu", GetLastError());
             ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
+
+            /* Transient contention (ERROR_ACCESS_DENIED) on the clipboard:
+               reasserting X11 selection ownership here would fight whatever
+               app currently holds the clipboard and trigger the
+               reassert/churn loop.  Wait for the next WM_CLIPBOARDUPDATE
+               instead of reasserting blindly. */
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
+            return 0;
         }
 
         if (fCheckedClipboard && !bOneOfOurs) {
@@ -430,6 +437,13 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         memset(&data, '\0', sizeof(data));
         data.requestedFmt = (UINT)wParam;
         int best_target = 0, best_priority = INT_MAX;
+        BOOL this_is_an_image =
+            ((UINT)wParam == CF_DIB
+             || (UINT)wParam == CF_BITMAP
+             || (UINT)wParam == CF_DIBV5
+             || (UINT)wParam == atoms->cfPng
+             || (UINT)wParam == atoms->cfJfif
+             || (UINT)wParam == atoms->cfGif);
 
         winDebug("winClipboardWindowProc - WM_RENDERFORMAT %d - Hello.\n",
                  (int)wParam);
@@ -471,7 +485,20 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 unsigned int priority;
             };
 
-            struct target_priority target_priority_table[] =
+            struct target_priority *target_priority_table = NULL;
+            int n_target_priority_table = 0;
+            struct target_priority target_priority_table_image[] =
+                {
+                    { atoms->atomImagePng,     0 },
+                    { atoms->atomImageBmp,     1 },
+                    { atoms->atomImageJpeg,    2 },
+                    { atoms->atomImageGif,     3 },
+                    { atoms->atomUTF8String,   4 },
+                    { atoms->atomCompoundText, 5 },
+                    { XCB_ATOM_STRING,         6 },
+                };
+
+            struct target_priority target_priority_table_text[] =
                 {
                     { atoms->atomUTF8String,   0 },
                     { atoms->atomCompoundText, 1 },
@@ -482,10 +509,18 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     { atoms->atomImageGif,     6 },
                 };
 
+            if (this_is_an_image) {
+                target_priority_table = target_priority_table_image;
+                n_target_priority_table = ARRAY_SIZE(target_priority_table_image);
+            } else {  /* some kind of text */
+                target_priority_table = target_priority_table_text;
+                n_target_priority_table = ARRAY_SIZE(target_priority_table_text);
+            }
+
             int i,j;
             for (i = 0 ; data.targetList[i] != 0; i++)
                 {
-                    for (j = 0; j < ARRAY_SIZE(target_priority_table); j ++)
+                    for (j = 0; j < n_target_priority_table; j ++)
                         {
                             if ((data.targetList[i] == target_priority_table[j].target) &&
                                 (target_priority_table[j].priority < best_priority))
@@ -503,15 +538,24 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         winDebug("winClipboardWindowProc - best target is %d, best_priority=%d\n", (int) best_target, (int) best_priority);
 
         if (best_target) {
-            /* Diagnose type mismatch: Win32 requests image but X11 only has text */
-            if (((UINT)wParam == 8 || (UINT)wParam == 2 || (UINT)wParam == 17)
-                && best_target != atoms->atomImagePng
-                && best_target != atoms->atomImageBmp
-                && best_target != atoms->atomImageJpeg
-                && best_target != atoms->atomImageGif) {
+            BOOL best_is_image =
+                (best_target == atoms->atomImagePng
+                 || best_target == atoms->atomImageBmp
+                 || best_target == atoms->atomImageJpeg
+                 || best_target == atoms->atomImageGif);
+
+            /* Never cross kinds: an image request must be satisfied by an
+               image target, a text request by a text target.  Otherwise we
+               would decode bytes into the wrong clipboard slot. */
+            if (this_is_an_image && !best_is_image) {
                 ErrorF("MISMATCH: Win32 requested image format %u but"
-                       " best X11 target is a text type — setting NULL,"
-                       " app can fall back to text\n",
+                       " best X11 target is text — setting NULL\n",
+                       (unsigned int)wParam);
+                goto fake_paste;
+            }
+            if (!this_is_an_image && best_is_image) {
+                ErrorF("MISMATCH: Win32 requested text format %u but"
+                       " best X11 target is image — setting NULL\n",
                        (unsigned int)wParam);
                 goto fake_paste;
             }

@@ -66,6 +66,8 @@ typedef int pid_t;
 
 #define WM_WM_QUIT                             (WM_USER + 201)
 
+#define WIN_POLL_TIMEOUT	1
+
 #define ARRAY_SIZE(a)  (sizeof((a)) / sizeof((a)[0]))
 
 /*
@@ -107,7 +109,6 @@ typedef struct
     xcb_atom_t atomImageBmp;
     xcb_atom_t atomImageJpeg;
     xcb_atom_t atomImageGif;
-    xcb_atom_t atomImageProbe;   /* dedicated property for async TARGETS probe */
 #ifdef CLIPDEBUG
     xcb_atom_t atomDebugOn;      /* CLIPTEST_DBG_ON — starts debug logging */
     xcb_atom_t atomDebugOff;     /* CLIPTEST_DBG_OFF — stops debug logging */
@@ -187,6 +188,11 @@ int
 winClipboardFlushXEvents(HWND hwnd,
                          xcb_window_t iWindow, xcb_connection_t * pDisplay,
                          ClipboardConversionData *data, ClipboardAtoms *atoms);
+
+int
+winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
+                         ClipboardConversionData *data, ClipboardAtoms *atoms,
+                         int iTimeoutSec);
 
 xcb_atom_t
 winClipboardGetLastOwnedSelectionAtom(ClipboardAtoms *atoms);
