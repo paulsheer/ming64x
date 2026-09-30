@@ -80,6 +80,21 @@ static struct sockbuf *xdmcpSockbuf6;
 #endif
 #endif
 
+static int xdmcp_cur_iface = -1;        /* interface selected for the session */
+static int xdmcp_recv_iface = -1;       /* interface the last packet arrived on */
+
+#ifdef WIN32
+typedef struct {
+    int fd;                     /* per-interface UDP socket */
+    struct sockaddr_in addr;    /* local address advertised in the Request */
+    struct sockaddr_in broad;   /* broadcast destination for this interface */
+    struct sockbuf *sockbuf;    /* IOCP sockbuf */
+} XdmcpIfaceRec;
+
+static XdmcpIfaceRec *xdmcp_ifaces;
+static int xdmcp_nifaces;
+#endif
+
 #if defined(IPv6)
 static int xdmcpSocket6;
 static struct sockaddr_storage req_sockaddr;
@@ -588,6 +603,8 @@ static void
 xdmcp_reset(void)
 {
     timeOutRtx = 0;
+    xdmcp_cur_iface = -1;
+    xdmcp_recv_iface = -1;
     if (xdmcpSocket >= 0) {
         SetNotifyFd(xdmcpSocket, XdmcpSocketNotify, X_NOTIFY_READ, NULL);
 #ifdef WIN32
@@ -600,6 +617,18 @@ xdmcp_reset(void)
 #ifdef WIN32
         ospoll_bind_sockbuf(server_poll, xdmcpSocket6, xdmcpSockbuf6);
 #endif
+    }
+#endif
+#ifdef WIN32
+    {
+        int i;
+
+        for (i = 0; i < xdmcp_nifaces; i++) {
+            SetNotifyFd(xdmcp_ifaces[i].fd, XdmcpSocketNotify,
+                        X_NOTIFY_READ, NULL);
+            ospoll_bind_sockbuf(server_poll, xdmcp_ifaces[i].fd,
+                                xdmcp_ifaces[i].sockbuf);
+        }
     }
 #endif
     xdmcp_timer = TimerSet(NULL, 0, 0, XdmcpTimerNotify, NULL);
@@ -730,6 +759,7 @@ XdmcpSelectHost(const struct sockaddr *host_sockaddr,
                 int host_len, ARRAY8Ptr auth_name)
 {
     state = XDM_START_CONNECTION;
+    xdmcp_cur_iface = xdmcp_recv_iface;
     memmove(&req_sockaddr, host_sockaddr, host_len);
     req_socklen = host_len;
     XdmcpSetAuthentication(auth_name);
@@ -855,12 +885,24 @@ receive_packet(int socketfd)
         struct sockbuf *sb = NULL;
         struct buffer *b;
 
+        xdmcp_recv_iface = -1;
         if (socketfd == xdmcpSocket)
             sb = xdmcpSockbuf;
 #if defined(IPv6)
         else if (socketfd == xdmcpSocket6)
             sb = xdmcpSockbuf6;
 #endif
+        else {
+            int k;
+
+            for (k = 0; k < xdmcp_nifaces; k++) {
+                if (xdmcp_ifaces[k].fd == socketfd) {
+                    sb = xdmcp_ifaces[k].sockbuf;
+                    xdmcp_recv_iface = k;
+                    break;
+                }
+            }
+        }
         if (!sb || !sb->bufrd)
             return;
         b = sb->bufrd;
@@ -1078,6 +1120,109 @@ XdmcpAddAuthorization(ARRAY8Ptr name, ARRAY8Ptr data)
  * to the state machine.
  */
 
+#ifdef WIN32
+static void
+xdmcp_free_ifaces(void)
+{
+    int i;
+
+    for (i = 0; i < xdmcp_nifaces; i++) {
+        if (xdmcp_ifaces[i].fd >= 0)
+            closesocket((SOCKET) xdmcp_ifaces[i].fd);
+    }
+    free(xdmcp_ifaces);
+    xdmcp_ifaces = NULL;
+    xdmcp_nifaces = 0;
+}
+
+/*
+ * Enumerate every up IPv4 interface into (interface, address) tuples and
+ * create one bound UDP socket per interface.  Binding to the interface's
+ * local address makes a broadcast sent on that socket leave through that
+ * interface, and lets us tell which interface a Willing arrived on.
+ */
+static void
+xdmcp_enum_ifaces(void)
+{
+    INTERFACE_INFO buf[64];
+    SOCKET s;
+    DWORD retbytes = 0;
+    int n, i;
+    int cap = 0;
+
+    xdmcp_free_ifaces();
+
+    s = WSASocket(AF_INET, SOCK_DGRAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+    if (s == INVALID_SOCKET)
+        return;
+    if (WSAIoctl(s, SIO_GET_INTERFACE_LIST, NULL, 0, buf, sizeof(buf),
+                 &retbytes, NULL, NULL) != 0) {
+        closesocket(s);
+        return;
+    }
+    closesocket(s);
+
+    n = retbytes / sizeof(INTERFACE_INFO);
+    for (i = 0; i < n; i++) {
+        struct sockaddr_in *addr = &buf[i].iiAddress.AddressIn;
+        struct sockaddr_in *broad = &buf[i].iiBroadcastAddress.AddressIn;
+        XdmcpIfaceRec *rec;
+        int soopts = 1;
+
+        if (addr->sin_family != AF_INET)
+            continue;
+        if (!(buf[i].iiFlags & IFF_UP))
+            continue;
+        if (addr->sin_addr.s_addr == 0)
+            continue;
+
+        if (xdmcp_nifaces == cap) {
+            XdmcpIfaceRec *newp;
+
+            cap = cap ? cap * 2 : 4;
+            newp = realloc(xdmcp_ifaces, cap * sizeof(*newp));
+            if (!newp)
+                return;
+            xdmcp_ifaces = newp;
+        }
+        rec = &xdmcp_ifaces[xdmcp_nifaces];
+        memset(rec, 0, sizeof(*rec));
+        rec->fd = -1;
+
+        rec->addr.sin_family = AF_INET;
+        rec->addr.sin_addr = addr->sin_addr;
+        rec->addr.sin_port = 0;
+
+        rec->broad.sin_family = AF_INET;
+        rec->broad.sin_port = htons(xdm_udp_port);
+        if (buf[i].iiFlags & IFF_LOOPBACK)
+            /* a local manager listens on the loopback address itself */
+            rec->broad.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        else if (buf[i].iiFlags & IFF_BROADCAST)
+            rec->broad.sin_addr = broad->sin_addr;
+        else
+            continue;           /* no broadcast (e.g. point-to-point) */
+
+        rec->fd = (int) WSASocket(AF_INET, SOCK_DGRAM, 0, NULL, 0,
+                                  WSA_FLAG_OVERLAPPED);
+        if (rec->fd < 0)
+            continue;
+        setsockopt(rec->fd, SOL_SOCKET, SO_BROADCAST, (char *) &soopts,
+                   sizeof(soopts));
+        if (bind(rec->fd, (struct sockaddr *) &rec->addr,
+                 sizeof(rec->addr)) < 0) {
+            closesocket((SOCKET) rec->fd);
+            rec->fd = -1;
+            continue;
+        }
+        rec->sockbuf = ospoll_sockbuf_alloc(rec->fd);
+        if (rec->sockbuf)
+            rec->sockbuf->dgram = 1;
+        xdmcp_nifaces++;
+    }
+}
+#endif
+
 static void
 get_xdmcp_sock(void)
 {
@@ -1097,6 +1242,13 @@ get_xdmcp_sock(void)
 #endif
 
 #ifdef WIN32
+    if ((state == XDM_BROADCAST || state == XDM_QUERY) && xdm_from == NULL) {
+        /* Per-interface: one bound socket per interface, so each packet
+         * advertises only the interface it left through. */
+        xdmcpSocket = -1;
+        xdmcp_enum_ifaces();
+        return;
+    }
     xdmcpSocket = (int) WSASocket(AF_INET, SOCK_DGRAM, 0, NULL, 0,
                                   WSA_FLAG_OVERLAPPED);
     if (xdmcpSocket < 0)
@@ -1191,6 +1343,15 @@ send_query_msg(void)
     XdmcpWriteHeader(&buffer, &header);
     XdmcpWriteARRAYofARRAY8(&buffer, &AuthenticationNames);
     if (broadcast) {
+#ifdef WIN32
+        if (xdmcp_nifaces > 0) {
+            for (i = 0; i < xdmcp_nifaces; i++)
+                XdmcpFlush(xdmcp_ifaces[i].fd, &buffer,
+                           (XdmcpNetaddr) &xdmcp_ifaces[i].broad,
+                           sizeof(struct sockaddr_in));
+        }
+        else
+#endif
         for (i = 0; i < NumBroadcastAddresses; i++)
             XdmcpFlush(xdmcpSocket, &buffer,
                        (XdmcpNetaddr) &BroadcastAddresses[i],
@@ -1228,12 +1389,22 @@ send_query_msg(void)
     }
 #endif
     else {
-#if defined(IPv6)
-        if (SOCKADDR_FAMILY(ManagerAddress) == AF_INET6)
-            socketfd = xdmcpSocket6;
+#ifdef WIN32
+        if (xdmcp_nifaces > 0) {
+            for (i = 0; i < xdmcp_nifaces; i++)
+                XdmcpFlush(xdmcp_ifaces[i].fd, &buffer,
+                           (XdmcpNetaddr) &ManagerAddress, ManagerAddressLen);
+        }
+        else
 #endif
-        XdmcpFlush(socketfd, &buffer, (XdmcpNetaddr) &ManagerAddress,
-                   ManagerAddressLen);
+        {
+#if defined(IPv6)
+            if (SOCKADDR_FAMILY(ManagerAddress) == AF_INET6)
+                socketfd = xdmcpSocket6;
+#endif
+            XdmcpFlush(socketfd, &buffer, (XdmcpNetaddr) &ManagerAddress,
+                       ManagerAddressLen);
+        }
     }
 }
 
@@ -1283,6 +1454,17 @@ send_request_msg(void)
     CARD16 XdmcpConnectionType;
     ARRAY8 authenticationData;
     int socketfd = xdmcpSocket;
+#ifdef WIN32
+    int per_iface = (xdmcp_cur_iface >= 0 && xdmcp_cur_iface < xdmcp_nifaces);
+    ARRAY8 ifaceAddr = { 0, 0 };
+
+    if (per_iface) {
+        socketfd = xdmcp_ifaces[xdmcp_cur_iface].fd;
+        ifaceAddr.data =
+            (CARD8 *) &xdmcp_ifaces[xdmcp_cur_iface].addr.sin_addr;
+        ifaceAddr.length = sizeof(struct in_addr);
+    }
+#endif
 
     switch (SOCKADDR_FAMILY(ManagerAddress)) {
     case AF_INET:
@@ -1301,11 +1483,22 @@ send_request_msg(void)
     header.version = XDM_PROTOCOL_VERSION;
     header.opcode = (CARD16) REQUEST;
 
-    length = 2;                 /* display number */
-    length += 1 + 2 * ConnectionTypes.length;   /* connection types */
-    length += 1;                /* connection addresses */
-    for (i = 0; i < ConnectionAddresses.length; i++)
-        length += 2 + ConnectionAddresses.data[i].length;
+#ifdef WIN32
+    if (per_iface) {
+        length = 2;             /* display number */
+        length += 1 + 2 * 1;    /* one connection type */
+        length += 1;            /* connection addresses */
+        length += 2 + sizeof(struct in_addr);   /* one IPv4 address */
+    }
+    else
+#endif
+    {
+        length = 2;             /* display number */
+        length += 1 + 2 * ConnectionTypes.length;   /* connection types */
+        length += 1;            /* connection addresses */
+        for (i = 0; i < ConnectionAddresses.length; i++)
+            length += 2 + ConnectionAddresses.data[i].length;
+    }
     authenticationData.length = 0;
     authenticationData.data = 0;
     if (AuthenticationFuncs) {
@@ -1325,27 +1518,38 @@ send_request_msg(void)
         return;
     }
     XdmcpWriteCARD16(&buffer, DisplayNumber);
-    XdmcpWriteCARD8(&buffer, ConnectionTypes.length);
+#ifdef WIN32
+    if (per_iface) {
+        XdmcpWriteCARD8(&buffer, 1);
+        XdmcpWriteCARD16(&buffer, FamilyInternet);
+        XdmcpWriteCARD8(&buffer, 1);
+        XdmcpWriteARRAY8(&buffer, &ifaceAddr);
+    }
+    else
+#endif
+    {
+        XdmcpWriteCARD8(&buffer, ConnectionTypes.length);
 
-    /* The connection array is send reordered, so that connections of   */
-    /* the same address type as the XDMCP manager connection are send   */
-    /* first. This works around a bug in xdm. mario@klebsch.de          */
-    for (i = 0; i < (int) ConnectionTypes.length; i++)
-        if (ConnectionTypes.data[i] == XdmcpConnectionType)
-            XdmcpWriteCARD16(&buffer, ConnectionTypes.data[i]);
-    for (i = 0; i < (int) ConnectionTypes.length; i++)
-        if (ConnectionTypes.data[i] != XdmcpConnectionType)
-            XdmcpWriteCARD16(&buffer, ConnectionTypes.data[i]);
+        /* The connection array is send reordered, so that connections of   */
+        /* the same address type as the XDMCP manager connection are send   */
+        /* first. This works around a bug in xdm. mario@klebsch.de          */
+        for (i = 0; i < (int) ConnectionTypes.length; i++)
+            if (ConnectionTypes.data[i] == XdmcpConnectionType)
+                XdmcpWriteCARD16(&buffer, ConnectionTypes.data[i]);
+        for (i = 0; i < (int) ConnectionTypes.length; i++)
+            if (ConnectionTypes.data[i] != XdmcpConnectionType)
+                XdmcpWriteCARD16(&buffer, ConnectionTypes.data[i]);
 
-    XdmcpWriteCARD8(&buffer, ConnectionAddresses.length);
-    for (i = 0; i < (int) ConnectionAddresses.length; i++)
-        if ((i < ConnectionTypes.length) &&
-            (ConnectionTypes.data[i] == XdmcpConnectionType))
-            XdmcpWriteARRAY8(&buffer, &ConnectionAddresses.data[i]);
-    for (i = 0; i < (int) ConnectionAddresses.length; i++)
-        if ((i >= ConnectionTypes.length) ||
-            (ConnectionTypes.data[i] != XdmcpConnectionType))
-            XdmcpWriteARRAY8(&buffer, &ConnectionAddresses.data[i]);
+        XdmcpWriteCARD8(&buffer, ConnectionAddresses.length);
+        for (i = 0; i < (int) ConnectionAddresses.length; i++)
+            if ((i < ConnectionTypes.length) &&
+                (ConnectionTypes.data[i] == XdmcpConnectionType))
+                XdmcpWriteARRAY8(&buffer, &ConnectionAddresses.data[i]);
+        for (i = 0; i < (int) ConnectionAddresses.length; i++)
+            if ((i >= ConnectionTypes.length) ||
+                (ConnectionTypes.data[i] != XdmcpConnectionType))
+                XdmcpWriteARRAY8(&buffer, &ConnectionAddresses.data[i]);
+    }
 
     XdmcpWriteARRAY8(&buffer, AuthenticationName);
     XdmcpWriteARRAY8(&buffer, &authenticationData);
@@ -1436,6 +1640,11 @@ send_manage_msg(void)
     XdmcpHeader header;
     int socketfd = xdmcpSocket;
 
+#ifdef WIN32
+    if (xdmcp_cur_iface >= 0 && xdmcp_cur_iface < xdmcp_nifaces)
+        socketfd = xdmcp_ifaces[xdmcp_cur_iface].fd;
+#endif
+
     header.version = XDM_PROTOCOL_VERSION;
     header.opcode = (CARD16) MANAGE;
     header.length = 8 + DisplayClass.length;
@@ -1493,6 +1702,11 @@ send_keepalive_msg(void)
 {
     XdmcpHeader header;
     int socketfd = xdmcpSocket;
+
+#ifdef WIN32
+    if (xdmcp_cur_iface >= 0 && xdmcp_cur_iface < xdmcp_nifaces)
+        socketfd = xdmcp_ifaces[xdmcp_cur_iface].fd;
+#endif
 
     header.version = XDM_PROTOCOL_VERSION;
     header.opcode = (CARD16) KEEPALIVE;

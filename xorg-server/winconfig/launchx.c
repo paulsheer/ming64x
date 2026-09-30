@@ -624,9 +624,17 @@ tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
     if (!opt->xdmcp_enabled)
         nk_widget_disable_begin(ctx);
 
+    if (opt->broadcast_enabled)
+        nk_widget_disable_begin(ctx);
     text_option(ctx, "Query host (-query)", opt->query_host, (int)sizeof(opt->query_host), "Enable XDMCP and send Query packets to this host.");
+    if (opt->broadcast_enabled)
+        nk_widget_disable_end(ctx);
 
+    if (!opt->broadcast_enabled && opt->query_host[0])
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Broadcast for XDMCP (-broadcast)", &opt->broadcast_enabled, "Enable XDMCP and broadcast a query to the network. The first\ndisplay manager to answer hosts the session.");
+    if (!opt->broadcast_enabled && opt->query_host[0])
+        nk_widget_disable_end(ctx);
 
     text_option(ctx, "Indirect host (-indirect)", opt->indirect_host, (int)sizeof(opt->indirect_host), "Enable XDMCP and send IndirectQuery packets to this host.");
 
@@ -1822,8 +1830,10 @@ build_server_cmdline(struct cmdline *c,
 
     /* XDMCP */
     if (xdmcp->xdmcp_enabled) {
-        cl_opt(c, "-query", xdmcp->query_host, NULL);
-        cl_if(c, xdmcp->broadcast_enabled, "-broadcast");
+        if (xdmcp->broadcast_enabled)
+            cl_arg(c, "-broadcast");
+        else
+            cl_opt(c, "-query", xdmcp->query_host, NULL);
         cl_opt(c, "-indirect", xdmcp->indirect_host, NULL);
         cl_if(c, xdmcp->multicast_enabled, "-multicast");
         cl_opt(c, "-port", xdmcp->port_string, "177");
