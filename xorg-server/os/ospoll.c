@@ -38,10 +38,14 @@
 #ifdef WIN32POLL
 #include <stdio.h>
 #include <X11/Xwinsock.h>
+#include <mswsock.h>
+#include <mstcpip.h>
 #include <X11/xtrans/Xtrans.h>
 #include <X11/xtrans/Xtransint.h>
 #include "dixstruct_priv.h"
+#include "dix/dix_priv.h"
 #include "os/osdep.h"
+#include "os.h"
 #endif
 
 #include "misc.h"               /* for typedef of pointer */
@@ -145,22 +149,88 @@ struct ospoll {
 #error only WIN32POLL or POLL may be defined
 #endif
 
-/* poll-based implementation using MsgWaitForMultipleObjects */
+/* overlapped-I/O implementation driven by an I/O completion port */
+
+#define OVERLAPPED_MAGIC        0xf91982f5
+#define OSPOLL_BUFFER_SIZE      (128 * 1024)
+
+struct overlapped_ {
+    struct _OVERLAPPED overlapped;
+    WSABUF d;
+    DWORD flags;
+    DWORD l;
+    long err;
+};
+
+struct overlapped_accept {
+    char accept_buf[sizeof(struct sockaddr_storage) * 2];
+    SOCKET accept_sock;
+};
+
+struct overlapped_connect {
+    struct sockaddr_storage connect_addr;
+};
+
+union overlapped_par {
+    struct overlapped_accept ua;
+    struct overlapped_connect uc;
+};
+
+struct overlapped {
+    struct overlapped_ w;
+    unsigned int magic;
+    int ref;
+    SOCKET closable;
+    struct sockbuf *s;
+    struct buffer *refbuf;
+    union overlapped_par u;
+    struct overlapped *completed_next;
+};
+
+/* DisconnectEx is an extension not declared in mswsock.h; load it once at
+ * startup via ospoll_disconnect_init, exactly as winconfig/corout.c does. */
+typedef BOOL (WINAPI * ospoll_lp_disconnectex_t) (SOCKET, LPOVERLAPPED, DWORD,
+                                                  DWORD);
+static ospoll_lp_disconnectex_t ospoll_dcfn;
+
+static void
+ospoll_disconnect_init(void)
+{
+    GUID g = WSAID_DISCONNECTEX;
+    DWORD bytes;
+    SOCKET probe;
+
+    probe = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0,
+                      WSA_FLAG_OVERLAPPED);
+    if (probe == INVALID_SOCKET)
+        return;
+    if (WSAIoctl(probe, SIO_GET_EXTENSION_FUNCTION_POINTER, &g, sizeof(g),
+                 &ospoll_dcfn, sizeof(ospoll_dcfn), &bytes, NULL,
+                 NULL) == SOCKET_ERROR) {
+        closesocket(probe);
+        return;
+    }
+    closesocket(probe);
+}
+
 struct ospollfd {
-    short               revents;
-    short               look_ahead_events;
+    int fd;
+    char want_read;
+    char want_write;
+    char want_accept;
     enum ospoll_trigger trigger;
-    void                (*callback)(int fd, int revents, void *data);
-    void                *data;
-    WSAEVENT            event;
+    void (*callback)(int fd, int xevents, void *data);
+    void *data;
+    struct sockbuf *sockbuf;
 };
 
 struct ospoll {
-    struct pollfd       *fds;
-    struct ospollfd     *osfds;
-    int                 num;
-    int                 size;
-    int                 iterator;
+    struct ospollfd *osfds;
+    int num;
+    int size;
+    HANDLE iocp_handle;
+    struct overlapped *completed_list;
+    int iterator;
 };
 
 #endif
@@ -182,8 +252,11 @@ ospoll_find(struct ospoll *ospoll, int fd)
 #if EPOLL || PORT
         int t = ospoll->fds[m]->fd;
 #endif
-#if POLL || POLLSET || WIN32POLL
+#if POLL || POLLSET
         int t = ospoll->fds[m].fd;
+#endif
+#if WIN32POLL
+        int t = ospoll->osfds[m].fd;
 #endif
 
         if (t < fd)
@@ -278,8 +351,22 @@ ospoll_create(void)
     xorg_list_init(&ospoll->deleted);
     return ospoll;
 #endif
-#if POLL || WIN32POLL
+#if POLL
     return calloc(1, sizeof (struct ospoll));
+#endif
+#if WIN32POLL
+    struct ospoll *ospoll = calloc(1, sizeof (struct ospoll));
+
+    if (!ospoll)
+        return NULL;
+    ospoll_disconnect_init();
+    ospoll->iocp_handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL,
+                                                 (ULONG_PTR) 0, 0);
+    if (!ospoll->iocp_handle) {
+        free(ospoll);
+        return NULL;
+    }
+    return ospoll;
 #endif
 }
 
@@ -303,10 +390,19 @@ ospoll_destroy(struct ospoll *ospoll)
         free(ospoll);
     }
 #endif
-#if POLL || WIN32POLL
+#if POLL
     if (ospoll) {
         assert (ospoll->num == 0);
         free (ospoll->fds);
+        free (ospoll->osfds);
+        free (ospoll);
+    }
+#endif
+#if WIN32POLL
+    if (ospoll) {
+        assert (ospoll->num == 0);
+        if (ospoll->iocp_handle)
+            CloseHandle(ospoll->iocp_handle);
         free (ospoll->osfds);
         free (ospoll);
     }
@@ -425,7 +521,7 @@ ospoll_add(struct ospoll *ospoll, int fd,
     osfd->callback = callback;
     osfd->trigger = trigger;
 #endif
-#if POLL || WIN32POLL
+#if POLL
     if (pos < 0) {
         if (ospoll->num == ospoll->size) {
             struct pollfd   *new_fds;
@@ -446,21 +542,40 @@ ospoll_add(struct ospoll *ospoll, int fd,
         array_insert(ospoll->fds, ospoll->num, sizeof (ospoll->fds[0]), pos);
         array_insert(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
         ospoll->num++;
-#ifdef WIN32POLL
-        if (pos <= ospoll->iterator)
-            ospoll->iterator++;
-        ospoll->osfds[pos].look_ahead_events = 0;
-#else
         ospoll->changed = TRUE;
-#endif
 
         ospoll->fds[pos].fd = fd;
         ospoll->fds[pos].events = 0;
         ospoll->fds[pos].revents = 0;
         ospoll->osfds[pos].revents = 0;
-        ospoll->osfds[pos].event = WSACreateEvent();
-        WSAEventSelect(fd, ospoll->osfds[pos].event,
-                       FD_READ | FD_ACCEPT | FD_CLOSE | FD_WRITE | FD_CONNECT);
+    }
+    ospoll->osfds[pos].trigger = trigger;
+    ospoll->osfds[pos].callback = callback;
+    ospoll->osfds[pos].data = data;
+#endif
+#if WIN32POLL
+    if (pos < 0) {
+        if (ospoll->num == ospoll->size) {
+            struct ospollfd *new_osfds;
+            int             new_size = ospoll->size ? ospoll->size * 2 : MAXCLIENTS * 2;
+
+            new_osfds = reallocarray(ospoll->osfds, new_size, sizeof (ospoll->osfds[0]));
+            if (!new_osfds)
+                return FALSE;
+            ospoll->osfds = new_osfds;
+            ospoll->size = new_size;
+        }
+        pos = -pos - 1;
+        array_insert(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
+        ospoll->num++;
+        if (pos <= ospoll->iterator)
+            ospoll->iterator++;
+
+        ospoll->osfds[pos].fd = fd;
+        ospoll->osfds[pos].want_read = 0;
+        ospoll->osfds[pos].want_write = 0;
+        ospoll->osfds[pos].want_accept = 0;
+        ospoll->osfds[pos].sockbuf = NULL;
     }
     ospoll->osfds[pos].trigger = trigger;
     ospoll->osfds[pos].callback = callback;
@@ -507,18 +622,17 @@ ospoll_remove(struct ospoll *ospoll, int fd)
         osfd->data = NULL;
         xorg_list_add(&osfd->deleted, &ospoll->deleted);
 #endif
-#if POLL || WIN32POLL
-        WSAEventSelect(ospoll->fds[pos].fd, NULL, 0);
-        WSACloseEvent(ospoll->osfds[pos].event);
+#if POLL
         array_delete(ospoll->fds, ospoll->num, sizeof (ospoll->fds[0]), pos);
         array_delete(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
         ospoll->num--;
-#ifdef WIN32POLL
-        if (pos <= ospoll->iterator)
-            ospoll->iterator--;
-#else
         ospoll->changed = TRUE;
 #endif
+#if WIN32POLL
+        array_delete(ospoll->osfds, ospoll->num, sizeof (ospoll->osfds[0]), pos);
+        ospoll->num--;
+        if (pos <= ospoll->iterator)
+            ospoll->iterator--;
 #endif
     }
 }
@@ -577,7 +691,7 @@ ospoll_listen(struct ospoll *ospoll, int fd, int xevents)
         osfd->xevents |= xevents;
         epoll_mod(ospoll, osfd);
 #endif
-#if POLL || WIN32POLL
+#if POLL
         if (xevents & X_NOTIFY_READ) {
             ospoll->fds[pos].events |= POLLIN;
             ospoll->osfds[pos].revents &= ~POLLIN;
@@ -586,6 +700,12 @@ ospoll_listen(struct ospoll *ospoll, int fd, int xevents)
             ospoll->fds[pos].events |= POLLOUT;
             ospoll->osfds[pos].revents &= ~POLLOUT;
         }
+#endif
+#if WIN32POLL
+        if (xevents & X_NOTIFY_READ)
+            ospoll->osfds[pos].want_read = 1;
+        if (xevents & X_NOTIFY_WRITE)
+            ospoll->osfds[pos].want_write = 1;
 #endif
     }
 }
@@ -617,14 +737,464 @@ ospoll_mute(struct ospoll *ospoll, int fd, int xevents)
         osfd->xevents &= ~xevents;
         epoll_mod(ospoll, osfd);
 #endif
-#if POLL || WIN32POLL
+#if POLL
         if (xevents & X_NOTIFY_READ)
             ospoll->fds[pos].events &= ~POLLIN;
         if (xevents & X_NOTIFY_WRITE)
             ospoll->fds[pos].events &= ~POLLOUT;
 #endif
+#if WIN32POLL
+        if (xevents & X_NOTIFY_READ)
+            ospoll->osfds[pos].want_read = 0;
+        if (xevents & X_NOTIFY_WRITE)
+            ospoll->osfds[pos].want_write = 0;
+#endif
     }
 }
+
+
+#if WIN32POLL
+
+static struct buffer *
+ospoll_buffer_alloc(int n)
+{
+    struct buffer *p = malloc(sizeof(struct buffer));
+
+    if (!p)
+        return NULL;
+    memset(p, 0, sizeof(struct buffer));
+    p->ref = 1;
+    p->data = malloc(n);
+    if (!p->data) {
+        free(p);
+        return NULL;
+    }
+    p->alloced = n;
+    return p;
+}
+
+static void
+ospoll_buffer_free(struct buffer *p)
+{
+    if (!p)
+        return;
+    if (--p->ref == 0) {
+        free(p->data);
+        free(p);
+    }
+}
+
+static struct overlapped *
+ospoll_overlapped_alloc(struct sockbuf *s)
+{
+    struct overlapped *u = malloc(sizeof(struct overlapped));
+
+    memset(u, 0, sizeof(*u));
+    u->magic = OVERLAPPED_MAGIC;
+    u->ref = 1;
+    u->closable = INVALID_SOCKET;
+    u->s = s;
+    return u;
+}
+
+static int
+ospoll_overlapped_deref(struct overlapped *u, int clean)
+{
+    if (!u)
+        return 1;
+    assert(u->magic == OVERLAPPED_MAGIC);
+    if (clean)
+        u->s = NULL;
+    assert(u->ref >= 0);
+    if (!--u->ref) {
+        if (u->closable != INVALID_SOCKET)
+            closesocket(u->closable);
+        if (u->refbuf) {
+            ospoll_buffer_free(u->refbuf);
+            u->refbuf = NULL;
+        }
+        u->magic = 0;
+        free(u);
+        return 1;
+    }
+    return 0;
+}
+
+struct sockbuf *
+ospoll_sockbuf_alloc(int s)
+{
+    struct sockbuf *p = calloc(1, sizeof(struct sockbuf));
+
+    if (!p)
+        return NULL;
+    p->s = s;
+    p->bufrd = ospoll_buffer_alloc(OSPOLL_BUFFER_SIZE);
+    p->bufwr = ospoll_buffer_alloc(OSPOLL_BUFFER_SIZE);
+    if (!p->bufrd || !p->bufwr) {
+        ospoll_buffer_free(p->bufrd);
+        ospoll_buffer_free(p->bufwr);
+        free(p);
+        return NULL;
+    }
+    return p;
+}
+
+/* DisconnectEx is an extension not declared in mswsock.h; the pointer is
+ * loaded once at startup by ospoll_disconnect_init (see ospoll_create). */
+static BOOL
+ospoll_disconnect_ex(SOCKET s, LPOVERLAPPED ov, DWORD flags, DWORD reserved)
+{
+    if (!ospoll_dcfn)
+        return FALSE;
+    return ospoll_dcfn(s, ov, flags, reserved);
+}
+
+/* Initiate a deferred teardown: post DisconnectEx and stash the socket handle
+ * in u->closable so it is closed only when the disconnect completion is
+ * drained (see ospoll_overlapped_deref). Pending recv/send/accept overlapped
+ * are kept alive by refcounts and detached via u->s = NULL in
+ * ospoll_sockbuf_free, so no completion ever dereferences the freed sockbuf. */
+static void
+ospoll_socket_disconnect(struct sockbuf *sb)
+{
+    struct overlapped *u;
+    BOOL r;
+    int err;
+
+    if (sb->disconnecting)
+        return;
+    assert(!sb->overlapped_disconnect);
+    sb->overlapped_disconnect = ospoll_overlapped_alloc(sb);
+    u = sb->overlapped_disconnect;
+    assert(u->ref == 1);
+    memset(&u->w, 0, sizeof(u->w));
+    u->ref++;
+    u->closable = (SOCKET) sb->s;
+    r = ospoll_disconnect_ex((SOCKET) sb->s, &u->w.overlapped, 0, 0);
+    if (!r && (err = WSAGetLastError()) != ERROR_IO_PENDING) {
+        ErrorF("IOCP: DisconnectEx failed fd=%d err=%d\n", sb->s, err);
+        u->closable = INVALID_SOCKET;
+        closesocket((SOCKET) sb->s);
+        u->ref--;
+    }
+    sb->disconnecting = 1;
+}
+
+void
+ospoll_sockbuf_free(struct sockbuf *sb)
+{
+    if (!sb)
+        return;
+    while (sb->accept_head) {
+        struct sockbuf *next = sb->accept_head->accept_next;
+
+        ospoll_sockbuf_free(sb->accept_head);
+        sb->accept_head = next;
+    }
+    if (sb->overlapped_accept) {
+        if (sb->overlapped_accept->u.ua.accept_sock != INVALID_SOCKET)
+            closesocket(sb->overlapped_accept->u.ua.accept_sock);
+        ospoll_overlapped_deref(sb->overlapped_accept, 1);
+    }
+    ospoll_overlapped_deref(sb->overlapped_send, 1);
+    ospoll_overlapped_deref(sb->overlapped_recv, 1);
+    ospoll_overlapped_deref(sb->overlapped_connect, 1);
+    if (sb->s != INVALID_SOCKET)
+        ospoll_socket_disconnect(sb);
+    ospoll_overlapped_deref(sb->overlapped_disconnect, 1);
+    ospoll_buffer_free(sb->bufrd);
+    ospoll_buffer_free(sb->bufwr);
+    free(sb);
+}
+
+void
+ospoll_bind_sockbuf(struct ospoll *ospoll, int fd, struct sockbuf *sockbuf)
+{
+    int pos = ospoll_find(ospoll, fd);
+
+    if (pos < 0 || !sockbuf)
+        return;
+    ospoll->osfds[pos].sockbuf = sockbuf;
+    if (sockbuf->listener) {
+        ospoll->osfds[pos].want_accept = 1;
+        ospoll->osfds[pos].want_read = 0;
+    }
+    if (sockbuf->s != INVALID_SOCKET)
+        CreateIoCompletionPort((HANDLE) (SOCKET) sockbuf->s, ospoll->iocp_handle,
+                               (ULONG_PTR) 0, 0);
+}
+
+static void
+ospoll_read(struct ospoll *ospoll, struct sockbuf *s)
+{
+    struct overlapped *u;
+    int r;
+
+    if (s->bufrd->reading)
+        return;
+    if (s->bufrd->written == s->bufrd->avail)
+        s->bufrd->written = s->bufrd->avail = 0;
+    if (s->bufrd->avail >= s->bufrd->alloced)
+        return;
+    if (!s->overlapped_recv)
+        s->overlapped_recv = ospoll_overlapped_alloc(s);
+    u = s->overlapped_recv;
+    assert(u->ref == 1);
+    memset(&u->w, 0, sizeof(u->w));
+    assert(!u->refbuf);
+    u->refbuf = s->bufrd;
+    u->refbuf->ref++;
+    u->w.d.buf = s->bufrd->data + s->bufrd->avail;
+    u->w.d.len = s->bufrd->alloced - s->bufrd->avail;
+    assert(u->w.d.len);
+    u->ref++;
+
+    if (s->dgram) {
+        s->udp_fromlen = sizeof(s->udp_from);
+        r = WSARecvFrom(s->s, &u->w.d, 1, &u->w.l, &u->w.flags,
+                        (struct sockaddr *) &s->udp_from, &s->udp_fromlen,
+                        &u->w.overlapped, NULL);
+    } else {
+        r = WSARecv(s->s, &u->w.d, 1, &u->w.l, &u->w.flags, &u->w.overlapped,
+                    NULL);
+    }
+    if (r == SOCKET_ERROR)
+        u->w.err = WSAGetLastError();
+    if (r == SOCKET_ERROR && u->w.err != ERROR_IO_PENDING) {
+        assert(!u->completed_next);
+        u->completed_next = ospoll->completed_list;
+        ospoll->completed_list = u;
+    }
+    s->bufrd->reading = 1;
+}
+
+static void
+ospoll_write(struct ospoll *ospoll, struct sockbuf *s)
+{
+    struct overlapped *u;
+    int r;
+
+    if (s->bufwr->writing)
+        return;
+    if (s->bufwr->written >= s->bufwr->avail)
+        return;
+    if (!s->overlapped_send)
+        s->overlapped_send = ospoll_overlapped_alloc(s);
+    u = s->overlapped_send;
+    assert(u->ref == 1);
+    memset(&u->w, 0, sizeof(u->w));
+    assert(!u->refbuf);
+    u->refbuf = s->bufwr;
+    u->refbuf->ref++;
+    u->w.d.buf = s->bufwr->data + s->bufwr->written;
+    u->w.d.len = s->bufwr->avail - s->bufwr->written;
+    u->ref++;
+
+    r = WSASend(s->s, &u->w.d, 1, &u->w.l, u->w.flags, &u->w.overlapped, NULL);
+    if (r == SOCKET_ERROR)
+        u->w.err = WSAGetLastError();
+    if (r == SOCKET_ERROR && u->w.err != ERROR_IO_PENDING) {
+        assert(!u->completed_next);
+        u->completed_next = ospoll->completed_list;
+        ospoll->completed_list = u;
+    }
+    s->bufwr->writing = 1;
+}
+
+static void
+ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
+{
+    struct overlapped *u;
+    int r, err;
+
+    if (s->accepting)
+        return;
+    if (!s->family) {
+        struct sockaddr_storage a;
+        int al = sizeof(a);
+
+        a.ss_family = 0;
+        getsockname(s->s, (struct sockaddr *) &a, &al);
+        s->family = a.ss_family;
+    }
+    if (!s->overlapped_accept) {
+        s->overlapped_accept = ospoll_overlapped_alloc(s);
+        s->overlapped_accept->u.ua.accept_sock = INVALID_SOCKET;
+    }
+    u = s->overlapped_accept;
+    assert(u->ref == 1);
+    memset(&u->w, 0, sizeof(u->w));
+    u->ref++;
+    assert(u->u.ua.accept_sock == INVALID_SOCKET);
+
+    u->u.ua.accept_sock = WSASocket(s->family, SOCK_STREAM, IPPROTO_TCP, NULL, 0,
+                                    WSA_FLAG_OVERLAPPED);
+    if (u->u.ua.accept_sock == INVALID_SOCKET) {
+        u->ref--;
+        u->u.ua.accept_sock = INVALID_SOCKET;
+        return;
+    }
+    if (!CreateIoCompletionPort((HANDLE) u->u.ua.accept_sock,
+                                ospoll->iocp_handle, (ULONG_PTR) 0, 0)) {
+        closesocket(u->u.ua.accept_sock);
+        u->u.ua.accept_sock = INVALID_SOCKET;
+        u->ref--;
+        return;
+    }
+
+    r = AcceptEx(s->s, u->u.ua.accept_sock, u->u.ua.accept_buf, 0,
+                 sizeof(u->u.ua.accept_buf) / 2,
+                 sizeof(u->u.ua.accept_buf) / 2, NULL, &u->w.overlapped);
+    if (!r && ERROR_IO_PENDING != (err = WSAGetLastError())) {
+        u->ref--;
+        ErrorF("IOCP: AcceptEx failed listen=%d accept=%d err=%ld\n",
+               s->s, (int) u->u.ua.accept_sock, (long) err);
+        return;
+    }
+    ErrorF("IOCP: AcceptEx posted listen=%d accept=%d\n",
+           s->s, (int) u->u.ua.accept_sock);
+    s->accepting = 1;
+}
+
+static void
+process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
+{
+    struct sockbuf *s;
+
+    assert(u->magic == OVERLAPPED_MAGIC);
+    if (!u->s) {
+        ospoll_overlapped_deref(u, 1);
+        return;
+    }
+    s = u->s;
+    if (ospoll_overlapped_deref(u, 0)) {
+        fprintf(stderr, "dangling overlap u=%p\n", (void *) u);
+        return;
+    }
+    assert(s);
+
+    if (s->overlapped_accept == u) {
+        struct sockaddr *local = NULL, *remote = NULL;
+        int nlocal = 0, nremote = 0;
+        struct sockbuf *new_sb;
+
+        if (u->u.ua.accept_sock == INVALID_SOCKET)
+            return;
+        new_sb = ospoll_sockbuf_alloc(u->u.ua.accept_sock);
+        ErrorF("IOCP: AcceptEx completed listen=%d accept=%d new_sb=%p\n",
+               s->s, (int) u->u.ua.accept_sock, (void *) new_sb);
+        u->u.ua.accept_sock = INVALID_SOCKET;
+        if (!new_sb)
+            return;
+        GetAcceptExSockaddrs(u->u.ua.accept_buf, 0,
+                             sizeof(struct sockaddr_storage),
+                             sizeof(struct sockaddr_storage),
+                             &local, &nlocal, &remote, &nremote);
+        {
+            SOCKET listen_sock = (SOCKET) s->s;
+            int sr = setsockopt(new_sb->s, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
+                                (char *) &listen_sock, sizeof(listen_sock));
+            ErrorF("IOCP: SO_UPDATE_ACCEPT_CONTEXT on %d (listen %d) -> %d WSA %d\n",
+                   new_sb->s, s->s, sr, WSAGetLastError());
+        }
+        s->accepting = 0;
+        new_sb->accept_next = NULL;
+        if (!s->accept_head)
+            s->accept_head = new_sb;
+        else {
+            struct sockbuf *tail = s->accept_head;
+
+            while (tail->accept_next)
+                tail = tail->accept_next;
+            tail->accept_next = new_sb;
+        }
+    } else if (s->overlapped_connect == u) {
+        setsockopt(s->s, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
+        s->connecting = 0;
+    } else if (s->overlapped_recv == u) {
+        if (u->refbuf) {
+            ospoll_buffer_free(u->refbuf);
+            u->refbuf = NULL;
+        }
+        if (l <= 0) {
+            s->bufrd->avail = 0;
+            s->bufrd->written = 0;
+            if (s->dgram) {
+                s->bufrd->reading = 0;
+                return;
+            }
+            s->overlapped_recv = NULL;
+            s->eof = 1;
+            return;
+        }
+        s->bufrd->avail += l;
+        s->bufrd->io_ops++;
+        s->bufrd->reading = 0;
+        ErrorF("IOCP: recv %d bytes on fd %d (avail=%d)\n",
+               l, s->s, s->bufrd->avail);
+    } else if (s->overlapped_send == u) {
+        if (u->refbuf) {
+            ospoll_buffer_free(u->refbuf);
+            u->refbuf = NULL;
+        }
+        if (l <= 0) {
+            s->bufwr->avail = 0;
+            s->bufwr->written = 0;
+            s->overlapped_send = NULL;
+            s->eof = 1;
+            return;
+        }
+        s->bufwr->written += l;
+        s->bufwr->io_ops++;
+        assert(s->bufwr->written <= s->bufwr->avail);
+        if (!s->bufwr->reading)
+            if (s->bufwr->written == s->bufwr->avail)
+                s->bufwr->written = s->bufwr->avail = 0;
+        s->bufwr->writing = 0;
+        ErrorF("IOCP: sent %d bytes on fd %d (written=%d avail=%d)\n",
+               l, s->s, s->bufwr->written, s->bufwr->avail);
+    } else if (s->overlapped_disconnect == u) {
+        /* socket teardown handled by ospoll_sockbuf_free */
+    } else {
+        assert(!"unknown overlapped");
+    }
+}
+
+WINBASEAPI WINBOOL WINAPI GetQueuedCompletionStatusEx (HANDLE CompletionPort, LPOVERLAPPED_ENTRY lpCompletionPortEntries, ULONG ulCount, PULONG ulNumEntriesRemoved, DWORD dwMilliseconds, WINBOOL fAlertable);
+
+static void
+ospoll_drain(struct ospoll *ospoll, DWORD ms_timeout)
+{
+    struct overlapped *u, *next;
+    OVERLAPPED_ENTRY entries[256];
+    ULONG n = 0;
+    BOOL ok;
+    ULONG j;
+
+    u = ospoll->completed_list;
+    ospoll->completed_list = NULL;
+    for (; u; u = next) {
+        next = u->completed_next;
+        u->completed_next = NULL;
+        process_overlapped(ospoll, u, (int) u->w.l);
+    }
+
+    ok = GetQueuedCompletionStatusEx(ospoll->iocp_handle, entries, 256, &n,
+                                     ms_timeout, FALSE);
+    if (!ok && GetLastError() != WAIT_TIMEOUT)
+        fprintf(stderr, "GetQueuedCompletionStatusEx failed: %ld\n",
+                (long) GetLastError());
+
+    for (j = 0; j < n; j++) {
+        if (!entries[j].lpOverlapped)
+            continue;
+        process_overlapped(ospoll,
+                           (struct overlapped *) entries[j].lpOverlapped,
+                           (int) entries[j].dwNumberOfBytesTransferred);
+    }
+}
+
+#endif
 
 
 int
@@ -720,103 +1290,72 @@ ospoll_wait(struct ospoll *ospoll, int timeout)
     ospoll_clean_deleted(ospoll);
 #endif
 #if WIN32POLL
-    int nready_look_ahead_events = 0;
-    int     waiting_fds = 0;
-    int     f;
-    WSAEVENT handles[1024];
-    int     handle_count = 0;
+    DWORD start;
+    int f;
 
-    for (f = 0; f < ospoll->num; f++) {
-        ospoll->osfds[f].look_ahead_events = 0;
-        if (ospoll->fds[f].fd == INVALID_SOCKET)
-            continue;
-        if (ospoll->osfds[f].callback == ClientReady) {
-            ClientPtr c = ospoll->osfds[f].data;
-            OsCommPtr oc = (OsCommPtr) c->osPrivate;
-            XtransConnInfo ciptr = oc->trans_conn;
-            assert(ciptr->fd == ospoll->fds[f].fd);
-            if ((ospoll->fds[f].events & POLLIN)) {
-                if (ciptr->buf.avail > ciptr->buf.written) {
-                    ospoll->osfds[f].look_ahead_events |= POLLIN;
-                    timeout = 0;
-                    nready_look_ahead_events++;
-                }
-            }
-        }
-        if (!(ospoll->fds[f].events & (POLLIN | POLLOUT | POLLPRI)))
-            continue;
-        assert(handle_count < 1024);
-        handles[handle_count++] = ospoll->osfds[f].event;
-        waiting_fds++;
-    }
-
-    DWORD wait_result = WAIT_FAILED;
+    start = GetTickCount();
     nready = 0;
-    if (!waiting_fds && timeout > 0) {
-        MsgWaitForMultipleObjects(0, NULL, FALSE, timeout, QS_ALLINPUT);
-    } else if (!waiting_fds) {
-        MsgWaitForMultipleObjects(0, NULL, FALSE, 0, QS_ALLINPUT);
-    } else {
-        DWORD ms_timeout = (timeout < 0) ? INFINITE : (DWORD)timeout;
-        wait_result = MsgWaitForMultipleObjects(handle_count, handles, FALSE,
-                                                ms_timeout, QS_ALLINPUT);
-        if (wait_result == WAIT_FAILED)
-            nready = -1;
-    }
-
-    /* Discover ready fds via WSAEnumNetworkEvents */
-    if (wait_result != WAIT_FAILED) {
-        nready = 0;
+    for (;;) {
+        /* post outstanding recv/send/accept operations */
         for (f = 0; f < ospoll->num; f++) {
-            ospoll->fds[f].revents = 0;
-            if (ospoll->fds[f].fd == INVALID_SOCKET)
-                continue;
-            if (!(ospoll->fds[f].events & (POLLIN | POLLOUT | POLLPRI)))
-                continue;
+            struct ospollfd *osfd = &ospoll->osfds[f];
+            struct sockbuf *s = osfd->sockbuf;
 
-            WSANETWORKEVENTS net_events;
-            if (WSAEnumNetworkEvents(ospoll->fds[f].fd,
-                                        ospoll->osfds[f].event,
-                                        &net_events) == 0) {
-                short ev = ospoll->fds[f].events;
-                if ((ev & POLLPRI) && (net_events.lNetworkEvents & FD_CLOSE))
-                    ospoll->fds[f].revents |= POLLPRI;
-                else if ((ev & POLLIN) && (net_events.lNetworkEvents & (FD_READ | FD_ACCEPT | FD_CLOSE)))
-                    ospoll->fds[f].revents |= POLLIN;
-                if ((ev & POLLOUT) && (net_events.lNetworkEvents & (FD_WRITE | FD_CONNECT)))
-                    ospoll->fds[f].revents |= POLLOUT;
-                if (ospoll->fds[f].revents)
-                    nready++;
+            if (!s)
+                continue;
+            if (osfd->want_read && !s->bufrd->reading &&
+                (s->bufrd->avail < s->bufrd->alloced || s->bufrd->written == s->bufrd->avail))
+                ospoll_read(ospoll, s);
+            if (!s->bufwr->writing && s->bufwr->avail > s->bufwr->written)
+                ospoll_write(ospoll, s);
+            if (osfd->want_accept && !s->accepting)
+                ospoll_accept(ospoll, s);
+        }
+
+        /* drain completions that are already available */
+        ospoll_drain(ospoll, 0);
+
+        /* deliver callbacks for ready file descriptors */
+        nready = 0;
+        for (ospoll->iterator = 0; ospoll->iterator < ospoll->num;
+             ospoll->iterator++) {
+            struct ospollfd *osfd = &ospoll->osfds[ospoll->iterator];
+            struct sockbuf *s = osfd->sockbuf;
+            int xevents = 0;
+
+            if (!s)
+                continue;
+            if (osfd->want_read &&
+                (s->bufrd->avail > s->bufrd->written || s->eof))
+                xevents |= X_NOTIFY_READ;
+            if (osfd->want_write && s->bufwr->avail < s->bufwr->alloced)
+                xevents |= X_NOTIFY_WRITE;
+            if (osfd->want_accept && s->accept_head)
+                xevents |= X_NOTIFY_READ;
+            if (xevents) {
+                osfd->callback(osfd->fd, xevents, osfd->data);
+                nready++;
             }
         }
-    } else if (nready_look_ahead_events) {
-        for (f = 0; f < ospoll->num; f++)
-            ospoll->fds[f].revents = 0;
-    }
-    if (nready > 0 || nready_look_ahead_events) {
-        for (ospoll->iterator = 0; ospoll->iterator < ospoll->num; ospoll->iterator++) {
-            int f;
-            f = ospoll->iterator;
-            short look_ahead_events = ospoll->osfds[f].look_ahead_events;
-            short revents = ospoll->fds[f].revents;
-            short oldevents = ospoll->osfds[f].revents;
+        if (nready > 0)
+            return nready;
 
-            ospoll->osfds[f].revents = (revents & (POLLIN|POLLOUT));
-            if (ospoll->osfds[f].trigger == ospoll_trigger_edge)
-                revents &= ~oldevents;
-            revents |= look_ahead_events;
-            if (revents) {
-                int    xevents = 0;
-                if (revents & POLLIN)
-                    xevents |= X_NOTIFY_READ;
-                if (revents & POLLOUT)
-                    xevents |= X_NOTIFY_WRITE;
-                if (revents & (~(POLLIN|POLLOUT)))
-                    xevents |= X_NOTIFY_ERROR;
-                ospoll->osfds[f].callback(ospoll->fds[f].fd, xevents,
-                                          ospoll->osfds[f].data);
-                f = -1;  /* guard: invalidate after callback */
+        /* nothing ready yet: wait for a completion or a Windows message */
+        {
+            DWORD ms, elapsed;
+
+            if (timeout < 0)
+                ms = INFINITE;
+            else {
+                elapsed = GetTickCount() - start;
+                if (elapsed >= (DWORD) timeout)
+                    return 0;
+                ms = (DWORD) timeout - elapsed;
             }
+            if (MsgWaitForMultipleObjects(1, &ospoll->iocp_handle, FALSE, ms,
+                                          QS_ALLINPUT) == WAIT_OBJECT_0)
+                continue;       /* completions arrived; loop to drain + deliver */
+            return 0;           /* message, timeout, or error */
         }
     }
 #endif
@@ -852,13 +1391,7 @@ ospoll_wait(struct ospoll *ospoll, int timeout)
         }
     }
 #endif
-#if WIN32POLL
-    if (nready < 0)
-        return nready;
-    return nready + nready_look_ahead_events;
-#else
     return nready;
-#endif
 }
 
 void
@@ -880,13 +1413,18 @@ ospoll_reset_events(struct ospoll *ospoll, int fd)
 
     epoll_mod(ospoll, ospoll->fds[pos]);
 #endif
-#if POLL || WIN32POLL
+#if POLL
     int pos = ospoll_find(ospoll, fd);
 
     if (pos < 0)
         return;
 
     ospoll->osfds[pos].revents = 0;
+#endif
+#if WIN32POLL
+    /* readiness is level-triggered, so there is nothing to re-arm */
+    (void) ospoll;
+    (void) fd;
 #endif
 }
 
@@ -910,5 +1448,15 @@ ospoll_data(struct ospoll *ospoll, int fd)
 
 void CheckServerConnections(struct ospoll *server_poll)
 {
-  CheckConnections(server_poll->fds, server_poll->num);
+#if WIN32POLL
+    int i;
+
+    for (i = server_poll->num - 1; i >= 0; i--) {
+        struct ospollfd *osfd = &server_poll->osfds[i];
+        struct sockbuf *s = osfd->sockbuf;
+
+        if (osfd->callback == ClientReady && s && s->eof)
+            CloseDownClient((ClientPtr) osfd->data);
+    }
+#endif
 }

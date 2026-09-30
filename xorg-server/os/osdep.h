@@ -210,7 +210,6 @@ void ListenToAllClients(void);
 void ForceClockId(clockid_t forced_clockid);
 
 void CheckServerConnections(struct ospoll *server_poll);
-void CheckConnections(struct pollfd *fds, int num);
 
 Bool WaitForSomething(Bool clients_are_ready);
 void CloseDownConnection(ClientPtr client);

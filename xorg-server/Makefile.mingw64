@@ -276,7 +276,7 @@ LIBS := \
 	-lXinerama -lfontconfig -lexpat -lpixman-1 -lfreetype -lz \
 	-ldxguid \
 	-lopengl32 \
-	-lws2_32 -lgdi32 -lcomdlg32 -lole32 -lshlwapi -lshell32 \
+	-lws2_32 -lmswsock -lgdi32 -lcomdlg32 -lole32 -lshlwapi -lshell32 \
 	-ladvapi32 -luser32 -lkernel32 -lwinmm -lsetupapi -lcomctl32 \
 	-luuid -loleaut32 -lodbc32 -lodbccp32 -ldwmapi -lksuser \
 	-Wl,--end-group

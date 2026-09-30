@@ -139,4 +139,27 @@ ospoll_reset_events(struct ospoll *ospoll, int fd);
 void *
 ospoll_data(struct ospoll *ospoll, int fd);
 
+#ifdef WIN32
+struct sockbuf;
+
+/**
+ * Allocate and initialize an overlapped-I/O buffer state for a socket.
+ */
+struct sockbuf *
+ospoll_sockbuf_alloc(int s);
+
+/**
+ * Release an overlapped-I/O buffer state and close its socket.
+ */
+void
+ospoll_sockbuf_free(struct sockbuf *sockbuf);
+
+/**
+ * Associate a socket's overlapped-I/O buffer state with an already
+ * monitored file descriptor, and attach the socket to the completion port.
+ */
+void
+ospoll_bind_sockbuf(struct ospoll *ospoll, int fd, struct sockbuf *sockbuf);
+#endif
+
 #endif /* _OSPOLL_H_ */

@@ -134,12 +134,45 @@ struct _XtransConnFd {
 #endif
 
 #ifdef WIN32
-struct readahead_buf {
-    unsigned char *data;
-    int alloced;
+
+struct buffer {
+    int ref;
+    char *data;
+    char reading;
+    char writing;
     int written;
     int avail;
+    int alloced;
+    int io_ops;
 };
+
+struct overlapped;              /* defined in the overlapped-IO engine (ospoll.c) */
+
+struct sockbuf {
+    struct buffer *bufrd;
+    struct buffer *bufwr;
+    int s;                      /* socket handle (same value as XtransConnInfo.fd) */
+    struct overlapped *overlapped_send;
+    struct overlapped *overlapped_recv;
+    struct overlapped *overlapped_connect;
+    struct overlapped *overlapped_accept;
+    struct overlapped *overlapped_disconnect;
+    int family;
+    char accepting;
+    char connecting;
+    char disconnecting;
+    char listener;
+    char eof;                       /* recv completed with 0/error: peer closed */
+    char dgram;                     /* SOCK_DGRAM socket (XDMCP UDP) */
+    struct sockaddr_storage udp_from;   /* dgram: source address of last recv */
+    int udp_fromlen;
+    struct sockbuf *accept_head;    /* listener: head of accepted-socket queue */
+    struct sockbuf *accept_next;    /* accepted socket: link to next in queue */
+};
+
+struct sockbuf *ospoll_sockbuf_alloc(int s);
+void ospoll_sockbuf_free(struct sockbuf *sockbuf);
+
 #endif
 
 struct _XtransConnInfo {
@@ -149,7 +182,7 @@ struct _XtransConnInfo {
     int		flags;
     int		fd;
 #ifdef WIN32
-    struct readahead_buf buf;
+    struct sockbuf *sockbuf;
 #endif
     char	*port;
     int		family;

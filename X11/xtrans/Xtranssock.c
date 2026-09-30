@@ -832,10 +832,21 @@ TRANS(SocketOpen) (int i, int type)
 	return NULL;
     }
 
+#ifdef WIN32
+    {
+        int family = Sockettrans2devtab[i].family;
+        DWORD flags = (family == AF_INET || family == AF_INET6)
+                      ? WSA_FLAG_OVERLAPPED : 0;
+        ciptr->fd = (int) WSASocket(family, type,
+                                    Sockettrans2devtab[i].protocol, NULL, 0,
+                                    flags);
+    }
+    prmsg (1, "SocketOpen: WSASocket() -> fd %d (family %d type %d WSA %d)\n",
+           ciptr->fd, Sockettrans2devtab[i].family, type, WSAGetLastError());
+#else
     ciptr->fd = socket(Sockettrans2devtab[i].family, type,
                        Sockettrans2devtab[i].protocol);
 
-#ifndef WIN32
 #if (defined(X11_t) && !defined(USE_POLL)) || defined(FS_t) || defined(FONT_t)
     if (ciptr->fd >= sysconf(_SC_OPEN_MAX))
     {
@@ -857,6 +868,16 @@ TRANS(SocketOpen) (int i, int type)
 	free (ciptr);
 	return NULL;
     }
+
+#ifdef WIN32
+    ciptr->sockbuf = ospoll_sockbuf_alloc(ciptr->fd);
+    if (!ciptr->sockbuf) {
+	closesocket(ciptr->fd);
+	ciptr->fd = -1;
+	free (ciptr);
+	return NULL;
+    }
+#endif
 
 #ifdef TCP_NODELAY
     if (Sockettrans2devtab[i].family == AF_INET
@@ -950,6 +971,16 @@ TRANS(SocketReopen) (int i _X_UNUSED, int type, int fd, const char *port)
     }
 
     ciptr->fd = fd;
+
+#ifdef WIN32
+    ciptr->sockbuf = ospoll_sockbuf_alloc(ciptr->fd);
+    if (!ciptr->sockbuf) {
+	prmsg (1, "SocketReopen: sockbuf alloc failed\n");
+	free (ciptr);
+	return NULL;
+    }
+    ciptr->sockbuf->listener = 1;
+#endif
 
     addrlen = portlen + offsetof(struct sockaddr, sa_data);
     if ((addr = calloc (1, addrlen)) == NULL) {
@@ -1228,6 +1259,13 @@ TRANS(SocketCreateListener) (XtransConnInfo ciptr,
 
     while (bind (fd, sockname, namelen) < 0)
     {
+#ifdef WIN32
+	prmsg (1, "SocketCreateListener: bind() failed fd %d errno %d WSA %d\n",
+	       fd, errno, WSAGetLastError());
+#else
+	prmsg (1, "SocketCreateListener: bind() failed fd %d errno %d\n",
+	       fd, errno);
+#endif
 	if (errno == EADDRINUSE) {
 	    if (flags & ADDR_IN_USE_ALLOWED)
 		break;
@@ -1265,20 +1303,29 @@ TRANS(SocketCreateListener) (XtransConnInfo ciptr,
 #endif
 }
 
+    prmsg (1, "SocketCreateListener: bind() ok fd %d, calling listen()\n", fd);
+
 	int err;
     if ((err = listen (fd, BACKLOG)) < 0)
     {
 #ifdef WIN32
 		err = WSAGetLastError();
 #endif
-		prmsg (1, "SocketCreateListener: listen() failed (%d)\n", err);
+		prmsg (1, "SocketCreateListener: listen() failed (%d) fd %d\n", err, fd);
 		close (fd);
 		return TRANS_CREATE_LISTENER_FAILED;
     }
 
+    prmsg (1, "SocketCreateListener: listen() ok fd %d\n", fd);
+
     /* Set a flag to indicate that this connection is a listener */
 
     ciptr->flags = 1 | (ciptr->flags & TRANS_KEEPFLAGS);
+
+#ifdef WIN32
+    if (ciptr->sockbuf)
+        ciptr->sockbuf->listener = 1;
+#endif
 
     return 0;
 }
@@ -1621,17 +1668,30 @@ TRANS(SocketINETAccept) (XtransConnInfo ciptr, int *status)
 	return NULL;
     }
 
+#ifdef WIN32
+    newciptr->sockbuf = ciptr->sockbuf ? ciptr->sockbuf->accept_head : NULL;
+    if (!newciptr->sockbuf)
+    {
+	prmsg (1, "SocketINETAccept: no pending connection\n");
+	free (newciptr);
+	*status = TRANS_ACCEPT_FAILED;
+	return NULL;
+    }
+    ciptr->sockbuf->accept_head = newciptr->sockbuf->accept_next;
+    newciptr->sockbuf->accept_next = NULL;
+    newciptr->fd = newciptr->sockbuf->s;
+    prmsg (1, "SocketINETAccept: accepted fd %d (sockbuf %p)\n",
+           newciptr->fd, (void *) newciptr->sockbuf);
+#else
     if ((newciptr->fd = accept (ciptr->fd,
 	(struct sockaddr *) &sockname, (void *)&namelen)) < 0)
     {
-#ifdef WIN32
-	errno = WSAGetLastError();
-#endif
 	prmsg (1, "SocketINETAccept: accept() failed\n");
 	free (newciptr);
 	*status = TRANS_ACCEPT_FAILED;
 	return NULL;
     }
+#endif
 
 #ifdef TCP_NODELAY
     {
@@ -2435,9 +2495,10 @@ TRANS(SocketBytesReadable) (XtransConnInfo ciptr, BytesReadable_t *pend)
 	(void *) ciptr, ciptr->fd, (void *) pend);
 #ifdef WIN32
     {
-	int ret = ioctlsocket ((SOCKET) ciptr->fd, FIONREAD, (u_long *) pend);
-	if (ret == SOCKET_ERROR) errno = WSAGetLastError();
-	return ret;
+        struct buffer *b = ciptr->sockbuf->bufrd;
+
+        *pend = b->avail - b->written;
+        return 0;
     }
 #else
     return ioctl (ciptr->fd, FIONREAD, (char *) pend);
@@ -2558,53 +2619,23 @@ TRANS(SocketRead) (XtransConnInfo ciptr, char *buf, int size)
     prmsg (2,"SocketRead(%d,%p,%d)\n", ciptr->fd, (void *) buf, size);
 
 #if defined(WIN32)
-    /* Lazy-allocate read-ahead buffer sized to the OS socket receive buffer */
-    if (!ciptr->buf.data) {
-        int optval;
-        int optlen = sizeof(optval);
-        if (getsockopt((SOCKET)ciptr->fd, SOL_SOCKET, SO_RCVBUF,
-                       (char *)&optval, &optlen) != 0 || optval <= 0)
-            optval = 8192;
-        ciptr->buf.alloced = optval;
-        ciptr->buf.data = malloc(optval);
-        if (!ciptr->buf.data) {
-            ciptr->buf.alloced = 0;
-            errno = ENOMEM;
+    {
+        struct buffer *b = ciptr->sockbuf->bufrd;
+        int n;
+
+        if (b->written == b->avail) {
+            if (ciptr->sockbuf->eof)
+                return 0;
+            errno = WSAEWOULDBLOCK;
             return -1;
         }
-        ciptr->buf.written = 0;
-        ciptr->buf.avail = 0;
+        n = b->avail - b->written;
+        if (n > size)
+            n = size;
+        memcpy(buf, b->data + b->written, n);
+        b->written += n;
+        return n;
     }
-
-    /* Look ahead in windows to work around select() not waking up after partially read data: */
-    if (ciptr->buf.avail < ciptr->buf.alloced) {
-        int ret;
-        ret = recv((SOCKET)ciptr->fd, (void *) (ciptr->buf.data + ciptr->buf.avail), ciptr->buf.alloced - ciptr->buf.avail, 0);
-        if (ret == SOCKET_ERROR) {
-            int last_error;
-            last_error = WSAGetLastError();
-            if (last_error == WSAEWOULDBLOCK && ciptr->buf.avail > ciptr->buf.written)
-                goto here;
-            errno = last_error;
-            return ret;
-        }
-        if (ret <= 0)
-            return ret;
-
-        ciptr->buf.avail += ret;
-    }
-
-  here:
-    assert (ciptr->buf.avail > ciptr->buf.written);
-
-    int n = ciptr->buf.avail - ciptr->buf.written;
-    if (n > size)
-        n = size;
-    memcpy(buf, ciptr->buf.data + ciptr->buf.written, n);
-    ciptr->buf.written += n;
-    if (ciptr->buf.avail == ciptr->buf.written)
-        ciptr->buf.avail = ciptr->buf.written = 0;
-    return n;
 #else
 #if XTRANS_SEND_FDS
     {
@@ -2682,41 +2713,31 @@ TRANS(SocketReadv) (XtransConnInfo ciptr, struct iovec *buf, int size)
     }
 #elif defined(WIN32)
     {
-#define IN_PLACE_WSABUFS        5
-        DWORD nbytes, flags = 0;
-        WSABUF stackbufs[IN_PLACE_WSABUFS];
-        WSABUF *wsabuf = stackbufs;
-        int i, ret;
-
-        if (size > IN_PLACE_WSABUFS) {
-            wsabuf = malloc(size * sizeof(WSABUF));
-            if (!wsabuf) {
-                errno = ENOMEM;
-                return -1;
-            }
-        }
+        int i;
+        int total = 0;
 
         for (i = 0; i < size; i++) {
-            wsabuf[i].len = (u_long) buf[i].iov_len;
-            wsabuf[i].buf = buf[i].iov_base;
+            int n = TRANS(SocketRead)(ciptr, buf[i].iov_base,
+                                      (int) buf[i].iov_len);
+
+            if (n < 0) {
+                if (total == 0)
+                    return -1;
+                break;
+            }
+            total += n;
+            if (n == 0 || n < (int) buf[i].iov_len)
+                break;
         }
-
-        ret = WSARecv(ciptr->fd, wsabuf, size, &nbytes, &flags, NULL, NULL);
-
-        if (size > IN_PLACE_WSABUFS)
-            free(wsabuf);
-
-        if (ret == 0)
-            return nbytes;
-
-        errno = WSAGetLastError();
-        return -1;
+        return total;
     }
 #else
     return READV (ciptr, buf, size);
 #endif
 }
 
+
+static int TRANS(SocketWrite) (XtransConnInfo ciptr, const char *buf, int size);
 
 static int
 TRANS(SocketWritev) (XtransConnInfo ciptr, struct iovec *buf, int size)
@@ -2761,34 +2782,23 @@ TRANS(SocketWritev) (XtransConnInfo ciptr, struct iovec *buf, int size)
 #endif
 #if defined(WIN32)
     {
-        DWORD nbytes;
-        WSABUF stackbufs[IN_PLACE_WSABUFS];
-        WSABUF *wsabuf = stackbufs;
-        int i, ret;
-
-        if (size > IN_PLACE_WSABUFS) {
-            wsabuf = malloc(size * sizeof(WSABUF));
-            if (!wsabuf) {
-                errno = ENOMEM;
-                return -1;
-            }
-        }
+        int i;
+        int total = 0;
 
         for (i = 0; i < size; i++) {
-            wsabuf[i].len = (u_long) buf[i].iov_len;
-            wsabuf[i].buf = buf[i].iov_base;
+            int n = TRANS(SocketWrite)(ciptr, buf[i].iov_base,
+                                       (int) buf[i].iov_len);
+
+            if (n < 0) {
+                if (total == 0)
+                    return -1;
+                break;
+            }
+            total += n;
+            if (n < (int) buf[i].iov_len)
+                break;
         }
-
-        ret = WSASend(ciptr->fd, wsabuf, size, &nbytes, 0, NULL, NULL);
-
-        if (size > IN_PLACE_WSABUFS)
-            free(wsabuf);
-
-        if (ret == 0)
-            return nbytes;
-
-        errno = WSAGetLastError();
-        return -1;
+        return total;
     }
 #else
     return WRITEV (ciptr, buf, size);
@@ -2804,11 +2814,18 @@ TRANS(SocketWrite) (XtransConnInfo ciptr, const char *buf, int size)
 
 #if defined(WIN32)
     {
-	int ret = send ((SOCKET)ciptr->fd, buf, size, 0);
-#ifdef WIN32
-	if (ret == SOCKET_ERROR) errno = WSAGetLastError();
-#endif
-	return ret;
+        struct buffer *b = ciptr->sockbuf->bufwr;
+        int space = b->alloced - b->avail;
+
+        if (size > space)
+            size = space;
+        if (size <= 0) {
+            errno = WSAEWOULDBLOCK;
+            return -1;
+        }
+        memcpy(b->data + b->avail, buf, size);
+        b->avail += size;
+        return size;
     }
 #else
 #if XTRANS_SEND_FDS
@@ -2852,13 +2869,10 @@ TRANS(SocketINETClose) (XtransConnInfo ciptr)
 
 #ifdef WIN32
     {
-	int ret;
-	free(ciptr->buf.data);
-	ciptr->buf.data = NULL;
-	ciptr->buf.alloced = 0;
-	ret = close (ciptr->fd);
-	if (ret == SOCKET_ERROR) errno = WSAGetLastError();
-	return ret;
+	ospoll_sockbuf_free(ciptr->sockbuf);
+	ciptr->sockbuf = NULL;
+	ciptr->fd = -1;
+	return 0;
     }
 #else
     return close (ciptr->fd);

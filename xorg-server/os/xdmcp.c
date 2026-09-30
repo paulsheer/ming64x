@@ -52,6 +52,9 @@
 #define TRANS_SERVER
 #define TRANS_REOPEN
 #include <X11/xtrans/Xtrans.h>
+#ifdef WIN32
+#include <X11/xtrans/Xtransint.h>
+#endif
 
 #ifdef XDMCP
 #undef REQUEST
@@ -69,6 +72,13 @@ static const char *defaultDisplayClass = "MIT-unspecified";
 
 static int xdmcpSocket, sessionSocket;
 static xdmcp_states state;
+
+#ifdef WIN32
+static struct sockbuf *xdmcpSockbuf;
+#if defined(IPv6)
+static struct sockbuf *xdmcpSockbuf6;
+#endif
+#endif
 
 #if defined(IPv6)
 static int xdmcpSocket6;
@@ -578,11 +588,19 @@ static void
 xdmcp_reset(void)
 {
     timeOutRtx = 0;
-    if (xdmcpSocket >= 0)
+    if (xdmcpSocket >= 0) {
         SetNotifyFd(xdmcpSocket, XdmcpSocketNotify, X_NOTIFY_READ, NULL);
+#ifdef WIN32
+        ospoll_bind_sockbuf(server_poll, xdmcpSocket, xdmcpSockbuf);
+#endif
+    }
 #if defined(IPv6)
-    if (xdmcpSocket6 >= 0)
+    if (xdmcpSocket6 >= 0) {
         SetNotifyFd(xdmcpSocket6, XdmcpSocketNotify, X_NOTIFY_READ, NULL);
+#ifdef WIN32
+        ospoll_bind_sockbuf(server_poll, xdmcpSocket6, xdmcpSockbuf6);
+#endif
+    }
 #endif
     xdmcp_timer = TimerSet(NULL, 0, 0, XdmcpTimerNotify, NULL);
     send_packet();
@@ -832,9 +850,43 @@ receive_packet(int socketfd)
     int fromlen = sizeof(from);
     XdmcpHeader header;
 
+#ifdef WIN32
+    {
+        struct sockbuf *sb = NULL;
+        struct buffer *b;
+
+        if (socketfd == xdmcpSocket)
+            sb = xdmcpSockbuf;
+#if defined(IPv6)
+        else if (socketfd == xdmcpSocket6)
+            sb = xdmcpSockbuf6;
+#endif
+        if (!sb || !sb->bufrd)
+            return;
+        b = sb->bufrd;
+        if (b->written == b->avail)
+            return;
+        if (buffer.size < b->avail) {
+            BYTE *newBuf = (BYTE *) malloc(b->avail);
+
+            if (!newBuf)
+                return;
+            free(buffer.data);
+            buffer.data = newBuf;
+            buffer.size = b->avail;
+        }
+        buffer.pointer = 0;
+        buffer.count = b->avail;
+        memcpy(buffer.data, b->data, b->avail);
+        fromlen = sb->udp_fromlen;
+        memcpy(&from, &sb->udp_from, fromlen);
+        b->written = b->avail = 0;
+    }
+#else
     /* read message off socket */
     if (!XdmcpFill(socketfd, &buffer, (XdmcpNetaddr) &from, &fromlen))
         return;
+#endif
 
     /* reset retransmission backoff */
     timeOutRtx = 0;
@@ -1033,9 +1085,41 @@ get_xdmcp_sock(void)
     int socketfd = -1;
 
 #if defined(IPv6)
+#ifdef WIN32
+    xdmcpSocket6 = (int) WSASocket(AF_INET6, SOCK_DGRAM, 0, NULL, 0,
+                                   WSA_FLAG_OVERLAPPED);
+    if (xdmcpSocket6 < 0)
+        XdmcpWarning("INET6 UDP socket creation failed");
+#else
     if ((xdmcpSocket6 = socket(AF_INET6, SOCK_DGRAM, 0)) < 0)
         XdmcpWarning("INET6 UDP socket creation failed");
 #endif
+#endif
+
+#ifdef WIN32
+    xdmcpSocket = (int) WSASocket(AF_INET, SOCK_DGRAM, 0, NULL, 0,
+                                  WSA_FLAG_OVERLAPPED);
+    if (xdmcpSocket < 0)
+        XdmcpWarning("UDP socket creation failed");
+#ifdef SO_BROADCAST
+    else if (setsockopt(xdmcpSocket, SOL_SOCKET, SO_BROADCAST, (char *) &soopts,
+                        sizeof(soopts)) < 0)
+        XdmcpWarning("UDP set broadcast socket-option failed");
+#endif                          /* SO_BROADCAST */
+
+    if (xdmcpSocket >= 0) {
+        xdmcpSockbuf = ospoll_sockbuf_alloc(xdmcpSocket);
+        if (xdmcpSockbuf)
+            xdmcpSockbuf->dgram = 1;
+    }
+#if defined(IPv6)
+    if (xdmcpSocket6 >= 0) {
+        xdmcpSockbuf6 = ospoll_sockbuf_alloc(xdmcpSocket6);
+        if (xdmcpSockbuf6)
+            xdmcpSockbuf6->dgram = 1;
+    }
+#endif
+#else
     if ((xdmcpSocket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
         XdmcpWarning("UDP socket creation failed");
 #ifdef SO_BROADCAST
@@ -1043,6 +1127,7 @@ get_xdmcp_sock(void)
                         sizeof(soopts)) < 0)
         XdmcpWarning("UDP set broadcast socket-option failed");
 #endif                          /* SO_BROADCAST */
+#endif                          /* WIN32 */
 
     if (xdm_from == NULL)
         return;

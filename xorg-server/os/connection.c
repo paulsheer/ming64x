@@ -310,6 +310,9 @@ CreateWellKnownSockets(void)
         ListenTransFds[i-1] = fd;
         _XSERVTransSetOption(ListenTransConns[i-1], TRANS_CLOSEONEXEC, 0);
         SetNotifyFd(fd, EstablishNewConnections_local, X_NOTIFY_READ, NULL);
+#ifdef WIN32
+        ospoll_bind_sockbuf(server_poll, fd, ListenTransConns[i-1]->sockbuf);
+#endif
 
         if (!_XSERVTransIsLocal (ListenTransConns[i-1]))
             DefineSelf (fd);
@@ -368,9 +371,14 @@ ResetWellKnownSockets(void)
             }
         }
     }
-    for (i = 0; i < ListenTransCount; i++)
-        SetNotifyFd(ListenTransFds[i], EstablishNewConnections_local, X_NOTIFY_READ,
-                    NULL);
+    for (i = 0; i < ListenTransCount; i++) {
+        SetNotifyFd(ListenTransFds[i], EstablishNewConnections_local,
+                    X_NOTIFY_READ, NULL);
+#ifdef WIN32
+        ospoll_bind_sockbuf(server_poll, ListenTransFds[i],
+                            ListenTransConns[i]->sockbuf);
+#endif
+    }
 
     ResetAuthorization();
     ResetHosts(display);
@@ -697,6 +705,9 @@ AllocNewConnection(XtransConnInfo trans_conn, int fd, CARD32 conn_time)
                ospoll_trigger_edge,
                ClientReady,
                client);
+#ifdef WIN32
+    ospoll_bind_sockbuf(server_poll, fd, trans_conn->sockbuf);
+#endif
     set_poll_client(client);
 
 #ifdef DEBUG
@@ -805,8 +816,13 @@ ConnMaxNotify(int fd, int events, void *data)
 static void
 ErrorConnMax(XtransConnInfo trans_conn)
 {
-    if (!SetNotifyFd(trans_conn->fd, ConnMaxNotify, X_NOTIFY_READ, trans_conn))
+    if (!SetNotifyFd(trans_conn->fd, ConnMaxNotify, X_NOTIFY_READ, trans_conn)) {
         _XSERVTransClose(trans_conn);
+        return;
+    }
+#ifdef WIN32
+    ospoll_bind_sockbuf(server_poll, trans_conn->fd, trans_conn->sockbuf);
+#endif
 }
 
 /************
@@ -829,56 +845,6 @@ CloseDownFileDescriptor(OsCommPtr oc)
         oc->fd = -1;
     }
 }
-
-/*****************
- * CheckConnections
- *    Some connection has died, go find which one and shut it down
- *    The file descriptor has been closed, but is still in AllClients.
- *    If would truly be wonderful if select() would put the bogus
- *    file descriptors in the exception mask, but nooooo.  So we have
- *    to check each and every socket individually.
- *****************/
-
-#ifdef WIN32
-void
-CheckConnections(struct pollfd *fds, int num)
-{
-    fd_set tmask;
-    int i;
-    struct timeval notime;
-    int r;
-
-    notime.tv_sec = 0;
-    notime.tv_usec = 0;
-
-    for (i=0; i<num; i++)
-    {
-      int curclient=fds[i].fd;
-      fd_set tmask;
-      FD_ZERO(&tmask);
-      FD_SET(curclient, &tmask);
-      do
-      {
-        r = select (curclient + 1, &tmask, NULL, NULL, &notime);
-      } while (r == SOCKET_ERROR && (WSAGetLastError() == WSAEINTR || WSAGetLastError() == WSAEWOULDBLOCK));
-      if (r < 0)
-      {
-        for (i = 0; i < currentMaxClients; i++) {
-          ClientPtr client = clients[i];
-          if (client && !client->clientGone)
-          {
-            OsCommPtr oc = (OsCommPtr) (client->osPrivate);
-            if (oc->fd==curclient)
-            {
-              CloseDownClient(client);
-              break;
-            }
-          }
-        }
-      }
-    }
-}
-#endif
 
 /*****************
  * CloseDownConnection
@@ -1164,6 +1130,9 @@ ListenOnOpenFD(int fd, int noxauth)
     ListenTransFds[ListenTransCount] = fd;
 
     SetNotifyFd(fd, EstablishNewConnections_local, X_NOTIFY_READ, NULL);
+#ifdef WIN32
+    ospoll_bind_sockbuf(server_poll, fd, ciptr->sockbuf);
+#endif
 
     /* Increment the count */
     ListenTransCount++;
