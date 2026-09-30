@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-2-Clause) */
 #define E_
+#ifndef IPS_STATIC
+#define IPS_STATIC
+#endif
 #include <string.h>
 #include <stdlib.h>
 
@@ -22,7 +25,7 @@ static void i_out (char **p, int i1, int i2, int base)
     }
 }
 
-void ip_to_text (const void *ip, int addrlen, char *out)
+IPS_STATIC void ip_to_text (const void *ip, int addrlen, char *out)
 {E_
     const unsigned char *p;
     int i, n;
@@ -101,7 +104,7 @@ static int hex_dig_ord (unsigned char c)
 #define NEXT                    last_last = last, last = c, c = *s++, consumed++
 #define ER(en,x)                if(x) { res = -(en); goto errout; }
 
-int text_to_ip (const char *s, int *consumed_, void *out, int *addr_len)
+IPS_STATIC int text_to_ip (const char *s, int *consumed_, void *out, int *addr_len)
 {E_
     int res = 0;
     unsigned char *r;
@@ -248,7 +251,7 @@ struct iprange_list {
     struct iprange_item *first;
 };
 
-void iprange_free (struct iprange_list *l)
+IPS_STATIC void iprange_free (struct iprange_list *l)
 {E_
     struct iprange_item *p, *next;
     for (p = l->first; p; p = next) {
@@ -258,7 +261,7 @@ void iprange_free (struct iprange_list *l)
     free (l);
 }
 
-int iprange_match (struct iprange_list *l, const void *a, int addrlen)
+IPS_STATIC int iprange_match (struct iprange_list *l, const void *a, int addrlen)
 {E_
     struct iprange_item *p;
     int c = 0;
@@ -272,7 +275,7 @@ int iprange_match (struct iprange_list *l, const void *a, int addrlen)
     return 0;
 }
 
-void iprange_to_text (struct iprange_list *l, char *out, int outlen)
+IPS_STATIC void iprange_to_text (struct iprange_list *l, char *out, int outlen, int separator)
 {E_
     struct iprange_item *p;
 
@@ -296,7 +299,7 @@ void iprange_to_text (struct iprange_list *l, char *out, int outlen)
         }
 
         if (p->next) {
-            *out++ = ',';
+            *out++ = separator;
             outlen--;
         }
 
@@ -304,7 +307,7 @@ void iprange_to_text (struct iprange_list *l, char *out, int outlen)
     }
 }
 
-struct iprange_list *iprange_parse (const char *text, int *consumed__)
+IPS_STATIC struct iprange_list *iprange_parse (const char *text, int *consumed__)
 {E_
     struct iprange_list *l = NULL;
     struct iprange_item n, *p, *last = NULL;
@@ -315,7 +318,7 @@ struct iprange_list *iprange_parse (const char *text, int *consumed__)
 
     for (;;) {
         int consumed = 0;
-        while (*text && (*text == ',' || ((unsigned char) *text) <= ' ')) {
+        while (*text && (*text == ',' || *text == ';' || ((unsigned char) *text) <= ' ')) {
             text++;
             consumed_++;
         }
@@ -335,7 +338,7 @@ struct iprange_list *iprange_parse (const char *text, int *consumed__)
                 goto errout;
             text += consumed;
             consumed_ += consumed;
-        } else if (*text == ',' || !*text) {
+        } else if (*text == ',' || *text == ';' || !*text) {
             memcpy (n.addr2, n.addr1, sizeof (n.addr2));
             n.addr2len = n.addr1len;
         } else if (*text == '/') {
@@ -473,7 +476,7 @@ int main (int argc, char **argv)
         char range_Text[1024];
         const char *input = "1.2.3.4,1.2.3.8-1.2.3.10,FF00::1/8,10.10.10.255/30";
         l = iprange_parse (input, &consumed);
-        iprange_to_text (l, range_Text, sizeof (range_Text));
+        iprange_to_text (l, range_Text, sizeof (range_Text), ',');
         printf ("[%s]\n", input);
         printf ("[%s]\n", range_Text);
 

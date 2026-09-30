@@ -907,7 +907,7 @@ $(COROUT_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 
 $(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
 	@echo "  LINK    $@"
-	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lmswsock -lbcrypt -lcrypt32
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lmswsock -lbcrypt -lcrypt32 -lwinmm
 
 # ---------------------------------------------------------------------------
 # libltdl (GNU libtool's dlopen wrapper) — static library for pulseaudio

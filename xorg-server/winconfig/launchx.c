@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,10 @@
 #include <math.h>
 
 #include "x_logo_rgb.h"
+
+#define IPS_STATIC static
+#include "../../xorg-server/os/ipv6scan.c"
+#undef IPS_STATIC
 
 #define IDI_LAUNCHX 101
 
@@ -147,6 +152,54 @@ static const char *extension_names[NUM_EXTENSIONS] = {
     "X-Resource", "GLX"
 };
 
+static const char *audio_listen_items[] = {
+    "Loopback only (127.0.0.1)",
+    "All interfaces (0.0.0.0)"
+};
+#define AUDIO_LISTEN_COUNT (sizeof(audio_listen_items) / sizeof(audio_listen_items[0]))
+
+static const char *audio_auth_items[] = {
+    "Cookie (shared pulse-cookie)",
+    "Anonymous",
+    "IP allow-list"
+};
+#define AUDIO_AUTH_COUNT (sizeof(audio_auth_items) / sizeof(audio_auth_items[0]))
+
+static const char *audio_rate_items[] = {
+    "Auto (44100 Hz)", "44100 Hz", "48000 Hz", "96000 Hz", "192000 Hz"
+};
+#define AUDIO_RATE_COUNT (sizeof(audio_rate_items) / sizeof(audio_rate_items[0]))
+
+static const int audio_rate_values[] = { 0, 44100, 48000, 96000, 192000 };
+
+static const char *audio_format_items[] = {
+    "Auto (s16le)", "s16le (16-bit)", "s24le (24-bit)", "s32le (32-bit)"
+};
+#define AUDIO_FORMAT_COUNT (sizeof(audio_format_items) / sizeof(audio_format_items[0]))
+
+static const char *audio_format_values[] = { "", "s16le", "s24le", "s32le" };
+
+static const char *audio_channels_items[] = {
+    "Auto (stereo)", "Mono (1)", "Stereo (2)"
+};
+#define AUDIO_CHANNELS_COUNT (sizeof(audio_channels_items) / sizeof(audio_channels_items[0]))
+
+static const int audio_channels_values[] = { 0, 1, 2 };
+
+static const char *audio_latency_items[] = {
+    "Default", "Low", "Medium", "High"
+};
+#define AUDIO_LATENCY_COUNT (sizeof(audio_latency_items) / sizeof(audio_latency_items[0]))
+
+static const int audio_latency_fragments[] = { 0, 3, 5, 8 };
+static const int audio_latency_fragment_size[] = { 0, 4096, 8192, 16384 };
+
+#define MAX_AUDIO_DEVICES 16
+static char audio_output_devices[MAX_AUDIO_DEVICES][MAXPNAMELEN];
+static int audio_output_device_count;
+static char audio_input_devices[MAX_AUDIO_DEVICES][MAXPNAMELEN];
+static int audio_input_device_count;
+
 static ssh_session *g_ssh;
 static int *g_current_tab;
 
@@ -159,6 +212,7 @@ static int g_activate_pressed = 0;  /* Enter/Space pressed: activate focused but
 static int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal) */
 static int g_confirm_exit = 0;      /* Exit-with-live-connections dialog is open (modal) */
 static char g_notice[512];          /* cross-tab conflict explanation (modal) */
+static char g_acl_error[512];       /* ACL validation error (modal) */
 
 /* PuTTY's Ctrl-key method: translate the keydown ourselves with the Ctrl
    state intact so Ctrl-C/D/etc. become the raw control byte (0x03, 0x04, ...)
@@ -352,6 +406,23 @@ text_option(struct nk_context *ctx, const char *label, char *buffer, const int b
 }
 
 static void
+readonly_option(struct nk_context *ctx, const char *label, const char *value, const char *tooltip)
+{
+    struct nk_rect b;
+    char buf[256];
+
+    nk_layout_row_dynamic(ctx, 30, 2);
+    b = nk_widget_bounds(ctx);
+    nk_label(ctx, label, NK_TEXT_LEFT);
+    option_tooltip(ctx, b, tooltip);
+    snprintf(buf, sizeof(buf), "%s", value);
+    nk_edit_string_zero_terminated(ctx,
+        NK_EDIT_READ_ONLY | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
+        buf, (int)sizeof(buf), nk_filter_default);
+    option_tooltip(ctx, b, tooltip);
+}
+
+static void
 password_option(struct nk_context *ctx, const char *label, char *password,
     char *mask, const int size, const char *tooltip)
 {
@@ -487,6 +558,21 @@ struct options_audio {
     char pulseport[16];
     int mic_enabled;
     int speaker_enabled;
+
+    int listen_sel;          /* 0 = loopback, 1 = all interfaces */
+    int auth_sel;            /* 0 = cookie, 1 = anonymous, 2 = IP allow-list */
+    char auth_acl[256];      /* semicolon-separated IPs for auth_sel == 2 */
+
+    char output_device[128]; /* "" = system default (WAVE_MAPPER) */
+    char input_device[128];
+
+    int rate_sel;            /* 0 = auto, else index into audio_rate_values */
+    int format_sel;          /* 0 = auto, else index into audio_format_values */
+    int channels_sel;        /* 0 = auto, else index into audio_channels_values */
+    int latency_sel;         /* 0 = default, else fragments/fragment_size preset */
+
+    int null_sink_enabled;
+    int loopback_enabled;
 };
 
 static void ensure_pulse_cookie(void);
@@ -579,7 +665,7 @@ tab_network_and_access_control(struct nk_context *ctx,
 
     if (opt->ac_enabled)
         nk_widget_disable_begin(ctx);
-    text_option(ctx, "Allowed IP addresses (-allow)", opt->allow_string, (int)sizeof(opt->allow_string), "allow connections whose address matches a comma-separated IP list\n(e.g. 192.168.1.0/24,10.0.0.5-10.0.0.9,FE80::1)");
+    text_option(ctx, "Allowed IP addresses (-allow)", opt->allow_string, (int)sizeof(opt->allow_string), "allow connections whose address matches a ';'-separated IP list\n(e.g. 192.168.1.0/24;10.0.0.5-10.0.0.9;FE80::1). ',' is also accepted.");
     if (opt->ac_enabled)
         nk_widget_disable_end(ctx);
 
@@ -624,16 +710,16 @@ tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
     if (!opt->xdmcp_enabled)
         nk_widget_disable_begin(ctx);
 
-    if (opt->broadcast_enabled)
+    if (opt->xdmcp_enabled && opt->broadcast_enabled)
         nk_widget_disable_begin(ctx);
     text_option(ctx, "Query host (-query)", opt->query_host, (int)sizeof(opt->query_host), "Enable XDMCP and send Query packets to this host.");
-    if (opt->broadcast_enabled)
+    if (opt->xdmcp_enabled && opt->broadcast_enabled)
         nk_widget_disable_end(ctx);
 
-    if (!opt->broadcast_enabled && opt->query_host[0])
+    if (opt->xdmcp_enabled && !opt->broadcast_enabled && opt->query_host[0])
         nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Broadcast for XDMCP (-broadcast)", &opt->broadcast_enabled, "Enable XDMCP and broadcast a query to the network. The first\ndisplay manager to answer hosts the session.");
-    if (!opt->broadcast_enabled && opt->query_host[0])
+    if (opt->xdmcp_enabled && !opt->broadcast_enabled && opt->query_host[0])
         nk_widget_disable_end(ctx);
 
     text_option(ctx, "Indirect host (-indirect)", opt->indirect_host, (int)sizeof(opt->indirect_host), "Enable XDMCP and send IndirectQuery packets to this host.");
@@ -672,6 +758,7 @@ struct options_screen_windowing {
     int disablexinerama_enabled;
     int lesspointer_enabled;
     int swcursor_enabled;
+    int nocursor_enabled;
 };
 
 static void
@@ -754,6 +841,8 @@ tab_screen_and_windowing(struct nk_context *ctx,
         nk_widget_disable_end(ctx);
 
     checkbox_option(ctx, "X11 software cursor (-swcursor)", &opt->swcursor_enabled, "Use the X11 software cursor instead of the Windows cursor.");
+
+    checkbox_option(ctx, "Disable cursor (-nocursor)", &opt->nocursor_enabled, "Disable the X cursor so it is not drawn on any screen.");
 }
 
 struct options_pointer_keyboard {
@@ -1053,7 +1142,6 @@ struct options_fonts_rendering {
     char root_background[16];
     int retro_enabled;
     char color_visual_class[16];
-    int nocursor_enabled;
 };
 
 static void
@@ -1077,8 +1165,6 @@ tab_fonts_rendering(struct nk_context *ctx, struct options_fonts_rendering *opt)
     checkbox_option(ctx, "Start with classic stipple (-retro)", &opt->retro_enabled, "Start with the classic stipple pattern and visible cursor. The default is\na black root window.");
 
     text_option(ctx, "Color visual class (-cc)", opt->color_visual_class, (int)sizeof(opt->color_visual_class), "Set the visual class for the root window of color screens, using the X\nprotocol class number.");
-
-    checkbox_option(ctx, "Disable cursor (-nocursor)", &opt->nocursor_enabled, "Disable the X cursor so it is not drawn on any screen.");
 }
 
 struct options_logging_extensions {
@@ -1143,6 +1229,65 @@ tab_logging_extensions(struct nk_context *ctx,
 }
 
 static void
+enumerate_audio_devices(void)
+{
+    UINT i, n;
+
+    audio_output_device_count = 0;
+    n = waveOutGetNumDevs();
+    if (n > MAX_AUDIO_DEVICES)
+        n = MAX_AUDIO_DEVICES;
+    for (i = 0; i < n; i++) {
+        WAVEOUTCAPS caps;
+        if (waveOutGetDevCaps(i, &caps, sizeof caps) == MMSYSERR_NOERROR) {
+            strncpy(audio_output_devices[audio_output_device_count], caps.szPname, MAXPNAMELEN - 1);
+            audio_output_devices[audio_output_device_count][MAXPNAMELEN - 1] = '\0';
+            audio_output_device_count++;
+        }
+    }
+
+    audio_input_device_count = 0;
+    n = waveInGetNumDevs();
+    if (n > MAX_AUDIO_DEVICES)
+        n = MAX_AUDIO_DEVICES;
+    for (i = 0; i < n; i++) {
+        WAVEINCAPS caps;
+        if (waveInGetDevCaps(i, &caps, sizeof caps) == MMSYSERR_NOERROR) {
+            strncpy(audio_input_devices[audio_input_device_count], caps.szPname, MAXPNAMELEN - 1);
+            audio_input_devices[audio_input_device_count][MAXPNAMELEN - 1] = '\0';
+            audio_input_device_count++;
+        }
+    }
+}
+
+static void
+device_option(struct nk_context *ctx, const char *label, char *device,
+    char names[][MAXPNAMELEN], int nnames, const char *tooltip)
+{
+    const char *items[MAX_AUDIO_DEVICES + 1];
+    int count = nnames + 1;
+    int sel = 0;
+    int i;
+
+    items[0] = "Auto (system default)";
+    for (i = 0; i < nnames; i++)
+        items[i + 1] = names[i];
+    for (i = 1; i < count; i++) {
+        if (strcmp(device, items[i]) == 0) {
+            sel = i;
+            break;
+        }
+    }
+
+    combobox_option(ctx, label, items, count, &sel, tooltip);
+
+    if (sel <= 0)
+        device[0] = '\0';
+    else
+        strncpy(device, items[sel], 127), device[127] = '\0';
+}
+
+static void
 tab_audio(struct nk_context *ctx, struct options_audio *opt)
 {
     heading(ctx, "Audio");
@@ -1154,10 +1299,50 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
         nk_widget_disable_begin(ctx);
     text_option(ctx, "PulseAudio listen port", opt->pulseport, sizeof(opt->pulseport),
         "TCP port the embedded PulseAudio server listens on (default 4713).");
+    combobox_option(ctx, "Listen address", audio_listen_items, AUDIO_LISTEN_COUNT,
+        &opt->listen_sel,
+        "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest)\nor 0.0.0.0 (all interfaces). Loopback is sufficient when audio is\nforwarded over an SSH tunnel; choose All interfaces only for LAN clients.");
+    {
+        char env[128];
+        const char *listen = opt->listen_sel == 1 ? "0.0.0.0" : "127.0.0.1";
+        snprintf(env, sizeof(env), "export PULSE_SERVER=tcp:%s:%s",
+            listen, opt->pulseport[0] ? opt->pulseport : "4713");
+        readonly_option(ctx, "Client environment variable", env,
+            "Set this on each PulseAudio client so it connects to the embedded\nserver. Reflects the listen address and port above.");
+    }
+    combobox_option(ctx, "Authentication", audio_auth_items, AUDIO_AUTH_COUNT,
+        &opt->auth_sel,
+        "How remote clients authenticate. Cookie requires the shared pulse-cookie\n(default); Anonymous accepts any client; IP allow-list accepts only the\naddresses listed below.");
+    if (opt->auth_sel == 2) {
+        text_option(ctx, "Allowed clients", opt->auth_acl, sizeof(opt->auth_acl),
+            "Semicolon-separated IP addresses or CIDR blocks allowed to connect when\nauthentication is set to IP allow-list (e.g. 192.168.1.0/24;10.0.0.5).");
+    }
     checkbox_option(ctx, "Microphone", &opt->mic_enabled,
         "Expose the Windows recording device as the PulseAudio source (wavein).");
     checkbox_option(ctx, "Speaker", &opt->speaker_enabled,
         "Expose the Windows playback device as the PulseAudio sink (waveout).");
+    device_option(ctx, "Output device", opt->output_device,
+        audio_output_devices, audio_output_device_count,
+        "Windows playback (waveOut) device to use. Auto selects the system default;\notherwise pick a specific device by name.");
+    device_option(ctx, "Input device", opt->input_device,
+        audio_input_devices, audio_input_device_count,
+        "Windows recording (waveIn) device to use. Auto selects the system default;\notherwise pick a specific device by name.");
+    combobox_option(ctx, "Sample rate", audio_rate_items, AUDIO_RATE_COUNT,
+        &opt->rate_sel,
+        "Sample rate for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (44100 Hz).");
+    combobox_option(ctx, "Sample format", audio_format_items, AUDIO_FORMAT_COUNT,
+        &opt->format_sel,
+        "Bit depth for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (16-bit signed little-endian).");
+    combobox_option(ctx, "Channels", audio_channels_items, AUDIO_CHANNELS_COUNT,
+        &opt->channels_sel,
+        "Channel count for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (stereo).");
+    combobox_option(ctx, "Latency", audio_latency_items, AUDIO_LATENCY_COUNT,
+        &opt->latency_sel,
+        "Audio buffering. Lower latency reduces delay but risks underruns and\nglitches; higher latency is more robust. Maps to the waveOut fragment\ncount and size.");
+    checkbox_option(ctx, "Null output", &opt->null_sink_enabled,
+        "Load a null (silent) sink so PulseAudio always has a playback device,\neven when no real audio hardware is present.");
+    checkbox_option(ctx, "Loopback (mic to speaker)", &opt->loopback_enabled,
+        "Route the microphone straight to the speaker (module-loopback) for local\nmonitoring of the recording device.");
     if (!opt->audio_enabled)
         nk_widget_disable_end(ctx);
 }
@@ -1192,7 +1377,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     *xdmcp_opt = (struct options_xdmcp) {
         .xdmcp_enabled = 0,
         .query_host = {0},
-        .broadcast_enabled = 0,
+        .broadcast_enabled = 1,
         .indirect_host = {0},
         .multicast_enabled = 0,
         .port_string = "177",        /* XDM_UDP_PORT */
@@ -1218,6 +1403,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .disablexinerama_enabled = 0,
         .lesspointer_enabled = 0,
         .swcursor_enabled = 0,
+        .nocursor_enabled = 0,
     };
     *pointer_opt = (struct options_pointer_keyboard) {
         .emulate3buttons_enabled = 0,
@@ -1296,7 +1482,6 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .root_background = "0F0F1E",  /* server default root background */
         .retro_enabled = 0,
         .color_visual_class = {0},
-        .nocursor_enabled = 0,
     };
     *logging_opt = (struct options_logging_extensions) {
         .logfile = {0},
@@ -1321,6 +1506,17 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .pulseport = "4713",
         .mic_enabled = 1,
         .speaker_enabled = 1,
+        .listen_sel = 0,
+        .auth_sel = 0,
+        .auth_acl = {0},
+        .output_device = {0},
+        .input_device = {0},
+        .rate_sel = 0,
+        .format_sel = 0,
+        .channels_sel = 0,
+        .latency_sel = 0,
+        .null_sink_enabled = 0,
+        .loopback_enabled = 0,
     };
 }
 
@@ -1411,6 +1607,7 @@ cf_build(struct cfentry *e,
     e[n++] = CF_BOOL("screenwindowingmodes", "disablexineramaextension", screen->disablexinerama_enabled);
     e[n++] = CF_BOOL("screenwindowingmodes", "hidewindowspointer", screen->lesspointer_enabled);
     e[n++] = CF_BOOL("screenwindowingmodes", "x11softwarecursor", screen->swcursor_enabled);
+    e[n++] = CF_BOOL("screenwindowingmodes", "disablecursor", screen->nocursor_enabled);
 
     e[n++] = CF_BOOL("pointerkeyboardinput", "emulate3buttonmouse", pointer->emulate3buttons_enabled);
     e[n++] = CF_STR("pointerkeyboardinput", "emulatetimeout", pointer->emulate3buttons_timeout);
@@ -1462,7 +1659,6 @@ cf_build(struct cfentry *e,
     e[n++] = CF_STR("fontsrenderingappearance", "rootbackground", fonts->root_background);
     e[n++] = CF_BOOL("fontsrenderingappearance", "startwithclassicstipple", fonts->retro_enabled);
     e[n++] = CF_STR("fontsrenderingappearance", "colorvisualclass", fonts->color_visual_class);
-    e[n++] = CF_BOOL("fontsrenderingappearance", "disablecursor", fonts->nocursor_enabled);
 
     e[n++] = CF_STR("loggingschedulingextensions", "logfile", logging->logfile);
     e[n++] = CF_INT("loggingschedulingextensions", "logverbosity", logging->logverbose, 0, 3);
@@ -1479,8 +1675,19 @@ cf_build(struct cfentry *e,
 
     e[n++] = CF_BOOL("audio", "enablepulseaudioserver", audio->audio_enabled);
     e[n++] = CF_STR("audio", "pulseaudiolistenport", audio->pulseport);
+    e[n++] = CF_INT("audio", "listenaddress", audio->listen_sel, 0, AUDIO_LISTEN_COUNT - 1);
+    e[n++] = CF_INT("audio", "authentication", audio->auth_sel, 0, AUDIO_AUTH_COUNT - 1);
+    e[n++] = CF_STR("audio", "allowedclients", audio->auth_acl);
     e[n++] = CF_BOOL("audio", "microphone", audio->mic_enabled);
     e[n++] = CF_BOOL("audio", "speaker", audio->speaker_enabled);
+    e[n++] = CF_STR("audio", "outputdevice", audio->output_device);
+    e[n++] = CF_STR("audio", "inputdevice", audio->input_device);
+    e[n++] = CF_INT("audio", "samplerate", audio->rate_sel, 0, AUDIO_RATE_COUNT - 1);
+    e[n++] = CF_INT("audio", "sampleformat", audio->format_sel, 0, AUDIO_FORMAT_COUNT - 1);
+    e[n++] = CF_INT("audio", "channels", audio->channels_sel, 0, AUDIO_CHANNELS_COUNT - 1);
+    e[n++] = CF_INT("audio", "latency", audio->latency_sel, 0, AUDIO_LATENCY_COUNT - 1);
+    e[n++] = CF_BOOL("audio", "nulloutput", audio->null_sink_enabled);
+    e[n++] = CF_BOOL("audio", "loopback", audio->loopback_enabled);
 
     return n;
 }
@@ -1895,6 +2102,7 @@ build_server_cmdline(struct cmdline *c,
     cl_if(c, screen->disablexinerama_enabled, "-disablexineramaextension");
     cl_if(c, screen->lesspointer_enabled, "-lesspointer");
     cl_if(c, screen->swcursor_enabled, "-swcursor");
+    cl_if(c, screen->nocursor_enabled, "-nocursor");
 
     /* Pointer & keyboard input */
     if (pointer->emulate3buttons_enabled) {
@@ -2012,7 +2220,6 @@ build_server_cmdline(struct cmdline *c,
     }
     cl_if(c, fonts->retro_enabled, "-retro");
     cl_opt(c, "-cc", fonts->color_visual_class, NULL);
-    cl_if(c, fonts->nocursor_enabled, "-nocursor");
 
     /* Logging, scheduling & extensions */
     cl_opt(c, "-logfile", logging->logfile, NULL);
@@ -2067,12 +2274,13 @@ write_commandline_file(const char *cmdline)
 }
 
 static void
-write_default_pa(const char *port, int speaker, int mic)
+write_default_pa(struct options_audio *a)
 {
     char dir[512], path[512], cookie[512], cookie_esc[512];
     FILE *f;
     const char *s;
     char *d;
+    const char *listen;
 
     if (config_dir(dir, sizeof dir))
         return;
@@ -2093,14 +2301,45 @@ write_default_pa(const char *port, int speaker, int mic)
     f = fopen(path, "wb");
     if (!f)
         return;
-    if (speaker || mic) {
+    if (a->speaker_enabled || a->mic_enabled) {
         fputs("load-module module-waveout", f);
-        fputs(speaker ? " playback=1 sink_name=waveout" : " playback=0", f);
-        fputs(mic ? " record=1 source_name=wavein" : " record=0", f);
+        fputs(a->speaker_enabled ? " playback=1" : " playback=0", f);
+        fputs(" sink_name=waveout", f);
+        fputs(a->mic_enabled ? " record=1" : " record=0", f);
+        fputs(" source_name=wavein", f);
+        if (a->output_device[0])
+            fprintf(f, " output_device_name=\"%s\"", a->output_device);
+        if (a->input_device[0])
+            fprintf(f, " input_device_name=\"%s\"", a->input_device);
+        if (a->rate_sel > 0)
+            fprintf(f, " rate=%d", audio_rate_values[a->rate_sel]);
+        if (a->format_sel > 0)
+            fprintf(f, " format=%s", audio_format_values[a->format_sel]);
+        if (a->channels_sel > 0)
+            fprintf(f, " channels=%d", audio_channels_values[a->channels_sel]);
+        if (a->latency_sel > 0)
+            fprintf(f, " fragments=%d fragment_size=%d",
+                audio_latency_fragments[a->latency_sel],
+                audio_latency_fragment_size[a->latency_sel]);
         fputs("\r\n", f);
     }
-    fprintf(f, "load-module module-native-protocol-tcp port=%s listen=127.0.0.1 auth-cookie=%s\r\n",
-        port[0] ? port : "4713", cookie_esc);
+    if (a->null_sink_enabled)
+        fputs("load-module module-null-sink sink_name=null\r\n", f);
+    if (a->loopback_enabled)
+        fputs("load-module module-loopback\r\n", f);
+
+    listen = a->listen_sel == 1 ? "0.0.0.0" : "127.0.0.1";
+    fputs("load-module module-native-protocol-tcp", f);
+    fprintf(f, " port=%s listen=%s",
+        a->pulseport[0] ? a->pulseport : "4713", listen);
+    if (a->auth_sel == 1)
+        fputs(" auth-anonymous=1", f);
+    else if (a->auth_sel == 2 && a->auth_acl[0])
+        fprintf(f, " auth-ip-acl=%s auth-cookie-enabled=0", a->auth_acl);
+    else
+        fprintf(f, " auth-cookie=%s", cookie_esc);
+    fputs("\r\n", f);
+
     fclose(f);
 }
 
@@ -2218,6 +2457,37 @@ launch_ming64x(const char *cmdline)
     return 1;
 }
 
+static int
+validate_acl_inputs(struct options_network_and_access_control *net,
+    struct options_audio *audio, char *err, int errsz)
+{
+    struct iprange_list *l;
+
+    if (net->allow_string[0]) {
+        l = iprange_parse(net->allow_string, NULL);
+        if (!l) {
+            snprintf(err, errsz,
+                "\"Allowed IP addresses (-allow)\" contains an invalid entry:\n%s",
+                net->allow_string);
+            return 0;
+        }
+        iprange_free(l);
+    }
+
+    if (audio->auth_acl[0]) {
+        l = iprange_parse(audio->auth_acl, NULL);
+        if (!l) {
+            snprintf(err, errsz,
+                "\"Allowed clients\" (Audio) contains an invalid entry:\n%s",
+                audio->auth_acl);
+            return 0;
+        }
+        iprange_free(l);
+    }
+
+    return 1;
+}
+
 int main(void)
 {
     GdiFont *font;
@@ -2253,6 +2523,7 @@ int main(void)
     load_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
         &audio_opt);
+    enumerate_audio_devices();
     if (sanitize_options(&xdmcp_opt, &screen_opt)) {
         strcpy(g_notice,
             "Your saved launchx.cnf contained conflicting options.\n"
@@ -2437,7 +2708,7 @@ int main(void)
             if (nk_begin(ctx, "LaunchX",
                 nk_rect(0, 0, (float)client.right, (float)client.bottom),
                 NK_WINDOW_NO_SCROLLBAR |
-                ((g_confirm_reset || g_notice[0] || g_confirm_exit) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
+                ((g_confirm_reset || g_notice[0] || g_confirm_exit || g_acl_error[0]) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
             {
                 cr = nk_window_get_content_region(ctx);
                 W = cr.w;
@@ -2546,22 +2817,28 @@ int main(void)
                         g_confirm_reset = 1;
                     option_tooltip(ctx, bb, "Resets all configuration parameters in all sections to factory\ndefaults.");
                     if (nk_button_label(ctx, "Start")) {
-                        save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
-                            &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
-                            &fonts_opt, &logging_opt, &audio_opt);
-                        {
-                            struct cmdline c;
-                            build_server_cmdline(&c, &ssh_opt, &ssh, &net_opt,
-                                &xdmcp_opt, &screen_opt, &pointer_opt,
-                                &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt,
-                                &logging_opt, &audio_opt);
-                            write_commandline_file(c.buf);
-                            if (audio_opt.audio_enabled) {
-                                ensure_pulse_cookie();
-                                write_default_pa(audio_opt.pulseport,
-                                    audio_opt.speaker_enabled, audio_opt.mic_enabled);
+                        if (!validate_acl_inputs(&net_opt, &audio_opt,
+                                g_acl_error, sizeof(g_acl_error))) {
+                            /* g_acl_error now holds the message; the modal
+                               dialog below is shown this frame. */
+                        }
+                        else {
+                            save_config(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt,
+                                &pointer_opt, &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt,
+                                &fonts_opt, &logging_opt, &audio_opt);
+                            {
+                                struct cmdline c;
+                                build_server_cmdline(&c, &ssh_opt, &ssh, &net_opt,
+                                    &xdmcp_opt, &screen_opt, &pointer_opt,
+                                    &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt,
+                                    &logging_opt, &audio_opt);
+                                write_commandline_file(c.buf);
+                                if (audio_opt.audio_enabled) {
+                                    ensure_pulse_cookie();
+                                    write_default_pa(&audio_opt);
+                                }
+                                launch_ming64x(c.buf);
                             }
-                            launch_ming64x(c.buf);
                         }
                     }
                     if (nk_button_label(ctx, "Exit")) {
@@ -2702,6 +2979,27 @@ int main(void)
                 nk_layout_row_dynamic(ctx, 34, 1);
                 if (dialog_button(ctx, "OK"))
                     g_notice[0] = '\0';
+            }
+            nk_end(ctx);
+        }
+
+        if (g_acl_error[0]) {
+            RECT rc;
+            struct nk_rect pr;
+
+            GetClientRect(wnd, &rc);
+            pr = nk_rect((rc.right - 640.0f) / 2.0f,
+                         (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
+
+            if (nk_begin(ctx, "Invalid IP list", pr,
+                    NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+                nk_layout_row_dynamic(ctx, 15, 1);
+                nk_label_wrap(ctx, " ");
+                nk_layout_row_dynamic(ctx, 55, 1);
+                nk_label_wrap(ctx, g_acl_error);
+                nk_layout_row_dynamic(ctx, 34, 1);
+                if (dialog_button(ctx, "OK"))
+                    g_acl_error[0] = '\0';
             }
             nk_end(ctx);
         }
