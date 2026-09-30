@@ -789,6 +789,8 @@ ospoll_overlapped_alloc(struct sockbuf *s)
 {
     struct overlapped *u = malloc(sizeof(struct overlapped));
 
+    if (!u)
+        return NULL;
     memset(u, 0, sizeof(*u));
     u->magic = OVERLAPPED_MAGIC;
     u->ref = 1;
@@ -865,6 +867,11 @@ ospoll_socket_disconnect(struct sockbuf *sb)
         return;
     assert(!sb->overlapped_disconnect);
     sb->overlapped_disconnect = ospoll_overlapped_alloc(sb);
+    if (!sb->overlapped_disconnect) {
+        closesocket((SOCKET) sb->s);
+        sb->disconnecting = 1;
+        return;
+    }
     u = sb->overlapped_disconnect;
     assert(u->ref == 1);
     memset(&u->w, 0, sizeof(u->w));
@@ -936,8 +943,11 @@ ospoll_read(struct ospoll *ospoll, struct sockbuf *s)
         s->bufrd->written = s->bufrd->avail = 0;
     if (s->bufrd->avail >= s->bufrd->alloced)
         return;
-    if (!s->overlapped_recv)
+    if (!s->overlapped_recv) {
         s->overlapped_recv = ospoll_overlapped_alloc(s);
+        if (!s->overlapped_recv)
+            return;
+    }
     u = s->overlapped_recv;
     assert(u->ref == 1);
     memset(&u->w, 0, sizeof(u->w));
@@ -978,8 +988,11 @@ ospoll_write(struct ospoll *ospoll, struct sockbuf *s)
         return;
     if (s->bufwr->written >= s->bufwr->avail)
         return;
-    if (!s->overlapped_send)
+    if (!s->overlapped_send) {
         s->overlapped_send = ospoll_overlapped_alloc(s);
+        if (!s->overlapped_send)
+            return;
+    }
     u = s->overlapped_send;
     assert(u->ref == 1);
     memset(&u->w, 0, sizeof(u->w));
@@ -1019,6 +1032,8 @@ ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
     }
     if (!s->overlapped_accept) {
         s->overlapped_accept = ospoll_overlapped_alloc(s);
+        if (!s->overlapped_accept)
+            return;
         s->overlapped_accept->u.ua.accept_sock = INVALID_SOCKET;
     }
     u = s->overlapped_accept;
@@ -1083,9 +1098,12 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
         new_sb = ospoll_sockbuf_alloc(u->u.ua.accept_sock);
         ErrorF("IOCP: AcceptEx completed listen=%d accept=%d new_sb=%p\n",
                s->s, (int) u->u.ua.accept_sock, (void *) new_sb);
-        u->u.ua.accept_sock = INVALID_SOCKET;
-        if (!new_sb)
+        if (!new_sb) {
+            closesocket(u->u.ua.accept_sock);
+            u->u.ua.accept_sock = INVALID_SOCKET;
             return;
+        }
+        u->u.ua.accept_sock = INVALID_SOCKET;
         GetAcceptExSockaddrs(u->u.ua.accept_buf, 0,
                              sizeof(struct sockaddr_storage),
                              sizeof(struct sockaddr_storage),
@@ -1123,8 +1141,10 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
                 s->bufrd->reading = 0;
                 return;
             }
+            s->bufrd->reading = 0;
             s->overlapped_recv = NULL;
             s->eof = 1;
+            ospoll_overlapped_deref(u, 0);
             return;
         }
         s->bufrd->avail += l;
@@ -1140,8 +1160,10 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
         if (l <= 0) {
             s->bufwr->avail = 0;
             s->bufwr->written = 0;
+            s->bufwr->writing = 0;
             s->overlapped_send = NULL;
             s->eof = 1;
+            ospoll_overlapped_deref(u, 0);
             return;
         }
         s->bufwr->written += l;

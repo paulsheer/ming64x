@@ -972,16 +972,6 @@ TRANS(SocketReopen) (int i _X_UNUSED, int type, int fd, const char *port)
 
     ciptr->fd = fd;
 
-#ifdef WIN32
-    ciptr->sockbuf = ospoll_sockbuf_alloc(ciptr->fd);
-    if (!ciptr->sockbuf) {
-	prmsg (1, "SocketReopen: sockbuf alloc failed\n");
-	free (ciptr);
-	return NULL;
-    }
-    ciptr->sockbuf->listener = 1;
-#endif
-
     addrlen = portlen + offsetof(struct sockaddr, sa_data);
     if ((addr = calloc (1, addrlen)) == NULL) {
 	prmsg (1, "SocketReopen: malloc(addr) failed\n");
@@ -998,6 +988,19 @@ TRANS(SocketReopen) (int i _X_UNUSED, int type, int fd, const char *port)
 	return NULL;
     }
     ciptr->peeraddrlen = addrlen;
+
+#ifdef WIN32
+    ciptr->sockbuf = ospoll_sockbuf_alloc(ciptr->fd);
+    if (!ciptr->sockbuf) {
+	prmsg (1, "SocketReopen: sockbuf alloc failed\n");
+	closesocket(ciptr->fd);
+	free (ciptr->peeraddr);
+	free (ciptr->addr);
+	free (ciptr);
+	return NULL;
+    }
+    ciptr->sockbuf->listener = 1;
+#endif
 
     /* Initialize ciptr structure as if it were a normally-opened unix socket */
     ciptr->flags = TRANS_LOCAL | TRANS_NOUNLINK;
