@@ -29159,6 +29159,11 @@ nk_edit_string(struct nk_context *ctx, nk_flags flags,
     nk_str_init_fixed(&edit->string, memory, (nk_size)max);
     edit->string.buffer.allocated = (nk_size)*len;
     edit->string.len = nk_utf_len(memory, *len);
+    /* Clamp restored cursor/selection to the (possibly shrunken) string, or
+     * nk_do_edit's glyph walk can miss select_begin_ptr and assert. */
+    edit->cursor       = NK_MIN(edit->cursor,       edit->string.len);
+    edit->select_start = NK_MIN(edit->select_start, edit->string.len);
+    edit->select_end   = NK_MIN(edit->select_end,   edit->string.len);
     state = nk_edit_buffer(ctx, flags, edit, filter);
     *len = (int)edit->string.buffer.allocated;
 
