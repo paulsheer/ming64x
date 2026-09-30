@@ -2024,10 +2024,15 @@ void ssh2_channel_write(LIBSSH2_CHANNEL *channel, const int stream_id,
             COROUT_EXIT();
         }
 
+#ifdef SSH2_CHANNEL_WRITE_BLOCKING_MODE
         /* wait for the remote end to open up some window space, reading
            incoming packets (which carry window adjustments) until it does */
         while(channel->local.window_size <= 0)
             CALL(ssh2_transport_read(session, 0));
+#else
+        if(channel->local.window_size <= 0)
+            goto out;
+#endif
 
         /* Clamp after the window-wait yield: buflen is a parameter re-passed
            on resume, and anything before the CALL above is skipped when
@@ -2091,6 +2096,10 @@ void ssh2_channel_write(LIBSSH2_CHANNEL *channel, const int stream_id,
 
         channel->write_state = ssh2_NB_state_idle;
     }
+
+#ifndef SSH2_CHANNEL_WRITE_BLOCKING_MODE
+  out:
+#endif
 
     END();
 }

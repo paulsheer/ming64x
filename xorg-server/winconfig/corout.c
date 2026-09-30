@@ -1140,8 +1140,8 @@ static struct socket *corout_socket_alloc(socket_t s)
     p = (struct sockbuf *) malloc(sizeof(*p));
     memset(p, '\0', sizeof(*p));
     p->e = e, p->s = s;
-    p->bufrd = corout_buffer_alloc(128 * 1024);
-    p->bufwr = corout_buffer_alloc(128 * 1024);
+    p->bufrd = corout_buffer_alloc(COROUT_BUFFER_ALLOCED);
+    p->bufwr = corout_buffer_alloc(COROUT_BUFFER_ALLOCED);
     e->unlinked = 1;
     e->s = p;
     return e;
@@ -1535,6 +1535,7 @@ void process_overlapped(struct overlapped *u, const int l)
             return;
         }
         s->bufrd->avail += l;
+        s->bufrd->io_ops++;
         s->bufrd->reading = 0;
         corout_step(c, s, CO_EV_RD, NULL);
     } else if (s->overlapped_send == u) {
@@ -1548,6 +1549,7 @@ void process_overlapped(struct overlapped *u, const int l)
             return;
         }
         s->bufwr->written += l;
+        s->bufwr->io_ops++;
         assert(s->bufwr->written <= s->bufwr->avail);
         if (!s->bufwr->reading)  /* don't make changes while an overlapped operation is in progress */
             if (s->bufwr->written == s->bufwr->avail)

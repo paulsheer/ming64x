@@ -97,6 +97,8 @@ struct sockevent {
     struct accept_sock *accept_sock;
 };
 
+#define COROUT_BUFFER_ALLOCED           (128 * 1024)
+
 struct buffer {
     int ref;
     char *data;
@@ -105,6 +107,7 @@ struct buffer {
     int written;
     int avail;
     int alloced;
+    int io_ops;
 };
 
 #ifndef COROUT_C

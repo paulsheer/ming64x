@@ -44,6 +44,7 @@
 #define SSH_OUT_CAP    (16 * 1024)
 #define SSH_POLL_MS    50     /* ms; idle poll interval for the worker */
 #define SSH_SEND_CHUNK 8192
+#define SSH_WINDOW_SIZE_INCR    128
 
 /* X11 forwarding relay (SSH x11 channel <-> local VcXsrv socket) */
 #define X11_MAX         1024
@@ -426,8 +427,6 @@ typedef struct x11_conn {
     struct buffer *relay_buf;       /* held (ref++) across a channel write/read */
     int ssh_ops;
     int chan_done;                  /* ssh_run freed the channel */
-    int rd_space;
-    int wr_data;
     int sock_done;                  /* runner exited */
 } x11_conn;
 
@@ -448,8 +447,6 @@ typedef struct audio_conn {
     struct buffer *relay_buf;       /* held (ref++) across a channel write/read */
     int ssh_ops;
     int chan_done;                  /* ssh_run freed the channel */
-    int rd_space;
-    int wr_data;
     int sock_done;                  /* runner exited */
 } audio_conn;
 
@@ -528,18 +525,31 @@ x11_runner(struct corout_item *state, void *user_data, const struct sockevent *e
         if (x->chan_done || !x->xsock->s)
             break;
 
-        x->wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
-        assert(x->wr_data >= 0);
-        x->rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
-        assert(x->rd_space >= 0);
+        x->xsock->s->bufrd->io_ops = 0;
+        x->xsock->s->bufwr->io_ops = 0;
 
-        int can_read = x->rd_space || x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail;
+        int rd_space, wr_data;
+        wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
+        assert(wr_data >= 0);
+        rd_space = 0;
 
-        if (can_read && x->wr_data) {
+        if (!x->xsock->s->bufrd->reading) {
+            if (x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail)
+                x->xsock->s->bufrd->written = x->xsock->s->bufrd->avail = 0;
+            if (x->xsock->s->bufrd->alloced + SSH_WINDOW_SIZE_INCR < COROUT_BUFFER_ALLOCED)
+                x->xsock->s->bufrd->alloced += SSH_WINDOW_SIZE_INCR;
+            if (x->xsock->s->bufrd->alloced > x->xsock->s->bufrd->avail + x->channel->local.window_size)
+                x->xsock->s->bufrd->alloced = x->xsock->s->bufrd->avail + x->channel->local.window_size;
+            rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
+        }
+
+        assert(rd_space >= 0);
+
+        if (rd_space && wr_data) {
             corout_readwrite(x->xsock);
-        } else if (x->wr_data) {
+        } else if (wr_data) {
             corout_write(x->xsock);
-        } else if (can_read) {
+        } else if (rd_space) {
             corout_read(x->xsock);
         } else {
             corout_clear(x->xsock); /* no-op on Windows */
@@ -551,10 +561,7 @@ x11_runner(struct corout_item *state, void *user_data, const struct sockevent *e
         if (x->chan_done || !x->xsock->s)
             break;
 
-        int work_done =
-            (x->rd_space != x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail) ||
-            (x->wr_data != x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written);
-        if (work_done)
+        if (x->xsock->s->bufrd->io_ops || x->xsock->s->bufwr->io_ops)
             corout_signal(state->o, ctx, X11_SIG);
     }
 
@@ -642,18 +649,31 @@ audio_runner(struct corout_item *state, void *user_data, const struct sockevent 
         if (x->chan_done || !x->xsock->s)
             break;
 
-        x->wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
-        assert(x->wr_data >= 0);
-        x->rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
-        assert(x->rd_space >= 0);
+        x->xsock->s->bufrd->io_ops = 0;
+        x->xsock->s->bufwr->io_ops = 0;
 
-        int can_read = x->rd_space || x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail;
+        int rd_space, wr_data;
+        wr_data = x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written;
+        assert(wr_data >= 0);
+        rd_space = 0;
 
-        if (can_read && x->wr_data) {
+        if (!x->xsock->s->bufrd->reading) {
+            if (x->xsock->s->bufrd->written == x->xsock->s->bufrd->avail)
+                x->xsock->s->bufrd->written = x->xsock->s->bufrd->avail = 0;
+            if (x->xsock->s->bufrd->alloced + SSH_WINDOW_SIZE_INCR < COROUT_BUFFER_ALLOCED)
+                x->xsock->s->bufrd->alloced += SSH_WINDOW_SIZE_INCR;
+            if (x->xsock->s->bufrd->alloced > x->xsock->s->bufrd->avail + x->channel->local.window_size)
+                x->xsock->s->bufrd->alloced = x->xsock->s->bufrd->avail + x->channel->local.window_size;
+            rd_space = x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail;
+        }
+
+        assert(rd_space >= 0);
+
+        if (rd_space && wr_data) {
             corout_readwrite(x->xsock);
-        } else if (x->wr_data) {
+        } else if (wr_data) {
             corout_write(x->xsock);
-        } else if (can_read) {
+        } else if (rd_space) {
             corout_read(x->xsock);
         } else {
             corout_clear(x->xsock); /* no-op on Windows */
@@ -665,10 +685,7 @@ audio_runner(struct corout_item *state, void *user_data, const struct sockevent 
         if (x->chan_done || !x->xsock->s)
             break;
 
-        int work_done =
-            (x->rd_space != x->xsock->s->bufrd->alloced - x->xsock->s->bufrd->avail) ||
-            (x->wr_data != x->xsock->s->bufwr->avail - x->xsock->s->bufwr->written);
-        if (work_done)
+        if (x->xsock->s->bufrd->io_ops || x->xsock->s->bufwr->io_ops)
             corout_signal(state->o, ctx, X11_SIG);
     }
 
