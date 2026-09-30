@@ -12,6 +12,7 @@
 
 #include "terminal.h"
 #include "ssh.h"
+#include <ws2tcpip.h>
 
 #include <math.h>
 
@@ -214,6 +215,12 @@ static int g_confirm_exit = 0;      /* Exit-with-live-connections dialog is open
 static char g_notice[512];          /* cross-tab conflict explanation (modal) */
 static char g_acl_error[512];       /* ACL validation error (modal) */
 
+static const void *g_field_menu_owner; /* unique key of the field whose context menu is open */
+static int g_field_menu_copy;       /* menu shows Copy (frozen for the menu lifetime) */
+static int g_field_menu_editable;   /* menu shows Paste (field is editable) */
+static int g_field_menu_size;       /* size of the owned field buffer */
+static int g_field_menu_seen;       /* owner field was rendered this frame */
+
 /* PuTTY's Ctrl-key method: translate the keydown ourselves with the Ctrl
    state intact so Ctrl-C/D/etc. become the raw control byte (0x03, 0x04, ...)
    instead of being stolen as clipboard shortcuts or dropped (< 0x20). */
@@ -384,6 +391,222 @@ checkbox_option(struct nk_context *ctx, const char *label, int *value, const cha
     option_tooltip(ctx, b, tooltip);
 }
 
+static char *
+clipboard_get_utf8(void)
+{
+    HGLOBAL mem;
+    LPCWSTR wstr;
+    char *utf8 = NULL;
+
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(NULL))
+        return NULL;
+    mem = GetClipboardData(CF_UNICODETEXT);
+    if (mem) {
+        wstr = (LPCWSTR)GlobalLock(mem);
+        if (wstr) {
+            int n = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+            if (n > 1) {
+                utf8 = (char*)malloc((size_t)n);
+                if (utf8)
+                    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, utf8, n, NULL, NULL);
+            }
+            GlobalUnlock(mem);
+        }
+    }
+    CloseClipboard();
+    return utf8;
+}
+
+static void
+clipboard_set_utf8(const char *utf8, int byte_len)
+{
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, byte_len, NULL, 0);
+    HGLOBAL h;
+    wchar_t *wstr;
+
+    if (wlen <= 0 || !OpenClipboard(NULL))
+        return;
+    EmptyClipboard();
+    h = GlobalAlloc(GMEM_MOVEABLE, (size_t)(wlen + 1) * sizeof(wchar_t));
+    if (h) {
+        wstr = (wchar_t*)GlobalLock(h);
+        if (wstr) {
+            MultiByteToWideChar(CP_UTF8, 0, utf8, byte_len, wstr, wlen);
+            wstr[wlen] = L'\0';
+            GlobalUnlock(h);
+            SetClipboardData(CF_UNICODETEXT, h);
+            h = NULL;
+        } else {
+            GlobalFree(h);
+        }
+    }
+    CloseClipboard();
+}
+
+/* Map a mouse position to a character index within the just-rendered edit
+   field, without disturbing its cursor/selection.  Every configuration field
+   here is single-line, so a single-row glyph walk is sufficient; this mirrors
+   nuklear's internal locate logic, which is static and not exported. */
+static int
+edit_char_at(struct nk_context *ctx, struct nk_rect bounds, struct nk_vec2 mouse)
+{
+    const struct nk_text_edit *edit = &ctx->text_edit;
+    const struct nk_style_edit *se = &ctx->style.edit;
+    const struct nk_user_font *font = ctx->style.font;
+    struct nk_rect area;
+    float x;
+    float prev_x;
+    int n, i;
+
+    area.x = bounds.x + se->padding.x + se->border;
+    area.w = bounds.w - (2.0f * se->padding.x + 2 * se->border);
+
+    x = (mouse.x - area.x) + edit->scrollbar.x;
+    if (x <= 0.0f)
+        return 0;
+
+    n = nk_str_len_char(&edit->string);
+    prev_x = 0.0f;
+    for (i = 0; i < n; ++i) {
+        nk_rune unicode = 0;
+        int len = 0;
+        const char *str = nk_str_at_const(&edit->string, i, &unicode, &len);
+        float w = font->width(font->userdata, font->height, str, len);
+        if (x < prev_x + w) {
+            if (x < prev_x + w / 2.0f)
+                return i;
+            return i + 1;
+        }
+        prev_x += w;
+    }
+    return n;
+}
+
+/* Copy the field's selected text (editable fields) or its whole value
+   (read-only display) to the Windows clipboard. */
+static void
+field_copy(const struct nk_context *ctx, char *buffer, int editable)
+{
+    int len = (int)strlen(buffer);
+    int lo, hi;
+
+    if (!editable) {
+        if (len > 0)
+            clipboard_set_utf8(buffer, len);
+        return;
+    }
+
+    lo = ctx->text_edit.select_start;
+    hi = ctx->text_edit.select_end;
+    if (lo > hi) { int t = lo; lo = hi; hi = t; }
+    if (lo < 0) lo = 0;
+    if (hi > len) hi = len;
+    if (hi > lo)
+        clipboard_set_utf8(buffer + lo, hi - lo);
+}
+
+/* Insert the Windows clipboard into the field buffer at the cursor, replacing
+   the current selection. Newlines are flattened for the single-line field. */
+static void
+field_paste(struct nk_context *ctx, char *buffer, int buffer_size)
+{
+    char *clip = clipboard_get_utf8();
+    int len, clen, i, lo, hi, a, b, space;
+
+    if (!clip)
+        return;
+
+    clen = (int)strlen(clip);
+    for (i = 0; i < clen; ++i)
+        if (clip[i] == '\r' || clip[i] == '\n')
+            clip[i] = ' ';
+
+    len = (int)strlen(buffer);
+    a = ctx->text_edit.select_start;
+    b = ctx->text_edit.select_end;
+    lo = a < b ? a : b;
+    hi = a < b ? b : a;
+    if (lo < 0) lo = 0;
+    if (hi > len) hi = len;
+
+    space = buffer_size - 1 - (len - (hi - lo));
+    if (space < 0) space = 0;
+    if (clen > space) clen = space;
+
+    memmove(buffer + lo + clen, buffer + hi, (size_t)(len - hi) + 1);
+    memcpy(buffer + lo, clip, (size_t)clen);
+
+    free(clip);
+}
+
+/* Right-click context menu for a text field, mirroring the terminal's
+   Copy/Paste menu. copy_ok/paste_ok select which items may appear. */
+static void
+field_context_menu(struct nk_context *ctx, struct nk_rect bounds,
+    char *buffer, int buffer_size, int copy_ok, int paste_ok,
+    const void *owner)
+{
+    struct nk_rect item;
+    int nitems;
+
+    if (g_field_menu_owner == NULL) {
+        if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_RIGHT, bounds) ||
+            (nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_RIGHT) &&
+             nk_input_is_mouse_hovering_rect(&ctx->input, bounds))) {
+            if (copy_ok && paste_ok) {
+                int idx = edit_char_at(ctx, bounds, ctx->input.mouse.pos);
+                int a = ctx->text_edit.select_start;
+                int b = ctx->text_edit.select_end;
+                int lo = a < b ? a : b;
+                int hi = a < b ? b : a;
+                g_field_menu_copy = (a != b && idx >= lo && idx < hi);
+            } else {
+                g_field_menu_copy = copy_ok;
+            }
+            g_field_menu_editable = paste_ok;
+            g_field_menu_owner = owner;
+            g_field_menu_size = buffer_size;
+        }
+    }
+
+    if (g_field_menu_owner != owner)
+        return;
+
+    g_field_menu_seen = 1;
+
+    nitems = (g_field_menu_copy ? 1 : 0) + (g_field_menu_editable ? 1 : 0);
+    if (nk_contextual_begin(ctx, 0, nk_vec2(120, 24.0f * nitems + 14.0f), bounds)) {
+        if (g_field_menu_copy) {
+            nk_layout_row_dynamic(ctx, 24, 1);
+            item = nk_widget_bounds(ctx);
+            nk_button_label_styled(ctx, &ctx->style.contextual_button, "Copy");
+            if ((nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT) ||
+                 nk_input_is_mouse_released(&ctx->input, NK_BUTTON_RIGHT)) &&
+                nk_input_is_mouse_hovering_rect(&ctx->input, item)) {
+                field_copy(ctx, buffer, g_field_menu_editable);
+                nk_contextual_close(ctx);
+            }
+        }
+        if (g_field_menu_editable) {
+            nk_layout_row_dynamic(ctx, 24, 1);
+            item = nk_widget_bounds(ctx);
+            nk_button_label_styled(ctx, &ctx->style.contextual_button, "Paste");
+            if ((nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT) ||
+                 nk_input_is_mouse_released(&ctx->input, NK_BUTTON_RIGHT)) &&
+                nk_input_is_mouse_hovering_rect(&ctx->input, item)) {
+                field_paste(ctx, buffer, g_field_menu_size);
+                nk_contextual_close(ctx);
+            }
+        }
+        nk_contextual_end(ctx);
+    } else {
+        g_field_menu_owner = NULL;
+        g_field_menu_copy = 0;
+        g_field_menu_editable = 0;
+        g_field_menu_size = 0;
+    }
+}
+
 static void
 text_option(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip)
 {
@@ -403,23 +626,35 @@ text_option(struct nk_context *ctx, const char *label, char *buffer, const int b
     if (focused)
         focus_ring(ctx, b);
     option_tooltip(ctx, b, tooltip);
+    field_context_menu(ctx, b, buffer, buffer_size, 1, 1, buffer);
+}
+
+static nk_bool
+readonly_filter(const struct nk_text_edit *box, nk_rune unicode)
+{
+    (void)box;
+    (void)unicode;
+    return 0;
 }
 
 static void
 readonly_option(struct nk_context *ctx, const char *label, const char *value, const char *tooltip)
 {
     struct nk_rect b;
-    char buf[256];
+    struct nk_rect eb;
+    static char buf[256];
 
     nk_layout_row_dynamic(ctx, 30, 2);
     b = nk_widget_bounds(ctx);
     nk_label(ctx, label, NK_TEXT_LEFT);
     option_tooltip(ctx, b, tooltip);
     snprintf(buf, sizeof(buf), "%s", value);
+    eb = nk_widget_bounds(ctx);
     nk_edit_string_zero_terminated(ctx,
-        NK_EDIT_READ_ONLY | NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD,
-        buf, (int)sizeof(buf), nk_filter_default);
-    option_tooltip(ctx, b, tooltip);
+        NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD | NK_EDIT_AUTO_SELECT,
+        buf, (int)sizeof(buf), readonly_filter);
+    option_tooltip(ctx, eb, tooltip);
+    field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, label);
 }
 
 static void
@@ -446,6 +681,7 @@ password_option(struct nk_context *ctx, const char *label, char *password,
     if (focused)
         focus_ring(ctx, b);
     option_tooltip(ctx, b, tooltip);
+    field_context_menu(ctx, b, mask, size, 0, 1, mask);
 
     new_len = (int)strlen(mask);
     if (new_len == old_len)
@@ -577,6 +813,7 @@ struct options_audio {
 
 static void ensure_pulse_cookie(void);
 static int read_pulse_cookie(unsigned char out[256]);
+static int config_dir(char *out, const size_t outsz);
 
 struct options_ssh_login {
     char host[128];
@@ -629,8 +866,6 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
         unsigned char cookie[256];
         int have_cookie;
 
-        if (audio->audio_enabled)
-            ensure_pulse_cookie();
         have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
 
         ssh_session_start(ssh, opt->host, opt->username, opt->password,
@@ -1287,10 +1522,85 @@ device_option(struct nk_context *ctx, const char *label, char *device,
         strncpy(device, items[sel], 127), device[127] = '\0';
 }
 
+/* Resolve the host's primary IPv4 address for the client env-var hint shown
+   when listening on all interfaces. Cached: the dialog re-renders at 60 Hz. */
+static int
+local_ipv4(char *out, size_t outsize)
+{
+    static char cached[64];
+    static int resolved;            /* 0 = not tried, 1 = ok, -1 = failed */
+    char host[256];
+    struct addrinfo hints, *res = NULL, *p;
+    int found = 0;
+    WSADATA wsa;
+
+    if (resolved) {
+        if (resolved < 0)
+            return -1;
+        snprintf(out, outsize, "%s", cached);
+        return 0;
+    }
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        resolved = -1;
+        return -1;
+    }
+
+    if (gethostname(host, sizeof(host)) == 0) {
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        if (getaddrinfo(host, NULL, &hints, &res) == 0) {
+            for (p = res; p != NULL; p = p->ai_next) {
+                struct sockaddr_in *sa = (struct sockaddr_in *)p->ai_addr;
+                unsigned long a = ntohl(sa->sin_addr.s_addr);
+                if ((a >> 24) == 127)                   /* loopback */
+                    continue;
+                if ((a & 0xffff0000UL) == 0xa9fe0000UL) /* link-local 169.254 */
+                    continue;
+                if (inet_ntop(AF_INET, &sa->sin_addr, cached, sizeof(cached))) {
+                    found = 1;
+                    break;
+                }
+            }
+            freeaddrinfo(res);
+        }
+    }
+
+    if (found) {
+        resolved = 1;
+        snprintf(out, outsize, "%s", cached);
+        return 0;
+    }
+    resolved = -1;
+    return -1;
+}
+
 static void
 tab_audio(struct nk_context *ctx, struct options_audio *opt)
 {
     heading(ctx, "Audio");
+
+    {
+        char env[128];
+        char listen[64] = "127.0.0.1";
+        if (opt->listen_sel == 1)
+            local_ipv4(listen, sizeof(listen));
+        snprintf(env, sizeof(env), "export PULSE_SERVER=tcp:%s:%s",
+            listen, opt->pulseport[0] ? opt->pulseport : "4713");
+        readonly_option(ctx, "Client environment variable", env,
+            "On Linux, run this command to set the Ming64x as your audio device.");
+    }
+
+    {
+        char dir[512], path[512] = "";
+        if (!config_dir(dir, sizeof dir))
+            snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
+        readonly_option(ctx, "Data for PULSE_COOKIE file", path,
+            "On Linux, run:  export PULSE_COOKIE=~/.ming64x-pulse-cookie\n"
+            "Then copy the contents of this file to ~/.ming64x-pulse-cookie\n"
+            "This sets up authentication, or set authentication to Anonymous");
+    }
 
     checkbox_option(ctx, "Enable PulseAudio server", &opt->audio_enabled,
         "Start the embedded PulseAudio sound server when the X server launches.\nDisable with -noaudio.");
@@ -1302,14 +1612,6 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
     combobox_option(ctx, "Listen address", audio_listen_items, AUDIO_LISTEN_COUNT,
         &opt->listen_sel,
         "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest)\nor 0.0.0.0 (all interfaces). Loopback is sufficient when audio is\nforwarded over an SSH tunnel; choose All interfaces only for LAN clients.");
-    {
-        char env[128];
-        const char *listen = opt->listen_sel == 1 ? "0.0.0.0" : "127.0.0.1";
-        snprintf(env, sizeof(env), "export PULSE_SERVER=tcp:%s:%s",
-            listen, opt->pulseport[0] ? opt->pulseport : "4713");
-        readonly_option(ctx, "Client environment variable", env,
-            "Set this on each PulseAudio client so it connects to the embedded\nserver. Reflects the listen address and port above.");
-    }
     combobox_option(ctx, "Authentication", audio_auth_items, AUDIO_AUTH_COUNT,
         &opt->auth_sel,
         "How remote clients authenticate. Cookie requires the shared pulse-cookie\n(default); Anonymous accepts any client; IP allow-list accepts only the\naddresses listed below.");
@@ -1506,7 +1808,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .pulseport = "4713",
         .mic_enabled = 1,
         .speaker_enabled = 1,
-        .listen_sel = 0,
+        .listen_sel = 1,
         .auth_sel = 0,
         .auth_acl = {0},
         .output_device = {0},
@@ -2524,6 +2826,7 @@ int main(void)
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
         &audio_opt);
     enumerate_audio_devices();
+    ensure_pulse_cookie();   /* create at startup (no-op if it already exists) */
     if (sanitize_options(&xdmcp_opt, &screen_opt)) {
         strcpy(g_notice,
             "Your saved launchx.cnf contained conflicting options.\n"
@@ -2704,6 +3007,8 @@ int main(void)
             prev_multiwindow = screen_opt.multiwindow_enabled;
             prev_xdmcp = xdmcp_opt.xdmcp_enabled;
 
+            g_field_menu_seen = 0;
+
             GetClientRect(wnd, &client);
             if (nk_begin(ctx, "LaunchX",
                 nk_rect(0, 0, (float)client.right, (float)client.bottom),
@@ -2834,7 +3139,6 @@ int main(void)
                                     &logging_opt, &audio_opt);
                                 write_commandline_file(c.buf);
                                 if (audio_opt.audio_enabled) {
-                                    ensure_pulse_cookie();
                                     write_default_pa(&audio_opt);
                                 }
                                 launch_ming64x(c.buf);
@@ -3003,6 +3307,9 @@ int main(void)
             }
             nk_end(ctx);
         }
+
+        if (g_field_menu_owner != NULL && !g_field_menu_seen)
+            g_field_menu_owner = NULL;
 
         nk_gdi_render(nk_rgb(30, 30, 30));
     }

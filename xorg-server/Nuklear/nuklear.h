@@ -28649,12 +28649,9 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
             nk_input_is_mouse_moved(in)) {
             nk_textedit_drag(edit, mouse_x, mouse_y, font, row_height);
             cursor_follow = nk_true;
-        } else if (is_hovered && in->mouse.buttons[NK_BUTTON_RIGHT].clicked &&
-            in->mouse.buttons[NK_BUTTON_RIGHT].down) {
-            nk_textedit_key(edit, NK_KEY_TEXT_WORD_LEFT, nk_false, font, row_height);
-            nk_textedit_key(edit, NK_KEY_TEXT_WORD_RIGHT, nk_true, font, row_height);
-            cursor_follow = nk_true;
         }
+        /* right-click intentionally left untouched here: the application
+           shows a Copy/Paste context menu instead of word-navigation */
 
         {int i; /* keyboard input */
         int old_mode = edit->mode;
