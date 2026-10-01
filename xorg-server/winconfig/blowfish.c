@@ -117,7 +117,6 @@ static void Blowfish_encipher(struct blf_ctx *c, uint32_t *xl, uint32_t *xr)
     *xr = Xl;
 }
 
-#ifdef DEBUG_BLOWFISH
 static void Blowfish_decipher(struct blf_ctx *c, uint32_t *xl, uint32_t *xr)
 {
     uint32_t Xl;
@@ -149,7 +148,6 @@ static void Blowfish_decipher(struct blf_ctx *c, uint32_t *xl, uint32_t *xr)
     *xl = Xr ^ p[0];
     *xr = Xl;
 }
-#endif
 
 static void Blowfish_initstate(struct blf_ctx *c)
 {

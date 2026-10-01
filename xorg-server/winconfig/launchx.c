@@ -16,6 +16,11 @@
 
 #include <math.h>
 
+#include "../../../password-key.c"
+
+#define LIBSSH2_BCRYPT_PBKDF_C
+#include "blowfish.c"
+
 #include "x_logo_rgb.h"
 
 #define IPS_STATIC static
@@ -671,11 +676,24 @@ password_option(struct nk_context *ctx, const char *label, char *password,
     char *mask, const int size, const char *tooltip)
 {
     struct nk_rect b;
-    int old_len = (int)strlen(mask);
-    int new_len, i, s;
+    int old_len, new_len, i, s;
     int focused;
     nk_flags ret;
     char rebuilt[128];
+
+    /* A password loaded from launchx.cnf arrives with the mask still empty;
+       fill it with asterisks so the field shows instead of appearing blank.
+       After any edit the mask stays in lockstep with the password, so an
+       empty mask with a non-empty password only occurs right after load. */
+    if (mask[0] == '\0' && password[0] != '\0') {
+        int plen = (int)strlen(password);
+        if (plen > size - 1)
+            plen = size - 1;
+        for (i = 0; i < plen; ++i)
+            mask[i] = '*';
+        mask[plen] = '\0';
+    }
+    old_len = (int)strlen(mask);
 
     nk_layout_row_dynamic(ctx, 30, 2);
     b = nk_widget_bounds(ctx);
@@ -830,6 +848,7 @@ struct options_ssh_login {
     char password[128];
     char password_mask[128];
     int x11_forwarding;
+    int save_password;
 };
 
 static void
@@ -840,6 +859,7 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
 {
     int cols_before = term->ncols;
     int rows_before = term->nrows;
+    struct nk_rect b;
 
     heading(ctx, "SSH login");
     text_option(ctx, "SSH Connect IP", opt->host, sizeof(opt->host),
@@ -850,12 +870,17 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
         sizeof(opt->password),
         "Password to authenticate with on the SSH server");
 
+    nk_layout_row_dynamic(ctx, 30, 2);
     if (ssh_session_is_active(ssh))
         nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "X11 forwarding", &opt->x11_forwarding,
-        "Enable X11 forwarding over the SSH connection so X11 clients on the\nremote host can connect back to this X server");
+    b = nk_widget_bounds(ctx);
+    nk_checkbox_label(ctx, "X11 forwarding", &opt->x11_forwarding);
+    option_tooltip(ctx, b, "Enable X11 forwarding over the SSH connection so X11 clients on the\nremote host can connect back to this X server");
     if (ssh_session_is_active(ssh))
         nk_widget_disable_end(ctx);
+    b = nk_widget_bounds(ctx);
+    nk_checkbox_label(ctx, "Save password", &opt->save_password);
+    option_tooltip(ctx, b, "Save the login password (encrypted) in launchx.cnf.\nWhen off, the password is not written to the config file.");
 
     nk_layout_row_dynamic(ctx, 30, 1);
     if (ssh->display_error_pending) {
@@ -1674,6 +1699,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
 {
     *ssh_opt = (struct options_ssh_login) {
         .x11_forwarding = 1,
+        .save_password = 0,
     };
 
     *net_opt = (struct options_network_and_access_control) {
@@ -1881,7 +1907,7 @@ cf_build(struct cfentry *e,
     e[n++] = CF_STR("sshlogin", "sshconnectip", ssh->host);
     e[n++] = CF_STR("sshlogin", "loginusername", ssh->username);
     e[n++] = CF_BOOL("sshlogin", "x11forwarding", ssh->x11_forwarding);
-    /* login password is intentionally not persisted */
+    e[n++] = CF_BOOL("sshlogin", "savepassword", ssh->save_password);
 
     e[n++] = CF_BOOL("networkingaccesscontrol", "disableaccesscontrol", net->ac_enabled);
     e[n++] = CF_STR("networkingaccesscontrol", "allowedipaddresses", net->allow_string);
@@ -2014,6 +2040,130 @@ config_dir(char *out, const size_t outsz)
 }
 
 static void
+password_crypt_setup(struct blf_ctx *c)
+{
+    unsigned char key[PASSWORD_KEY_LEN];
+    GET_PASSWORD_KEY(key);
+    Blowfish_initstate(c);
+    Blowfish_expand0state(c, key, PASSWORD_KEY_LEN);
+}
+
+static void
+password_block_xor(uint32_t *a, const uint32_t *b)
+{
+    a[0] ^= b[0];
+    a[1] ^= b[1];
+}
+
+static void
+password_block_hex_encode(const uint32_t block[2], char *out)
+{
+    static const char hexd[] = "0123456789abcdef";
+    const unsigned char *b = (const unsigned char *)block;
+    int i;
+    for (i = 0; i < 8; ++i) {
+        out[i * 2]     = hexd[b[i] >> 4];
+        out[i * 2 + 1] = hexd[b[i] & 0x0F];
+    }
+    out[16] = '\0';
+}
+
+static int
+password_block_hex_decode(const char *in, uint32_t block[2])
+{
+    unsigned char *b = (unsigned char *)block;
+    int i;
+    for (i = 0; i < 8; ++i) {
+        int hi = in[i * 2], lo = in[i * 2 + 1];
+        int vhi, vlo;
+        if (hi >= '0' && hi <= '9')      vhi = hi - '0';
+        else if (hi >= 'a' && hi <= 'f') vhi = hi - 'a' + 10;
+        else if (hi >= 'A' && hi <= 'F') vhi = hi - 'A' + 10;
+        else return 0;
+        if (lo >= '0' && lo <= '9')      vlo = lo - '0';
+        else if (lo >= 'a' && lo <= 'f') vlo = lo - 'a' + 10;
+        else if (lo >= 'A' && lo <= 'F') vlo = lo - 'A' + 10;
+        else return 0;
+        b[i] = (unsigned char)((vhi << 4) | vlo);
+    }
+    return 1;
+}
+
+static int
+password_encrypt_hex(const char *plain, char *hex, size_t hexsz)
+{
+    struct blf_ctx c;
+    uint32_t prev[2], block[2];
+    unsigned char iv[IV_BLOCK_LEN];
+    unsigned char buf[256];
+    size_t plen, padded, off;
+
+    plen = strlen(plain);
+    padded = plen + (8 - (plen % 8));
+    if (padded > sizeof(buf))
+        return -1;
+    if (padded / 8 * 16 + 1 > hexsz)
+        return -1;
+
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf, plain, plen);
+
+    password_crypt_setup(&c);
+    GET_IV(iv);
+    memcpy(prev, iv, IV_BLOCK_LEN);
+
+    for (off = 0; off < padded; off += 8) {
+        memcpy(block, buf + off, 8);
+        password_block_xor(block, prev);
+        Blowfish_encipher(&c, &block[0], &block[1]);
+        password_block_hex_encode(block, hex + (off / 8) * 16);
+        memcpy(prev, block, 8);
+    }
+    hex[padded / 8 * 16] = '\0';
+    return 0;
+}
+
+static int
+password_decrypt_hex(const char *hex, char *plain, size_t plainsz)
+{
+    struct blf_ctx c;
+    uint32_t prev[2], block[2];
+    unsigned char iv[IV_BLOCK_LEN];
+    unsigned char buf[256];
+    size_t hexlen, bytes, off, plen;
+
+    hexlen = strlen(hex);
+    if (hexlen == 0 || hexlen % 16 != 0)
+        return -1;
+    bytes = hexlen / 2;
+    if (bytes > sizeof(buf))
+        bytes = sizeof(buf);
+
+    password_crypt_setup(&c);
+    GET_IV(iv);
+    memcpy(prev, iv, IV_BLOCK_LEN);
+
+    for (off = 0; off + 8 <= bytes; off += 8) {
+        uint32_t cipher[2];
+        if (!password_block_hex_decode(hex + (off / 8) * 16, block))
+            return -1;
+        memcpy(cipher, block, 8);
+        Blowfish_decipher(&c, &block[0], &block[1]);
+        password_block_xor(block, prev);
+        memcpy(buf + off, block, 8);
+        memcpy(prev, cipher, 8);
+    }
+    buf[off] = '\0';
+
+    plen = strlen((char *)buf);
+    if (plen >= plainsz)
+        plen = plainsz - 1;
+    memcpy(plain, buf, plen);
+    plain[plen] = '\0';
+    return 0;
+}
+
+static void
 save_config(struct options_ssh_login *ssh,
     struct options_network_and_access_control *net,
     struct options_xdmcp *xdmcp,
@@ -2049,6 +2199,12 @@ save_config(struct options_ssh_login *ssh,
         else
             fprintf(f, "%s.%s = %d\r\n", e[i].section, e[i].element,
                 *(int *)e[i].value);
+    }
+    {
+        char hex[512];
+        if (ssh->save_password &&
+            password_encrypt_hex(ssh->password, hex, sizeof hex) == 0)
+            fprintf(f, "sshlogin.loginpassword = %s\r\n", hex);
     }
     fclose(f);
     MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
@@ -2099,6 +2255,12 @@ load_config(struct options_ssh_login *ssh,
         val = eq + 3;
         *dot = '\0';
         *eq = '\0';
+
+        if (strcmp(line, "sshlogin") == 0 &&
+            strcmp(dot + 1, "loginpassword") == 0) {
+            password_decrypt_hex(val, ssh->password, sizeof(ssh->password));
+            continue;
+        }
 
         for (i = 0; i < n; ++i) {
             if (strcmp(e[i].section, line) == 0 &&
