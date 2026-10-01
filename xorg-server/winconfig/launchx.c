@@ -286,6 +286,15 @@ WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
         PostQuitMessage(0);
         return 0;
     }
+    if (msg == WM_CLOSE) {
+        /* Route the title-bar [X] close through the same live-connection
+           confirmation as the Exit button. */
+        if (g_ssh && ssh_x11_open_count(g_ssh) > 0)
+            g_confirm_exit = 1;
+        else
+            return DefWindowProcW(wnd, msg, wparam, lparam);
+        return 0;
+    }
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
         if (g_ssh && g_current_tab &&
             ssh_session_is_active(g_ssh) && *g_current_tab == 0 &&
@@ -3244,7 +3253,7 @@ int main(void)
             pr = nk_rect((rc.right - 640.0f) / 2.0f,
                          (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
 
-            snprintf(msg, sizeof msg, "Exit and kill %d connections?",
+            snprintf(msg, sizeof msg, "Exit and kill %d forwarded connections?",
                 ssh_x11_open_count(&ssh));
 
             if (nk_begin(ctx, "Confirm exit", pr,
