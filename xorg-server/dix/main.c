@@ -145,6 +145,8 @@ void stop_pulseaudio_thread(void);
 
 void pa_set_external_logging(void (*callback)(const char *text));
 
+void pa_set_home_dir(const char *dir);
+
 extern Bool g_fAudioEnabled;
 
 static void
@@ -219,6 +221,17 @@ dix_main(int argc, char *argv[], char *envp[])
          * fails on unknown options such as ":0"; daemon.conf supplies defaults. */
         char *pulse_argv[] = { "pulseaudio", NULL };
         char pulse_error[256] = "";
+
+        /* Snapshot the home directory before the X server (via winFixupPaths)
+         * can mutate HOME, so PulseAudio resolves a stable runtime dir. */
+        {
+            const char *h = getenv("USERPROFILE");
+            if (!h || !*h)
+                h = getenv("HOME");
+            if (h && *h)
+                pa_set_home_dir(h);
+        }
+
         pa_set_external_logging(pulseaudio_external_log);
         if (start_pulseaudio_thread(1, pulse_argv, pulse_error, sizeof(pulse_error)) < 0) {
             ErrorF("Failed to start PulseAudio: %s\n", pulse_error);
