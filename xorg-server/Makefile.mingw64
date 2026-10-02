@@ -192,6 +192,10 @@ OPT_FLAG := -O2 -ggdb -Wall
 ifdef NOOPT
 OPT_FLAG := -O0 -ggdb -Wall
 endif
+ifdef RELEASE
+OPT_FLAG := -O3 -Wall -flto -fomit-frame-pointer
+LDFLAGS += -flto -s -Wl,-s
+endif
 
 CFLAGS  += $(OPT_FLAG) -std=gnu99 -ffunction-sections
 CFLAGS  += -D_WIN32_WINNT=0x0601   # Win7 minimum (avoids NTDDI issues)

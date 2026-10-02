@@ -1648,7 +1648,7 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
         "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest)\nor 0.0.0.0 (all interfaces). Loopback is sufficient when audio is\nforwarded over an SSH tunnel; choose All interfaces only for LAN clients.");
     combobox_option(ctx, "Authentication", audio_auth_items, AUDIO_AUTH_COUNT,
         &opt->auth_sel,
-        "How remote clients authenticate. Cookie requires the shared pulse-cookie\n(default); Anonymous accepts any client; IP allow-list accepts only the\naddresses listed below.");
+        "How remote clients authenticate. Cookie requires the shared\npulse-cookie (default); Anonymous accepts any client; IP allow-list\naccepts only the addresses listed below. Note that some client\napplications like FireFox do not support cookies.");
     if (opt->auth_sel == 2) {
         text_option(ctx, "Allowed clients", opt->auth_acl, sizeof(opt->auth_acl),
             "Semicolon-separated IP addresses or CIDR blocks allowed to connect when\nauthentication is set to IP allow-list (e.g. 192.168.1.0/24;10.0.0.5).");
