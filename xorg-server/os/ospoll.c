@@ -1066,8 +1066,6 @@ ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
                s->s, (int) u->u.ua.accept_sock, (long) err);
         return;
     }
-    ErrorF("IOCP: AcceptEx posted listen=%d accept=%d\n",
-           s->s, (int) u->u.ua.accept_sock);
     s->accepting = 1;
 }
 
@@ -1083,7 +1081,7 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
     }
     s = u->s;
     if (ospoll_overlapped_deref(u, 0)) {
-        fprintf(stderr, "dangling overlap u=%p\n", (void *) u);
+        ErrorF("dangling overlap u=%p\n", (void *) u);
         return;
     }
     assert(s);
@@ -1096,8 +1094,6 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
         if (u->u.ua.accept_sock == INVALID_SOCKET)
             return;
         new_sb = ospoll_sockbuf_alloc(u->u.ua.accept_sock);
-        ErrorF("IOCP: AcceptEx completed listen=%d accept=%d new_sb=%p\n",
-               s->s, (int) u->u.ua.accept_sock, (void *) new_sb);
         if (!new_sb) {
             closesocket(u->u.ua.accept_sock);
             u->u.ua.accept_sock = INVALID_SOCKET;
@@ -1112,8 +1108,6 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
             SOCKET listen_sock = (SOCKET) s->s;
             int sr = setsockopt(new_sb->s, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                                 (char *) &listen_sock, sizeof(listen_sock));
-            ErrorF("IOCP: SO_UPDATE_ACCEPT_CONTEXT on %d (listen %d) -> %d WSA %d\n",
-                   new_sb->s, s->s, sr, WSAGetLastError());
         }
         s->accepting = 0;
         new_sb->accept_next = NULL;
@@ -1150,8 +1144,6 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
         s->bufrd->avail += l;
         s->bufrd->io_ops++;
         s->bufrd->reading = 0;
-        ErrorF("IOCP: recv %d bytes on fd %d (avail=%d)\n",
-               l, s->s, s->bufrd->avail);
     } else if (s->overlapped_send == u) {
         if (u->refbuf) {
             ospoll_buffer_free(u->refbuf);
@@ -1173,8 +1165,6 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
             if (s->bufwr->written == s->bufwr->avail)
                 s->bufwr->written = s->bufwr->avail = 0;
         s->bufwr->writing = 0;
-        ErrorF("IOCP: sent %d bytes on fd %d (written=%d avail=%d)\n",
-               l, s->s, s->bufwr->written, s->bufwr->avail);
     } else if (s->overlapped_disconnect == u) {
         /* socket teardown handled by ospoll_sockbuf_free */
     } else {
@@ -1204,7 +1194,7 @@ ospoll_drain(struct ospoll *ospoll, DWORD ms_timeout)
     ok = GetQueuedCompletionStatusEx(ospoll->iocp_handle, entries, 256, &n,
                                      ms_timeout, FALSE);
     if (!ok && GetLastError() != WAIT_TIMEOUT)
-        fprintf(stderr, "GetQueuedCompletionStatusEx failed: %ld\n",
+        ErrorF("GetQueuedCompletionStatusEx failed: %ld\n",
                 (long) GetLastError());
 
     for (j = 0; j < n; j++) {

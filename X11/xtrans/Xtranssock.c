@@ -841,8 +841,6 @@ TRANS(SocketOpen) (int i, int type)
                                     Sockettrans2devtab[i].protocol, NULL, 0,
                                     flags);
     }
-    prmsg (1, "SocketOpen: WSASocket() -> fd %d (family %d type %d WSA %d)\n",
-           ciptr->fd, Sockettrans2devtab[i].family, type, WSAGetLastError());
 #else
     ciptr->fd = socket(Sockettrans2devtab[i].family, type,
                        Sockettrans2devtab[i].protocol);
@@ -1306,9 +1304,7 @@ TRANS(SocketCreateListener) (XtransConnInfo ciptr,
 #endif
 }
 
-    prmsg (1, "SocketCreateListener: bind() ok fd %d, calling listen()\n", fd);
-
-	int err;
+    int err;
     if ((err = listen (fd, BACKLOG)) < 0)
     {
 #ifdef WIN32
@@ -1318,8 +1314,6 @@ TRANS(SocketCreateListener) (XtransConnInfo ciptr,
 		close (fd);
 		return TRANS_CREATE_LISTENER_FAILED;
     }
-
-    prmsg (1, "SocketCreateListener: listen() ok fd %d\n", fd);
 
     /* Set a flag to indicate that this connection is a listener */
 
@@ -1683,8 +1677,6 @@ TRANS(SocketINETAccept) (XtransConnInfo ciptr, int *status)
     ciptr->sockbuf->accept_head = newciptr->sockbuf->accept_next;
     newciptr->sockbuf->accept_next = NULL;
     newciptr->fd = newciptr->sockbuf->s;
-    prmsg (1, "SocketINETAccept: accepted fd %d (sockbuf %p)\n",
-           newciptr->fd, (void *) newciptr->sockbuf);
 #else
     if ((newciptr->fd = accept (ciptr->fd,
 	(struct sockaddr *) &sockname, (void *)&namelen)) < 0)

@@ -623,7 +623,7 @@ winFixupPaths(void)
 
         if (size && size < sizeof(buffer)) {
             snprintf(buffer + size, sizeof(buffer) - size,
-                    "VCXSrv.%s.log", display); 
+                    "Ming64x.%s.log", display); 
             buffer[sizeof(buffer) - 1] = 0;
             g_pszLogFile = buffer;
             GetLongPathName(buffer, buffer, MAX_PATH);

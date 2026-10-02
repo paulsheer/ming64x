@@ -1020,14 +1020,11 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                         if (pvImage) {
                             if (ReadFile(hFile, pvImage, cbFile, &cbRead, NULL) && cbRead == cbFile) {
                                 cbImage = cbFile;
-                                ErrorF("winClipboardFlushXEvents - raw copy from file: %lu bytes (no encode)\n", (unsigned long)cbFile);
                                 char statusmsg[256];
                                 if (!(*convertFn) (&pvImage, &cbImage, statusmsg, sizeof(statusmsg))) {
                                     ErrorF("winClipboardFlushXEvents - convert failed: %s\n", statusmsg);
                                     free(pvImage);
                                     pvImage = NULL;
-                                } else {
-                                    ErrorF("winClipboardFlushXEvents - convert succeeded: %s\n", statusmsg);
                                 }
                             } else {
                                 free(pvImage);
@@ -1068,7 +1065,6 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                         if (pvImage) {
                             memcpy(pvImage, p, cb);
                             cbImage = (unsigned long)cb;
-                            ErrorF("winClipboardFlushXEvents - raw copy: fmt=%u, %lu bytes (no encode)\n", regFmt, (unsigned long)cb);
                         }
                     }
                     GlobalUnlock(h);
@@ -1086,9 +1082,6 @@ handleSelectionRequest(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn,
                             atoms, &pvImage, &cbImage);
             dbg_write("IMAGE: winClipboardEncodeImage returned %d, pvImage=%p cbImage=%lu",
                       (int)enc_ok, pvImage, (unsigned long)cbImage);
-            if (enc_ok && pvImage != NULL && cbImage > 0) {
-                ErrorF("winClipboardFlushXEvents - encoded copy: fmt=%u, %lu bytes\n", regFmt, cbImage);
-            }
         }
 
         /* If DIB wasn't available but a raw GIF is, decode and re-encode
