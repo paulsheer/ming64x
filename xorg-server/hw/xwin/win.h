@@ -289,6 +289,7 @@ typedef struct {
     /* from GetSystemMetrics */
     int sm_cx;
     int sm_cy;
+    double dpiScale;            /* > 1.0 when DPI-unaware under DWM scaling */
 
     BOOL visible;
     HCURSOR handle;

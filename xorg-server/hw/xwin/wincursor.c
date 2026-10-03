@@ -141,6 +141,62 @@ reverse(unsigned char c)
 }
 
 /*
+ * Scale a 1-bit-packed monochrome bitmap up using nearest-neighbor
+ * sampling. Returns a newly allocated buffer.
+ */
+static unsigned char *
+winScaleMonochrome(const unsigned char *src, int w, int h, int dw, int dh)
+{
+    unsigned char *dst;
+    int x, y;
+
+    dst = calloc(bits_to_bytes(dw) * dh, 1);
+    if (!dst)
+        return NULL;
+
+    for (y = 0; y < dh; y++) {
+        int sy = (int) ((double) y * h / dh);
+
+        for (x = 0; x < dw; x++) {
+            int sx = (int) ((double) x * w / dw);
+            unsigned char bit =
+                (src[bits_to_bytes(w) * sy + (sx >> 3)] >> (7 - (sx & 7))) & 1;
+
+            if (bit)
+                dst[bits_to_bytes(dw) * y + (x >> 3)] |= (1 << (7 - (x & 7)));
+        }
+    }
+    return dst;
+}
+
+/*
+ * Scale a color bitmap (1 or 4 bytes per pixel) up using
+ * nearest-neighbor sampling. Returns a newly allocated buffer.
+ */
+static void *
+winScaleColor(const void *src, int w, int h, int dw, int dh, int bpp)
+{
+    unsigned char *dst;
+    int x, y;
+
+    dst = calloc(dw * dh, bpp);
+    if (!dst)
+        return NULL;
+
+    for (y = 0; y < dh; y++) {
+        int sy = (int) ((double) y * h / dh);
+
+        for (x = 0; x < dw; x++) {
+            int sx = (int) ((double) x * w / dw);
+
+            memcpy(dst + (y * dw + x) * bpp,
+                   (const unsigned char *) src + (sy * w + sx) * bpp, bpp);
+        }
+    }
+    return dst;
+}
+
+/*
  * Convert X cursor to Windows cursor
  * FIXME: Perhaps there are more smart code
  */
@@ -163,8 +219,11 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
     BITMAPV4HEADER bi;
     BITMAPINFO *pbmi;
     uint32_t *lpBits;
+    double dScale = pScreenPriv->cursor.dpiScale;
+    int nWinCX = (int) (pScreenPriv->cursor.sm_cx * dScale + 0.5);
+    int nWinCY = (int) (pScreenPriv->cursor.sm_cy * dScale + 0.5);
 
-    winDebug("winLoadCursor: Win32: %dx%d X11: %dx%d hotspot: %d,%d\n", 
+    winDebug("winLoadCursor: Win32: %dx%d X11: %dx%d hotspot: %d,%d\n",
                   pScreenPriv->cursor.sm_cx, pScreenPriv->cursor.sm_cy,
                   pCursor->bits->width, pCursor->bits->height,
                   pCursor->bits->xhot, pCursor->bits->yhot);
@@ -250,8 +309,8 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
         winDebug("winLoadCursor: Trying truecolor alphablended cursor\n"); 
         memset(&bi, 0, sizeof(BITMAPV4HEADER));
         bi.bV4Size = sizeof(BITMAPV4HEADER);
-        bi.bV4Width = pScreenPriv->cursor.sm_cx;
-        bi.bV4Height = -(pScreenPriv->cursor.sm_cy);    /* right-side up */
+        bi.bV4Width = nWinCX;
+        bi.bV4Height = -nWinCY;         /* right-side up */
         bi.bV4Planes = 1;
         bi.bV4BitCount = 32;
         bi.bV4V4Compression = BI_BITFIELDS;
@@ -283,8 +342,8 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
 
         memset(pbmi, 0, sizeof(BITMAPINFOHEADER));
         pbmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        pbmi->bmiHeader.biWidth = pScreenPriv->cursor.sm_cx;
-        pbmi->bmiHeader.biHeight = -abs(pScreenPriv->cursor.sm_cy);     /* right-side up */
+        pbmi->bmiHeader.biWidth = nWinCX;
+        pbmi->bmiHeader.biHeight = -abs(nWinCY);        /* right-side up */
         pbmi->bmiHeader.biPlanes = 1;
         pbmi->bmiHeader.biBitCount = 8;
         pbmi->bmiHeader.biCompression = BI_RGB;
@@ -344,6 +403,33 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
         }                       /* end if (lpbits) */
     }
 
+    /* When the process is DPI-unaware, DWM bitmap-scales the window content
+       but not the hardware cursor, so upscale the cursor to match. */
+    if (dScale > 1.0) {
+        unsigned char *pAnd2 =
+            winScaleMonochrome(pAnd, pScreenPriv->cursor.sm_cx,
+                               pScreenPriv->cursor.sm_cy, nWinCX, nWinCY);
+        unsigned char *pXor2 =
+            winScaleMonochrome(pXor, pScreenPriv->cursor.sm_cx,
+                               pScreenPriv->cursor.sm_cy, nWinCX, nWinCY);
+        void *lpBits2 = NULL;
+
+        if (lpBits)
+            lpBits2 =
+                winScaleColor(lpBits, pScreenPriv->cursor.sm_cx,
+                              pScreenPriv->cursor.sm_cy, nWinCX, nWinCY,
+                              pCursor->bits->argb ? 4 : 1);
+
+        free(pAnd);
+        free(pXor);
+        pAnd = pAnd2;
+        pXor = pXor2;
+        if (lpBits) {
+            free(lpBits);
+            lpBits = lpBits2;
+        }
+    }
+
     /* If one of the previous two methods gave us the bitmap we need, make a cursor */
     if (lpBits) {
         winDebug("winLoadCursor: Creating bitmap cursor: hotspot %d,%d\n",
@@ -353,15 +439,13 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
         hXor = NULL;
 
         hAnd =
-            CreateBitmap(pScreenPriv->cursor.sm_cx, pScreenPriv->cursor.sm_cy,
-                         1, 1, pAnd);
+            CreateBitmap(nWinCX, nWinCY, 1, 1, pAnd);
 
         hDC = GetDC(NULL);
         if (hDC) {
             hXor =
-                CreateCompatibleBitmap(hDC, pScreenPriv->cursor.sm_cx,
-                                       pScreenPriv->cursor.sm_cy);
-            SetDIBits(hDC, hXor, 0, pScreenPriv->cursor.sm_cy, lpBits,
+                CreateCompatibleBitmap(hDC, nWinCX, nWinCY);
+            SetDIBits(hDC, hXor, 0, nWinCY, lpBits,
                       (BITMAPINFO *) &bi, DIB_RGB_COLORS);
             ReleaseDC(NULL, hDC);
         }
@@ -369,8 +453,8 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
 
         if (hAnd && hXor) {
             ii.fIcon = FALSE;
-            ii.xHotspot = pCursor->bits->xhot;
-            ii.yHotspot = pCursor->bits->yhot;
+            ii.xHotspot = (DWORD) (pCursor->bits->xhot * dScale + 0.5);
+            ii.yHotspot = (DWORD) (pCursor->bits->yhot * dScale + 0.5);
             ii.hbmMask = hAnd;
             ii.hbmColor = hXor;
             hCursor = (HCURSOR) CreateIconIndirect(&ii);
@@ -385,8 +469,8 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
                         DestroyCursor(hCursor);
 
                         ii.fIcon = FALSE;
-                        ii.xHotspot = pCursor->bits->xhot;
-                        ii.yHotspot = pCursor->bits->yhot;
+                        ii.xHotspot = (DWORD) (pCursor->bits->xhot * dScale + 0.5);
+                        ii.yHotspot = (DWORD) (pCursor->bits->yhot * dScale + 0.5);
                         hCursor = (HCURSOR) CreateIconIndirect(&ii);
 
                         if (hCursor == NULL)
@@ -412,9 +496,9 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
         /* We couldn't make a color cursor for this screen, use
            black and white instead */
         hCursor = CreateCursor(g_hInstance,
-                               pCursor->bits->xhot, pCursor->bits->yhot,
-                               pScreenPriv->cursor.sm_cx,
-                               pScreenPriv->cursor.sm_cy, pAnd, pXor);
+                               (int) (pCursor->bits->xhot * dScale + 0.5),
+                               (int) (pCursor->bits->yhot * dScale + 0.5),
+                               nWinCX, nWinCY, pAnd, pXor);
         if (hCursor == NULL)
             winW32Error("winLoadCursor - CreateCursor failed:");
     }
@@ -614,6 +698,20 @@ winInitCursor(ScreenPtr pScreen)
 
     pScreenPriv->cursor.sm_cx = GetSystemMetrics(SM_CXCURSOR);
     pScreenPriv->cursor.sm_cy = GetSystemMetrics(SM_CYCURSOR);
+
+    pScreenPriv->cursor.dpiScale = 1.0;
+    if (!IsProcessDPIAware()) {
+        HDC hdc = GetDC(NULL);
+
+        if (hdc) {
+            int virt = GetDeviceCaps(hdc, HORZRES);
+            int phys = GetDeviceCaps(hdc, DESKTOPHORZRES);
+
+            ReleaseDC(NULL, hdc);
+            if (virt > 0 && phys > 0)
+                pScreenPriv->cursor.dpiScale = (double) phys / virt;
+        }
+    }
 
     return TRUE;
 }
