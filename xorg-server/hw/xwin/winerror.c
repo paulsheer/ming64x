@@ -75,7 +75,7 @@ OsVendorFatalError(const char *f, va_list args)
     winMessageBoxF("A fatal error has occurred and " PROJECT_NAME " will now exit.\n\n"
                    "%s\n\n"
                    "Please open %s for more information.\n",
-                   0 /* no icon = no sound */,
+                   MB_ICONERROR,
                    g_FatalErrorMessage,
                    (g_pszLogFile ? g_pszLogFile : "the logfile"));
 }
@@ -121,11 +121,40 @@ winMessageBoxF(const char *pszError, UINT uType, ...)
         goto winMessageBoxF_Cleanup;
     }
 
-    /* Display the message box string — strip icon flags to avoid beeping */
-    MessageBox(NULL, pszMsgBox, PROJECT_NAME,
-               MB_OK | (uType & ~(MB_ICONERROR | MB_ICONQUESTION |
-                                  MB_ICONWARNING | MB_ICONINFORMATION)) |
-                   MB_SERVICE_NOTIFICATION);
+    /* Display the message box. MB_USERICON with an explicit standard icon
+       shows the icon without the automatic beep the MB_ICON* styles trigger. */
+    {
+        MSGBOXPARAMS mbp;
+        const char *lpszIcon = NULL;
+
+        switch (uType & MB_ICONMASK) {
+        case MB_ICONERROR:
+            lpszIcon = IDI_ERROR;
+            break;
+        case MB_ICONWARNING:
+            lpszIcon = IDI_WARNING;
+            break;
+        case MB_ICONINFORMATION:
+            lpszIcon = IDI_INFORMATION;
+            break;
+        case MB_ICONQUESTION:
+            lpszIcon = IDI_QUESTION;
+            break;
+        }
+
+        ZeroMemory(&mbp, sizeof(mbp));
+        mbp.cbSize = sizeof(mbp);
+        mbp.lpszText = pszMsgBox;
+        mbp.lpszCaption = PROJECT_NAME;
+        mbp.dwStyle = MB_OK | MB_TOPMOST;
+        if (lpszIcon) {
+            mbp.dwStyle |= MB_USERICON;
+            mbp.lpszIcon = lpszIcon;
+        }
+        mbp.dwLanguageId = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT);
+
+        MessageBoxIndirect(&mbp);
+    }
 
  winMessageBoxF_Cleanup:
     free(pszErrorF);
