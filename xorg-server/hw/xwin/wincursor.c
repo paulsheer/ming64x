@@ -178,10 +178,15 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
     /* Check whether the X11 cursor is bigger than the win32 cursor */
     if (pScreenPriv->cursor.sm_cx < pCursor->bits->width ||
         pScreenPriv->cursor.sm_cy < pCursor->bits->height) {
-        ErrorF (
-                      "winLoadCursor - Windows requires %dx%d cursor but X requires %dx%d\n",
+        static Bool s_fWarnedCursorSize = FALSE;
+
+        if (!s_fWarnedCursorSize) {
+            ErrorF (
+                      "winLoadCursor - Windows requires %dx%d cursor but X requires %dx%d (this message won't repeat)\n",
                       pScreenPriv->cursor.sm_cx, pScreenPriv->cursor.sm_cy,
                       pCursor->bits->width, pCursor->bits->height);
+            s_fWarnedCursorSize = TRUE;
+        }
     }
 
     /* Get the number of bytes required to store the whole cursor image
