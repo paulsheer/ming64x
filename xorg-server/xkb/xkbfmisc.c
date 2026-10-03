@@ -324,21 +324,21 @@ XkbWriteXKBKeymapForNames(FILE * file,
     if (wantConfig & XkmKeyNamesMask)
         XkbWriteXKBKeycodes(file, xkb, FALSE, FALSE, _AddIncl, names->keycodes);
     else if (wantDflts & XkmKeyNamesMask)
-        fprintf(stderr, "Default symbols not implemented yet!\n");
+        ErrorF("Default symbols not implemented yet!\n");
     else if (wantNames & XkmKeyNamesMask)
         XkbWriteSectionFromName(file, "keycodes", names->keycodes);
 
     if (wantConfig & XkmTypesMask)
         XkbWriteXKBKeyTypes(file, xkb, FALSE, FALSE, _AddIncl, names->types);
     else if (wantDflts & XkmTypesMask)
-        fprintf(stderr, "Default types not implemented yet!\n");
+        ErrorF("Default types not implemented yet!\n");
     else if (wantNames & XkmTypesMask)
         XkbWriteSectionFromName(file, "types", names->types);
 
     if (wantConfig & XkmCompatMapMask)
         XkbWriteXKBCompatMap(file, xkb, FALSE, FALSE, _AddIncl, names->compat);
     else if (wantDflts & XkmCompatMapMask)
-        fprintf(stderr, "Default interps not implemented yet!\n");
+        ErrorF("Default interps not implemented yet!\n");
     else if (wantNames & XkmCompatMapMask)
         XkbWriteSectionFromName(file, "compatibility", names->compat);
 

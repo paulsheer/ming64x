@@ -73,9 +73,18 @@ SOFTWARE.
 #define BITCLEAR(buf, i) MASKWORD(buf, i) &= ~BITMASK(i)
 #define GETBIT(buf, i) (MASKWORD(buf, i) & BITMASK(i))
 
+
+#define DECL_ERRORBUF \
+    char logbuf[1024]; \
+    char *logbufp = logbuf; \
+    int logbuflen = sizeof(logbuf);
+
 void
 PrintDeviceGrabInfo(DeviceIntPtr dev)
 {
+    DECL_ERRORBUF;
+#define ErrorF(f,...)   do { int __v; snprintf(logbufp, logbuflen, f, ##__VA_ARGS__); __v = strlen(logbufp); logbufp += __v; logbuflen -= __v; } while(0)
+
     ClientPtr client;
     LocalClientCredRec *lcc;
     int i, j;
@@ -166,6 +175,9 @@ PrintDeviceGrabInfo(DeviceIntPtr dev)
            grab->keyboardMode, grab->pointerMode,
            grab->confineTo ? (unsigned long) grab->confineTo->drawable.id : 0,
            grab->cursor ? (unsigned long) grab->cursor->id : 0);
+
+#undef ErrorF
+    ErrorF("%s", logbuf);
 }
 
 void

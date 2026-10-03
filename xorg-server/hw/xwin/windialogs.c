@@ -330,6 +330,7 @@ winExitDlgProc(HWND hDialog, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDOK:
+            ErrorF ("Terminate by user: Exit dialog button\n");
             /* Send message to call the GiveUp function */
             PostMessage(s_pScreenPriv->hwndScreen, WM_GIVEUP, 0, 0);
             DestroyWindow(g_hDlgExit);

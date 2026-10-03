@@ -144,6 +144,7 @@ winHandleIconMessage(HWND hwnd, UINT message,
         break;
 
     case WM_LBUTTONDBLCLK:
+        ErrorF ("Terminate by user: tray icon double-click\n");
         /* Display Exit dialog box */
         winDisplayExitDialog(pScreenPriv);
         break;

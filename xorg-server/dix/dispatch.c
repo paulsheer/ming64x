@@ -377,12 +377,12 @@ SmartScheduleClient(void)
         }
 #ifdef SMART_DEBUG
         if ((now - SmartLastPrint) >= 5000)
-            fprintf(stderr, " %2d: %3d", pClient->index, pClient->smart_priority);
+            ErrorF(" %2d: %3d", pClient->index, pClient->smart_priority);
 #endif
     }
 #ifdef SMART_DEBUG
     if ((now - SmartLastPrint) >= 5000) {
-        fprintf(stderr, " use %2d\n", best->index);
+        ErrorF(" use %2d\n", best->index);
         SmartLastPrint = now;
     }
 #endif

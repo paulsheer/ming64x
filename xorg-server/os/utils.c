@@ -167,7 +167,7 @@ OsSignal(int sig, OsSigHandlerPtr handler)
     act.sa_flags = 0;
     act.sa_handler = handler;
     if (sigaction(sig, &act, &oact))
-        perror("sigaction");
+        ErrorF("sigaction: %s\n", strerror(errno));
     return oact.sa_handler;
 #endif
 }
@@ -1106,7 +1106,7 @@ SmartScheduleInit(void)
 {
 #ifdef HAVE_SETITIMER
     if (SmartScheduleEnable() < 0) {
-        perror("sigaction for smart scheduler");
+        ErrorF("sigaction for smart scheduler: %s\n", strerror(errno));
         SmartScheduleSignalEnable = FALSE;
     }
 #endif
@@ -1223,7 +1223,7 @@ Popen(const char *command, const char *type)
         close(pdes[0]);
         close(pdes[1]);
         free(cur);
-        perror("signal");
+        ErrorF("signal: %s\n", strerror(errno));
         return NULL;
     }
 #endif
@@ -1235,7 +1235,7 @@ Popen(const char *command, const char *type)
         free(cur);
 #ifdef HAVE_SETITIMER
         if (SmartScheduleEnable() < 0)
-            perror("signal");
+            ErrorF("signal: %s\n", strerror(errno));
 #endif
         return NULL;
     case 0:                    /* child */
@@ -1341,7 +1341,7 @@ Pclose(void *iop)
 
 #ifdef HAVE_SETITIMER
     if (SmartScheduleEnable() < 0) {
-        perror("signal");
+        ErrorF("signal: %s\n", strerror(errno));
         return -1;
     }
 #endif
@@ -1652,7 +1652,6 @@ AbortServer(void)
     OsCleanup(TRUE);
     AbortDevices();
     ddxGiveUp(EXIT_ERR_ABORT);
-    fflush(stderr);
     if (CoreDump)
         OsAbort();
     exit(1);

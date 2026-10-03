@@ -226,6 +226,7 @@ OsInit(void)
         }
 #endif
 
+#ifndef WIN32
 #if !defined(XQUARTZ)    /* STDIN is already /dev/null and STDOUT/STDERR is managed by console_redirect.c */
         /*
          * If a write of zero bytes to stderr returns non-zero, i.e. -1,
@@ -261,6 +262,7 @@ OsInit(void)
 #endif
         }
 #endif /* !XQUARTZ */
+#endif /* !WIN32 */
 
 #if !defined(WIN32) || defined(__CYGWIN__)
         if (getpgrp() == 0)

@@ -49,6 +49,7 @@ winMsgWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_ENDSESSION:
         if (!wParam)
             return 0;           /* shutdown is being cancelled */
+        ErrorF ("Terminate by user: Windows session end\n");
 
         /*
            Send a WM_GIVEUP message to the X server thread so it wakes up if

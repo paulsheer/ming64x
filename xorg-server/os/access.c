@@ -2074,7 +2074,7 @@ siIPv6AddrMatch(int family, void *addr, int len,
     addrbuf[siAddrlen] = '\0';
 
     if (inet_pton(AF_INET6, addrbuf, &addr6) != 1) {
-        perror("inet_pton");
+        ErrorF("inet_pton: %s\n", strerror(errno));
         return FALSE;
     }
 
@@ -2109,7 +2109,7 @@ siIPv6CheckAddr(const char *addrString, int length, void *typePriv)
         addrbuf[length] = '\0';
 
         if (inet_pton(AF_INET6, addrbuf, &addr6) != 1) {
-            perror("inet_pton");
+            ErrorF("inet_pton: %s\n", strerror(errno));
             len = -1;
         }
         else {

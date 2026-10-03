@@ -88,6 +88,10 @@ OR PERFORMANCE OF THIS SOFTWARE.
 #include <X11/Xfuncproto.h>
 #include <X11/Xos.h>
 
+#ifdef WIN32
+#include <X11/Xwindows.h>
+#endif
+
 #include "dix/dix_priv.h"
 
 #ifdef WIN32
@@ -162,6 +166,20 @@ strlen_sigsafe(const char *s)
     return len;
 }
 
+static void
+LogFilePidName(const char *name, char **pidname)
+{
+    const char *suffix = ".log";
+    size_t nlen = strlen(name);
+    size_t slen = strlen(suffix);
+    size_t baselen = (nlen >= slen && strcmp(name + nlen - slen, suffix) == 0)
+                     ? nlen - slen : nlen;
+
+    if (asprintf(pidname, "%.*s.%ld%s", (int) baselen, name,
+                 (long) getpid(), suffix) == -1)
+        FatalError("Cannot allocate space for the log file name\n");
+}
+
 /*
  * LogFilePrep is called to setup files for logging, including getting
  * an old file out of the way, but it doesn't actually open the file,
@@ -201,8 +219,13 @@ LogFilePrep(const char *fname, const char *backup, const char *idstring)
             }
 
             if (rename(logFileName, oldLog) == -1) {
-                ErrorF("Cannot move old log file \"%s\" to \"%s\"\n",
-                       logFileName, oldLog);
+                char *pidLogName;
+
+                LogFilePidName(logFileName, &pidLogName);
+                ErrorF("Cannot move old log file \"%s\" to \"%s\": %s; using \"%s\" instead\n",
+                       logFileName, oldLog, strerror(errno), pidLogName);
+                free(logFileName);
+                logFileName = pidLogName;
             }
             free(oldLog);
         }
@@ -576,48 +599,93 @@ vpnprintf(char *string, int size_in, const char *f, va_list args)
     return s_idx;
 }
 
+static void
+LogWritePrefix(char *s)
+{
+#ifdef WIN32
+    SYSTEMTIME st;
+
+    GetLocalTime(&st);
+    snprintf(s, 64, "%04u-%02u-%02uT%02u:%02u:%02u.%03u (%7ld): ",
+                    (unsigned) st.wYear, (unsigned) st.wMonth, (unsigned) st.wDay,
+                    (unsigned) st.wHour, (unsigned) st.wMinute, (unsigned) st.wSecond,
+                    (unsigned) st.wMilliseconds, (long) getpid());
+#else
+    struct timeval tv;
+    struct tm *lt;
+
+    X_GETTIMEOFDAY(&tv);
+    lt = localtime(&tv.tv_sec);
+    if (lt)
+        snprintf(s, 64, "%04d-%02d-%02dT%02d:%02d:%02d.%03ld (%7ld): ",
+                        lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday,
+                        lt->tm_hour, lt->tm_min, lt->tm_sec,
+                        (long) (tv.tv_usec / 1000), (long) getpid());
+    else
+        snprintf(s, 64, "????-??-??T??:??:??.??? (%7ld): ", (long) getpid());
+#endif
+}
+
+#define LOG_MSG_BUF_SIZE 1024
+
 /* This function does the actual log message writes. */
 static void
-LogSWrite(int verb, const char *buf, size_t len, Bool end_line)
+LogSWrite(int verb, const char *buf, size_t len)
 {
-    static Bool newline = TRUE;
-    int ret;
+    if (!(verb < 0 || logFileVerbosity >= verb))
+        return;
 
-    if (verb < 0 || logVerbosity >= verb)
-        ret = write(2, buf, len);
+    char b[LOG_MSG_BUF_SIZE];
+    char ts[64];
+    char *p = b;
+    const char *q = b + LOG_MSG_BUF_SIZE - 1, *t;
 
-    if (verb < 0 || logFileVerbosity >= verb) {
-        if (logFile) {
-//            if (newline)
-//                fprintf(logFile, "[%10.3f] ", GetTimeInMillis() / 1000.0);
-            newline = end_line;
-            fwrite(buf, len, 1, logFile);
-            if (logFlush) {
-                fflush(logFile);
-#ifndef WIN32
-                if (logSync)
-                    fsync(fileno(logFile));
-#endif
-            }
-        }
-        else if (needBuffer) {
-            if (len > bufferUnused) {
-                bufferSize += 1024;
-                bufferUnused += 1024;
-                saveBuffer = realloc(saveBuffer, bufferSize);
-                if (!saveBuffer)
-                    FatalError("realloc() failed while saving log messages\n");
-            }
-            bufferUnused -= len;
-            memcpy(saveBuffer + bufferPos, buf, len);
-            bufferPos += len;
-        }
+    LogWritePrefix(ts);
+
+    /* start each new line with a timestamp */
+    for (t = ts; p < q && *t;)
+        *p++ = *t++;
+
+    for (;;) {
+        if ((int) len <= 0)
+            break;
+        if (p < q)
+            *p++ = *buf;
+        if (*buf == '\n' && len > 1)     /* start each new line with a timestamp */
+            for (t = ts; p < q && *t;)
+                *p++ = *t++;
+
+        buf++;
+        len--;
     }
 
-    /* There's no place to log an error message if the log write
-     * fails...
-     */
-    (void) ret;
+    if (*(p - 1) != '\n')
+        *p++ = '\n';
+
+    int bl = (p - b);
+
+    if (logFile) {
+        fwrite(b, bl, 1, logFile);
+        if (logFlush) {
+            fflush(logFile);
+#ifndef WIN32
+            if (logSync)
+                fsync(fileno(logFile));
+#endif
+        }
+    }
+    else if (needBuffer) {
+        if (bl > bufferUnused) {
+            bufferSize += 1024;
+            bufferUnused += 1024;
+            saveBuffer = realloc(saveBuffer, bufferSize);
+            if (!saveBuffer)
+                FatalError("realloc() failed while saving log messages\n");
+        }
+        bufferUnused -= bl;
+        memcpy(saveBuffer + bufferPos, b, bl);
+        bufferPos += bl;
+    }
 }
 
 /* Returns the Message Type string to prepend to a logging message, or NULL
@@ -661,7 +729,6 @@ LogMessageTypeVerbString(MessageType type, int verb)
     }
 }
 
-#define LOG_MSG_BUF_SIZE 1024
 
 static ssize_t prepMsgHdr(MessageType type, int verb, char *buf)
 {
@@ -685,7 +752,7 @@ static inline void writeLog(int verb, char *buf, int len)
     if (LOG_MSG_BUF_SIZE  - len == 1)
         buf[len - 1] = '\n';
 
-    LogSWrite(verb, buf, len, (len > 0 && buf[len - 1] == '\n'));
+    LogSWrite(verb, buf, len);
 }
 
 /* signal safe */
@@ -698,6 +765,22 @@ LogVMessageVerb(MessageType type, int verb, const char *format, va_list args)
     if (len == -1)
         return;
 
+    len += vpnprintf(&buf[len], sizeof(buf) - len, format, args);
+
+    writeLog(verb, buf, len);
+}
+
+/* signal safe */
+void
+LogVPrefixedMessageVerb(MessageType type, int verb, const char *prefix, const char *format, va_list args)
+{
+    char buf[LOG_MSG_BUF_SIZE];
+
+    size_t len = prepMsgHdr(type, verb, buf);
+    if (len == -1)
+        return;
+
+    len += snprintf(&buf[len], sizeof(buf) - len, "%s: ", prefix);
     len += vpnprintf(&buf[len], sizeof(buf) - len, format, args);
 
     writeLog(verb, buf, len);
@@ -889,6 +972,7 @@ FatalError(const char *f, ...)
 #endif
 #ifdef WIN32
     vsnprintf(g_FatalErrorMessage, 1024, f, args);
+    LogSWrite(0, g_FatalErrorMessage, strlen(g_FatalErrorMessage));
 #endif
     va_end(args);
     ErrorF("\n");

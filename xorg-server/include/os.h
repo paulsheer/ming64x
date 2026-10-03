@@ -319,6 +319,9 @@ extern _X_EXPORT Bool
 LogSetParameter(LogParameter param, int value);
 extern _X_EXPORT void
 LogVMessageVerb(MessageType type, int verb, const char *format, va_list args)
+_X_ATTRIBUTE_PRINTF(4, 0);
+extern _X_EXPORT void
+LogVPrefixedMessageVerb(MessageType type, int verb, const char *prefix, const char *format, va_list args)
 _X_ATTRIBUTE_PRINTF(3, 0);
 extern _X_EXPORT void
 LogMessageVerb(MessageType type, int verb, const char *format, ...)
@@ -384,6 +387,7 @@ typedef _sigset_t sigset_t;
 #define ErrorFSigSafe(...) ErrorF(__VA_ARGS__)
 #define VErrorFSigSafe(...) VErrorF(__VA_ARGS__)
 #define VErrorF(...) LogVMessageVerb(X_NONE, -1, __VA_ARGS__)
+#define VErrorF2(prefix,...) LogVPrefixedMessageVerb(X_NONE, -1, prefix, __VA_ARGS__)
 
 /* only for backwards compat with drivers that haven't kept up yet
    (xf86-video-intel)

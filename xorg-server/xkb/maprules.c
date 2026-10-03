@@ -315,7 +315,7 @@ SetUpRemap(InputLine * line, RemapSpec * remap)
             }
         }
         if (!found) {
-            fprintf(stderr, "Unknown component \"%s\" ignored\n", tok);
+            ErrorF("Unknown component \"%s\" ignored\n", tok);
         }
     }
     if ((present & PART_MASK) == 0) {

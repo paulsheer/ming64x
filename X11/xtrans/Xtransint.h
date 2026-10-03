@@ -460,8 +460,7 @@ prmsg(int lvl, const char *f, ...)
     if (lvl <= XTRANSDEBUG) {
 	int saveerrno = errno;
 
-	ErrorF("%s", __xtransname);
-	VErrorF(f, args);
+	VErrorF2(__xtransname, f, args);
 
 # ifdef XTRANSDEBUGTIMESTAMP
 	{

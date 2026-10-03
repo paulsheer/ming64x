@@ -220,9 +220,17 @@ get_window_name(WindowPtr pWin)
 #undef WINDOW_NAME_BUF_LEN
 }
 
+#define DECL_ERRORBUF \
+    char logbuf[1024]; \
+    char *logbufp = logbuf; \
+    int logbuflen = sizeof(logbuf);
+
 static void
 log_window_info(WindowPtr pWin, int depth)
 {
+    DECL_ERRORBUF;
+#define ErrorF(f,...)   do { int __v; snprintf(logbufp, logbuflen, f, ##__VA_ARGS__); __v = strlen(logbufp); logbufp += __v; logbuflen -= __v; } while(0)
+
     int i;
     const char *win_name, *visibility;
     BoxPtr rects;
@@ -276,6 +284,9 @@ log_window_info(WindowPtr pWin, int depth)
     }
 
     ErrorF("\n");
+
+#undef ErrorF
+    ErrorF("%s", logbuf);
 }
 
 static const char*
@@ -311,6 +322,9 @@ grab_type_to_text(GrabPtr pGrab)
 static void
 log_grab_info(void *value, XID id, void *cdata)
 {
+    DECL_ERRORBUF;
+#define ErrorF(f,...)   do { int __v; snprintf(logbufp, logbuflen, f, ##__VA_ARGS__); __v = strlen(logbufp); logbufp += __v; logbuflen -= __v; } while(0)
+
     int i, j;
     GrabPtr pGrab = (GrabPtr)value;
 
@@ -363,6 +377,9 @@ log_grab_info(void *value, XID id, void *cdata)
            pGrab->keyboardMode, pGrab->pointerMode,
            pGrab->confineTo ? (unsigned long) pGrab->confineTo->drawable.id : 0,
            pGrab->cursor ? (unsigned long) pGrab->cursor->id : 0);
+
+#undef ErrorF
+    ErrorF("%s", logbuf);
 }
 
 void

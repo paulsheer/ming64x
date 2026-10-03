@@ -1058,6 +1058,7 @@ winWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
              * quits.
              */
             winDebug ("winWindowProc - WM_*KEYDOWN - Closekey hit, quitting\n");
+            ErrorF ("Terminate by user: %s\n", (s_pScreenInfo->fUseUnixKillKey && wParam == VK_BACK && (GetKeyState(VK_MENU) & 0x8000) && (GetKeyState(VK_CONTROL) & 0x8000)) ? "Ctrl+Alt+Backspace" : "Alt+F4");
 
             /* Display Exit dialog */
             winDisplayExitDialog(s_pScreenPriv);
@@ -1186,6 +1187,7 @@ winWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_APP_EXIT:
+            ErrorF ("Terminate by user: tray icon menu Exit\n");
             /* Display Exit dialog */
             winDisplayExitDialog(s_pScreenPriv);
             return 0;
@@ -1230,6 +1232,7 @@ winWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_CLOSE:
+        ErrorF ("Terminate by user: window close button\n");
         /* Display Exit dialog */
         winDisplayExitDialog(s_pScreenPriv);
         return 0;

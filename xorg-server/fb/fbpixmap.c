@@ -295,7 +295,7 @@ fbValidateBits(FbStip * bits, int stride, FbStip data)
 {
     while (stride--) {
         if (*bits != data) {
-            fprintf (stderr, "fbValidateBits failed at 0x%x (is 0x%x want 0x%x)\n",bits, *bits, data);
+            ErrorF("fbValidateBits failed at 0x%x (is 0x%x want 0x%x)\n", bits, *bits, data);
             return FALSE;
         }
         bits++;
