@@ -1,5 +1,6 @@
 https://apps.microsoft.com/detail/9N4VVR1BD0Z5
 
+1.22.3.0 Fix exit when ssh IP is invalid. IPv6, HyperV support added.
 1.22.2.0 Fixed excessive logging into AppData\Local\Temp\
 1.22.1.0 Public release
 
