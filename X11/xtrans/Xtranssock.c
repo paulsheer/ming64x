@@ -137,20 +137,10 @@ from the copyright holders.
 #include <X11/Xos_r.h>
 
 #if defined(HYPERV)
+#include <hvsocket.h>
+#ifndef AF_HYPERV
 #define AF_HYPERV 34
-#define HV_PROTOCOL_RAW 1
-#include <initguid.h>
-DEFINE_GUID(HV_GUID_VSOCK_TEMPLATE, 0x00000000, 0xfacb, 0x11e6, 0xbd, 0x58, 0x64, 0x00, 0x6a, 0x79, 0x86, 0xd3);
-DEFINE_GUID(HV_GUID_WILDCARD, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0);
-
-typedef struct _SOCKADDR_HV
-{
-     ADDRESS_FAMILY Family;
-     USHORT Reserved;
-     GUID VmId;
-     GUID ServiceId;
-	 ULONG Flags;
-} SOCKADDR_HV, *PSOCKADDR_HV;
+#endif
 
 static GUID vmId;
 static unsigned int vsockPort = 106000;
@@ -557,7 +547,6 @@ TRANS(SocketHyperVCreateListener) (XtransConnInfo ciptr, const char *port,
 	sockname.ServiceId = HV_GUID_VSOCK_TEMPLATE;
 	sockname.ServiceId.Data1 = vsockPort;
 	sockname.VmId = vmId;
-	sockname.Flags = 0;
 
 	char vmIds[40];
 	char svcIds[40];
@@ -600,6 +589,18 @@ TRANS(SocketHyperVAccept) (XtransConnInfo ciptr, int *status)
 	return NULL;
     }
 
+#ifdef WIN32
+    newciptr->sockbuf = ciptr->sockbuf ? ciptr->sockbuf->accept_head : NULL;
+    if (!newciptr->sockbuf) {
+	prmsg (1, "SocketHyperVAccept: no pending connection\n");
+	free (newciptr);
+	*status = TRANS_ACCEPT_FAILED;
+	return NULL;
+    }
+    ciptr->sockbuf->accept_head = newciptr->sockbuf->accept_next;
+    newciptr->sockbuf->accept_next = NULL;
+    newciptr->fd = newciptr->sockbuf->s;
+#else
     if ((newciptr->fd = accept (ciptr->fd,
 	(struct sockaddr *) &sockname, (void *)&namelen)) < 0)
     {
@@ -609,6 +610,7 @@ TRANS(SocketHyperVAccept) (XtransConnInfo ciptr, int *status)
 	*status = TRANS_ACCEPT_FAILED;
 	return NULL;
     }
+#endif
 
     /*
      * Get this address again because the transport may give a more
@@ -835,8 +837,11 @@ TRANS(SocketOpen) (int i, int type)
 #ifdef WIN32
     {
         int family = Sockettrans2devtab[i].family;
-        DWORD flags = (family == AF_INET || family == AF_INET6)
-                      ? WSA_FLAG_OVERLAPPED : 0;
+        DWORD flags = (family == AF_INET || family == AF_INET6
+#ifdef HYPERV
+                       || family == AF_HYPERV
+#endif
+                      ) ? WSA_FLAG_OVERLAPPED : 0;
         ciptr->fd = (int) WSASocket(family, type,
                                     Sockettrans2devtab[i].protocol, NULL, 0,
                                     flags);

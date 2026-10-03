@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <winreg.h>
 #include <mmsystem.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,7 @@
 #include "terminal.h"
 #include "ssh.h"
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 
 #include <math.h>
 
@@ -36,6 +39,8 @@ static float nk_sin(const float x) { return sinf(x); }
 
 #define NK_GDI_IMPLEMENTATION
 #include "../Nuklear/demo/gdi/nuklear_gdi.h"
+
+int inaddr_validate(const char *s, int *family);
 
 /* Build an HBITMAP-backed nk_image from the embedded RGB logo. The GDI
    backend draws whatever HBITMAP is in handle.ptr, so this is the only
@@ -160,7 +165,8 @@ static const char *extension_names[NUM_EXTENSIONS] = {
 
 static const char *audio_listen_items[] = {
     "Loopback only (127.0.0.1)",
-    "All interfaces (0.0.0.0)"
+    "All interfaces (0.0.0.0)",
+    "All interfaces (IPv4 + IPv6)"
 };
 #define AUDIO_LISTEN_COUNT (sizeof(audio_listen_items) / sizeof(audio_listen_items[0]))
 
@@ -219,6 +225,7 @@ static int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal)
 static int g_confirm_exit = 0;      /* Exit-with-live-connections dialog is open (modal) */
 static char g_notice[512];          /* cross-tab conflict explanation (modal) */
 static char g_acl_error[512];       /* ACL validation error (modal) */
+static char g_hyperv_error[1024];   /* Hyper-V registry write error (modal) */
 
 static const void *g_field_menu_owner; /* unique key of the field whose context menu is open */
 static int g_field_menu_copy;       /* menu shows Copy (frozen for the menu lifetime) */
@@ -342,6 +349,9 @@ struct options_network_and_access_control {
     int maxclients_sel;
     int maxbigreqsize;
     int listeningport_sel;
+    char vmid[256];
+    char vsockport[16];
+    int hyperv_registry_enabled;
 };
 
 static void
@@ -393,6 +403,29 @@ dialog_button(struct nk_context *ctx, const char *label)
     nk_button_label(ctx, label);
     return nk_input_has_mouse_click_in_button_rect(&ctx->input, NK_BUTTON_LEFT, b) &&
            nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT);
+}
+
+static void
+ok_dialog(struct nk_context *ctx, HWND wnd, const char *title,
+          char *message, float height, float msg_height)
+{
+    RECT rc;
+    struct nk_rect pr;
+
+    GetClientRect(wnd, &rc);
+    pr = nk_rect((rc.right - 640.0f) / 2.0f,
+                 (rc.bottom - 150.0f) / 2.0f, 640.0f, height);
+
+    if (nk_begin(ctx, title, pr, NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+        nk_layout_row_dynamic(ctx, 15, 1);
+        nk_label_wrap(ctx, " ");
+        nk_layout_row_dynamic(ctx, msg_height, 1);
+        nk_label_wrap(ctx, message);
+        nk_layout_row_dynamic(ctx, 34, 1);
+        if (dialog_button(ctx, "OK"))
+            message[0] = '\0';
+    }
+    nk_end(ctx);
 }
 
 static void
@@ -621,15 +654,14 @@ field_context_menu(struct nk_context *ctx, struct nk_rect bounds,
     }
 }
 
-static void
-text_option(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip)
+static nk_flags
+text_option_cell(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip, nk_flags align)
 {
     struct nk_rect b;
     int focused;
     nk_flags ret;
-    nk_layout_row_dynamic(ctx, 30, 2);
     b = nk_widget_bounds(ctx);
-    nk_label(ctx, label, NK_TEXT_LEFT);
+    nk_label(ctx, label, align);
     option_tooltip(ctx, b, tooltip);
     focused = focus_pick(ctx, &b);
     if (focused)
@@ -641,6 +673,14 @@ text_option(struct nk_context *ctx, const char *label, char *buffer, const int b
         focus_ring(ctx, b);
     option_tooltip(ctx, b, tooltip);
     field_context_menu(ctx, b, buffer, buffer_size, 1, 1, buffer);
+    return ret;
+}
+
+static nk_flags
+text_option(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip)
+{
+    nk_layout_row_dynamic(ctx, 30, 2);
+    return text_option_cell(ctx, label, buffer, buffer_size, tooltip, NK_TEXT_LEFT);
 }
 
 static nk_bool
@@ -669,6 +709,152 @@ readonly_option(struct nk_context *ctx, const char *label, const char *value, co
         buf, (int)sizeof(buf), readonly_filter);
     option_tooltip(ctx, eb, tooltip);
     field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, label);
+}
+
+/* Full-row read-only text field: no label, selectable but not editable.
+   Used for the Hyper-V registry path, which mirrors the vsock port. */
+static void
+readonly_option_fullrow(struct nk_context *ctx, const char *value, const char *tooltip)
+{
+    struct nk_rect eb;
+    static char buf[512];
+
+    nk_layout_row_dynamic(ctx, 30, 1);
+    eb = nk_widget_bounds(ctx);
+    snprintf(buf, sizeof(buf), "%s", value);
+    nk_edit_string_zero_terminated(ctx,
+        NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD | NK_EDIT_AUTO_SELECT,
+        buf, (int)sizeof(buf), readonly_filter);
+    option_tooltip(ctx, eb, tooltip);
+    field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, "hyperv_registry_path");
+}
+
+/* Compute the GuestCommunicationServices registry key name from the VSock
+   port. The service GUID is HV_GUID_VSOCK_TEMPLATE with the port encoded in
+   Data1 (the first eight hex digits). */
+static void
+hyperv_registry_path(const char *vsockport, char *out, size_t outsz)
+{
+    unsigned int port = (unsigned int)strtoul(vsockport, NULL, 10);
+
+    snprintf(out, outsz,
+        "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Virtualization\\GuestCommunicationServices\\%08X-FACB-11E6-BD58-64006A7986D3",
+        port);
+}
+
+/* Create/update the GuestCommunicationServices registry key for the current
+   VSock port so the Hyper-V host will route incoming guest connections to
+   the listener.  Requires elevation (HKLM).  Returns 0 on success, else the
+   Win32 error code. */
+static int
+hyperv_update_registry(const struct options_network_and_access_control *net)
+{
+    char full[512];
+    char element[64];
+    unsigned int port;
+    const char *subkey;
+    HKEY hk = NULL;
+    LONG rc;
+    DWORD disp;
+
+    port = (unsigned int)strtoul(net->vsockport, NULL, 10);
+    hyperv_registry_path(net->vsockport, full, sizeof(full));
+    subkey = full + 5;                  /* skip the "HKLM\" prefix */
+
+    snprintf(element, sizeof(element), "ming64x Hyper-V VSock port %u", port);
+
+    rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, subkey, 0, NULL, 0,
+        KEY_SET_VALUE | KEY_WOW64_64KEY, NULL, &hk, &disp);
+    if (rc != ERROR_SUCCESS)
+        return (int)rc;
+
+    rc = RegSetValueExA(hk, "ElementName", 0, REG_SZ,
+        (const BYTE *)element, (DWORD)(strlen(element) + 1));
+    RegCloseKey(hk);
+    return (rc == ERROR_SUCCESS) ? 0 : (int)rc;
+}
+
+/* Relaunch launchx.exe elevated (UAC) to write the Hyper-V registry key,
+   then wait for it to finish.  Returns the helper's exit code (0 on success,
+   else a Win32 error code). */
+static int
+hyperv_self_elevate_write(const char *vsockport)
+{
+    char self[MAX_PATH];
+    char args[160];
+    SHELLEXECUTEINFOA sei;
+    DWORD exit_code = ERROR_ACCESS_DENIED;
+
+    if (GetModuleFileNameA(NULL, self, sizeof(self)) == 0)
+        return ERROR_FILE_NOT_FOUND;
+
+    snprintf(args, sizeof(args), "--write-hyperv-reg \"%s\"", vsockport);
+
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = "runas";
+    sei.lpFile = self;
+    sei.lpParameters = args;
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteExA(&sei))
+        return (int)GetLastError();
+
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    if (!GetExitCodeProcess(sei.hProcess, &exit_code))
+        exit_code = GetLastError();
+    CloseHandle(sei.hProcess);
+    return (int)exit_code;
+}
+
+/* Write the Hyper-V registry key, self-elevating via UAC when the direct
+   write is denied.  Returns 0 on success, else a Win32 error code. */
+static int
+hyperv_registry_write_elevated(const char *vsockport)
+{
+    struct options_network_and_access_control net;
+    int rc;
+
+    memset(&net, 0, sizeof(net));
+    snprintf(net.vsockport, sizeof(net.vsockport), "%s", vsockport);
+
+    rc = hyperv_update_registry(&net);
+    if (rc == 0 || rc != ERROR_ACCESS_DENIED)
+        return rc;
+
+    return hyperv_self_elevate_write(vsockport);
+}
+
+/* Write the Hyper-V service GUID to the registry (elevating if necessary),
+   surfacing any failure via the shared error modal.  Returns 0 on success,
+   else the Win32 error code.  Skips a rewrite of the same port so the Start
+   handler does not prompt for UAC again after the checkbox already wrote it. */
+static int
+hyperv_registry_apply(const struct options_network_and_access_control *net)
+{
+    static char written_port[16];
+    int rc;
+
+    if (strcmp(written_port, net->vsockport) == 0)
+        return 0;
+
+    rc = hyperv_registry_write_elevated(net->vsockport);
+    if (rc != 0) {
+        char path[512];
+
+        hyperv_registry_path(net->vsockport, path, sizeof(path));
+        snprintf(g_hyperv_error, sizeof(g_hyperv_error),
+            "Could not write the Hyper-V service GUID to the registry:\n"
+            "%s\n\n"
+            "Incoming Hyper-V connections will be rejected.\n"
+            "Approve the administrator prompt, or create the key manually.\n"
+            "(Registry error %d)",
+            path, rc);
+    } else {
+        snprintf(written_port, sizeof(written_port), "%s", net->vsockport);
+    }
+    return rc;
 }
 
 static void
@@ -822,7 +1008,7 @@ struct options_audio {
     int mic_enabled;
     int speaker_enabled;
 
-    int listen_sel;          /* 0 = loopback, 1 = all interfaces */
+    int listen_sel;          /* 0 = loopback, 1 = all IPv4, 2 = IPv4 + IPv6 */
     int auth_sel;            /* 0 = cookie, 1 = anonymous, 2 = IP allow-list */
     char auth_acl[256];      /* semicolon-separated IPs for auth_sel == 2 */
 
@@ -900,13 +1086,19 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
         unsigned char cookie[256];
         int have_cookie;
 
-        have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
+        if (inaddr_validate(opt->host, NULL)) {
+            snprintf(ssh->display_error, sizeof ssh->display_error,
+                     "Invalid IP address \"%s\"", opt->host);
+            InterlockedExchange(&ssh->display_error_pending, 1);
+        } else {
+            have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
 
-        ssh_session_start(ssh, opt->host, opt->username, opt->password,
-            net->listeningport_sel, opt->x11_forwarding,
-            have_cookie, atoi(audio->pulseport),
-            have_cookie ? cookie : NULL);
-        ssh_request_resize(ssh, term->ncols, term->nrows);
+            ssh_session_start(ssh, opt->host, opt->username, opt->password,
+                net->listeningport_sel, opt->x11_forwarding,
+                have_cookie, atoi(audio->pulseport),
+                have_cookie ? cookie : NULL);
+            ssh_request_resize(ssh, term->ncols, term->nrows);
+        }
     }
 
     terminal_draw(ctx, term);
@@ -925,6 +1117,11 @@ tab_network_and_access_control(struct nk_context *ctx,
     struct options_network_and_access_control *opt)
 {
     struct nk_rect b;
+    nk_flags vsockport_flags;
+    int port_committed;
+    static char prev_vsockport[16];
+    static int prev_hyperv_enabled;
+    static int hyperv_seen;
 
     heading(ctx, "Networking & access control");
 
@@ -952,6 +1149,41 @@ tab_network_and_access_control(struct nk_context *ctx,
     nk_slider_int(ctx, 1, &opt->maxbigreqsize, 127, 1);
     option_tooltip(ctx, b, "Largest request the server will accept, in megabytes.");
     nk_labelf(ctx, NK_TEXT_LEFT, "%d", opt->maxbigreqsize);
+
+    text_option(ctx, "Hyper-V VM GUID (-vmid)", opt->vmid, (int)sizeof(opt->vmid),
+        "Hyper-V virtual machine GUID to accept VSock connections from.");
+
+    vsockport_flags = text_option(ctx, "Hyper-V VSock listen port (-vsockport)", opt->vsockport, (int)sizeof(opt->vsockport),
+        "Port number to listen on for VSock connections. Default 106000.");
+
+    {
+        char path[512];
+        hyperv_registry_path(opt->vsockport, path, sizeof(path));
+        readonly_option_fullrow(ctx, path,
+            "Full registry key under which the Hyper-V service GUID must be\nregistered to accept incoming Hyper-V connections.");
+    }
+
+    checkbox_option(ctx, "Update registry with Hyper-V GUID", &opt->hyperv_registry_enabled,
+        "You need to check this to allow incoming Hyper-V connections");
+
+    /* Write the registry entry when the box is checked, or when the vsockport
+       edit commits (focus leaves the field), rather than on every keystroke. */
+    if (!hyperv_seen) {
+        snprintf(prev_vsockport, sizeof(prev_vsockport), "%s", opt->vsockport);
+        prev_hyperv_enabled = opt->hyperv_registry_enabled;
+        hyperv_seen = 1;
+    } else {
+        port_committed = (vsockport_flags & NK_EDIT_DEACTIVATED) &&
+                         strcmp(prev_vsockport, opt->vsockport) != 0;
+        if (port_committed)
+            snprintf(prev_vsockport, sizeof(prev_vsockport), "%s", opt->vsockport);
+
+        if (opt->hyperv_registry_enabled &&
+            (prev_hyperv_enabled != opt->hyperv_registry_enabled || port_committed))
+            hyperv_registry_apply(opt);
+
+        prev_hyperv_enabled = opt->hyperv_registry_enabled;
+    }
 }
 
 struct options_xdmcp {
@@ -1011,8 +1243,16 @@ tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
         nk_widget_disable_end(ctx);
 }
 
+struct screen_geometry_entry {
+    char width[16];
+    char height[16];
+    char x[16];
+    char y[16];
+    char monitor[16];
+};
+
 struct options_screen_windowing {
-    char screen_geometry[256];
+    struct screen_geometry_entry screens[3];
     int fullscreen_enabled;
     int rootless_enabled;
     int multiwindow_enabled;
@@ -1030,11 +1270,55 @@ struct options_screen_windowing {
     int nocursor_enabled;
 };
 
+static int
+screen_geometry_set(const struct options_screen_windowing *opt)
+{
+    int i;
+
+    for (i = 0; i < 3; ++i)
+        if (opt->screens[i].width[0] || opt->screens[i].height[0] ||
+            opt->screens[i].x[0] || opt->screens[i].y[0] ||
+            opt->screens[i].monitor[0])
+            return 1;
+    return 0;
+}
+
+static char *
+screen_geometry_field(struct options_screen_windowing *opt, int s, int f)
+{
+    struct screen_geometry_entry *e = &opt->screens[s];
+
+    switch (f) {
+    case 0: return e->width;
+    case 1: return e->height;
+    case 2: return e->x;
+    case 3: return e->y;
+    default: return e->monitor;
+    }
+}
+
+static const char *scr_geom_screen_label[3] = {
+    "Screen 1", "Screen 2", "Screen 3",
+};
+
+static const char *scr_geom_field_label[5] = {
+    "Width", "Height", "X-offset", "Y-offset", "Monitor",
+};
+
+static const char *scr_geom_tip[5] = {
+    "Screen width in pixels. Leave empty to derive it from the height (3:2).",
+    "Screen height in pixels. Leave empty to derive it from the width (3:2).",
+    "Horizontal position of the screen within the virtual desktop.",
+    "Vertical position of the screen within the virtual desktop.",
+    "Windows monitor (1-based) to place this screen on; empty = default.",
+};
+
 static void
 tab_screen_and_windowing(struct nk_context *ctx,
     struct options_screen_windowing *opt)
 {
-    int fs, rl, mw, nd, lp, resize_scrollbars;
+    int fs, rl, mw, nd, lp, resize_scrollbars, scr;
+    int s;
 
     heading(ctx, "Screen & windowing modes");
 
@@ -1044,29 +1328,46 @@ tab_screen_and_windowing(struct nk_context *ctx,
     nd = opt->nodecoration_enabled;
     lp = opt->lesspointer_enabled;
     resize_scrollbars = (opt->resize_sel == 1);
+    scr = screen_geometry_set(opt);
 
-    if (mw)
+    if (mw || fs || rl || opt->multimonitors_enabled)
         nk_widget_disable_begin(ctx);
-    text_option(ctx, "Screen geometry (-screen)", opt->screen_geometry, (int)sizeof(opt->screen_geometry), "Create screen <n> with optional size and position. Add @<monitor> to\nplace it on a monitor. Examples: 0 800x600+100+100@2 ; 0 @1");
-    if (mw)
+    for (s = 0; s < 3; ++s) {
+        nk_style_push_font(ctx, &g_bold_font->nk);
+        nk_layout_row_dynamic(ctx, 24, 1);
+        nk_label(ctx, scr_geom_screen_label[s], NK_TEXT_LEFT);
+        nk_style_pop_font(ctx);
+
+        nk_layout_row_dynamic(ctx, 30, 4);
+        text_option_cell(ctx, scr_geom_field_label[0], screen_geometry_field(opt, s, 0), 16, scr_geom_tip[0], NK_TEXT_RIGHT);
+        text_option_cell(ctx, scr_geom_field_label[1], screen_geometry_field(opt, s, 1), 16, scr_geom_tip[1], NK_TEXT_RIGHT);
+
+        nk_layout_row_dynamic(ctx, 30, 4);
+        text_option_cell(ctx, scr_geom_field_label[2], screen_geometry_field(opt, s, 2), 16, scr_geom_tip[2], NK_TEXT_RIGHT);
+        text_option_cell(ctx, scr_geom_field_label[3], screen_geometry_field(opt, s, 3), 16, scr_geom_tip[3], NK_TEXT_RIGHT);
+
+        nk_layout_row_dynamic(ctx, 30, 4);
+        text_option_cell(ctx, scr_geom_field_label[4], screen_geometry_field(opt, s, 4), 16, scr_geom_tip[4], NK_TEXT_RIGHT);
+    }
+    if (mw || fs || rl || opt->multimonitors_enabled)
         nk_widget_disable_end(ctx);
 
-    if (mw || rl || nd || lp || resize_scrollbars)
+    if (mw || rl || nd || lp || resize_scrollbars || scr)
         nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Run in fullscreen mode (-fullscreen)", &opt->fullscreen_enabled, "Make the X server window fill the entire Windows desktop.");
-    if (mw || rl || nd || lp || resize_scrollbars)
+    if (mw || rl || nd || lp || resize_scrollbars || scr)
         nk_widget_disable_end(ctx);
 
-    if (mw || fs || nd)
+    if (mw || fs || nd || scr)
         nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Transparent root window (-rootless)", &opt->rootless_enabled, "Run rootless: the root window is hidden and only top-level X windows\nshow. Needs an external window manager; not with -multiwindow or\n-fullscreen.");
-    if (mw || fs || nd)
+    if (mw || fs || nd || scr)
         nk_widget_disable_end(ctx);
 
-    if (rl || fs || nd)
+    if (rl || fs || nd || scr)
         nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Run in multiwindow mode (-multiwindow)", &opt->multiwindow_enabled, "Run multiwindow: each top-level X window becomes its own Windows\nwindow with a built-in window manager. Not with -rootless or\n-fullscreen.");
-    if (rl || fs || nd)
+    if (rl || fs || nd || scr)
         nk_widget_disable_end(ctx);
 
     if (mw || rl || fs)
@@ -1075,7 +1376,11 @@ tab_screen_and_windowing(struct nk_context *ctx,
     if (mw || rl || fs)
         nk_widget_disable_end(ctx);
 
+    if (scr)
+        nk_widget_disable_begin(ctx);
     checkbox_option(ctx, "Use entire virtual screen (-multimonitors)", &opt->multimonitors_enabled, "Create one screen covering all monitors, with fake XINERAMA data\ndescribing each monitor.");
+    if (scr)
+        nk_widget_disable_end(ctx);
 
     if (fs)
         nk_widget_disable_begin(ctx);
@@ -1445,8 +1750,6 @@ struct options_logging_extensions {
     char schedInterval[16];
     char schedMax[16];
     int tst_enabled;
-    char vmid[256];
-    char vsockport[16];
     int extension_enabled[NUM_EXTENSIONS];
 };
 
@@ -1481,10 +1784,6 @@ tab_logging_extensions(struct nk_context *ctx,
     text_option(ctx, "Scheduler max slice (-schedMax)", opt->schedMax, (int)sizeof(opt->schedMax), "Set the smart scheduler's maximum time slice in milliseconds.");
 
     checkbox_option(ctx, "Disable testing extensions (-tst)", &opt->tst_enabled, "Disable all testing extensions, such as XTEST.");
-
-    text_option(ctx, "Hyper-V VM GUID (-vmid)", opt->vmid, (int)sizeof(opt->vmid), "Hyper-V virtual machine GUID to accept VSock connections from.");
-
-    text_option(ctx, "VSock listen port (-vsockport)", opt->vsockport, (int)sizeof(opt->vsockport), "Port number to listen on for VSock connections. Default 106000.");
 
     nk_layout_row_dynamic(ctx, 30, 1);
     nk_label(ctx, "Extensions", NK_TEXT_LEFT);
@@ -1563,10 +1862,7 @@ local_ipv4(char *out, size_t outsize)
 {
     static char cached[64];
     static int resolved;            /* 0 = not tried, 1 = ok, -1 = failed */
-    char host[256];
-    struct addrinfo hints, *res = NULL, *p;
     int found = 0;
-    WSADATA wsa;
 
     if (resolved) {
         if (resolved < 0)
@@ -1575,29 +1871,81 @@ local_ipv4(char *out, size_t outsize)
         return 0;
     }
 
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        resolved = -1;
-        return -1;
+    /* Preferred: ask the routing table which interface reaches the default
+       gateway (0.0.0.0), then take that adapter's IPv4 unicast address. */
+    {
+        DWORD ifindex = 0;
+        IP_ADAPTER_ADDRESSES *list = NULL, *a;
+
+        if (GetBestInterface(0, &ifindex) == NO_ERROR) {
+            ULONG buflen = 0;
+
+            if (GetAdaptersAddresses(AF_INET, 0, NULL, NULL, &buflen) ==
+                    ERROR_BUFFER_OVERFLOW &&
+                (list = (IP_ADAPTER_ADDRESSES *) malloc(buflen)) != NULL) {
+                if (GetAdaptersAddresses(AF_INET, 0, NULL, list, &buflen) ==
+                        NO_ERROR) {
+                    for (a = list; a; a = a->Next) {
+                        IP_ADAPTER_UNICAST_ADDRESS *u;
+
+                        if (a->IfIndex != ifindex)
+                            continue;
+                        for (u = a->FirstUnicastAddress; u; u = u->Next) {
+                            struct sockaddr_in *sa;
+                            unsigned long addr;
+
+                            if (!u->Address.lpSockaddr ||
+                                u->Address.lpSockaddr->sa_family != AF_INET)
+                                continue;
+                            sa = (struct sockaddr_in *) u->Address.lpSockaddr;
+                            addr = ntohl(sa->sin_addr.s_addr);
+                            if ((addr >> 24) == 127)          /* loopback */
+                                continue;
+                            if ((addr & 0xffff0000UL) == 0xa9fe0000UL) /* 169.254 */
+                                continue;
+                            if (inet_ntop(AF_INET, &sa->sin_addr,
+                                          cached, sizeof(cached))) {
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found)
+                            break;
+                    }
+                }
+                free(list);
+            }
+        }
     }
 
-    if (gethostname(host, sizeof(host)) == 0) {
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        if (getaddrinfo(host, NULL, &hints, &res) == 0) {
-            for (p = res; p != NULL; p = p->ai_next) {
-                struct sockaddr_in *sa = (struct sockaddr_in *)p->ai_addr;
-                unsigned long a = ntohl(sa->sin_addr.s_addr);
-                if ((a >> 24) == 127)                   /* loopback */
-                    continue;
-                if ((a & 0xffff0000UL) == 0xa9fe0000UL) /* link-local 169.254 */
-                    continue;
-                if (inet_ntop(AF_INET, &sa->sin_addr, cached, sizeof(cached))) {
-                    found = 1;
-                    break;
+    /* Fallback: resolve the hostname and take the first usable IPv4 address. */
+    if (!found) {
+        WSADATA wsa;
+        char host[256];
+        struct addrinfo hints, *res = NULL, *p;
+
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
+            if (gethostname(host, sizeof(host)) == 0) {
+                memset(&hints, 0, sizeof(hints));
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_STREAM;
+                if (getaddrinfo(host, NULL, &hints, &res) == 0) {
+                    for (p = res; p != NULL; p = p->ai_next) {
+                        struct sockaddr_in *sa = (struct sockaddr_in *)p->ai_addr;
+                        unsigned long a = ntohl(sa->sin_addr.s_addr);
+                        if ((a >> 24) == 127)                   /* loopback */
+                            continue;
+                        if ((a & 0xffff0000UL) == 0xa9fe0000UL) /* link-local 169.254 */
+                            continue;
+                        if (inet_ntop(AF_INET, &sa->sin_addr,
+                                      cached, sizeof(cached))) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    freeaddrinfo(res);
                 }
             }
-            freeaddrinfo(res);
         }
     }
 
@@ -1618,7 +1966,7 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
     {
         char env[128];
         char listen[64] = "127.0.0.1";
-        if (opt->listen_sel == 1)
+        if (opt->listen_sel >= 1)
             local_ipv4(listen, sizeof(listen));
         snprintf(env, sizeof(env), "export PULSE_SERVER=tcp:%s:%s",
             listen, opt->pulseport[0] ? opt->pulseport : "4713");
@@ -1645,7 +1993,7 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
         "TCP port the embedded PulseAudio server listens on (default 4713).");
     combobox_option(ctx, "Listen address", audio_listen_items, AUDIO_LISTEN_COUNT,
         &opt->listen_sel,
-        "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest)\nor 0.0.0.0 (all interfaces). Loopback is sufficient when audio is\nforwarded over an SSH tunnel; choose All interfaces only for LAN clients.");
+        "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest),\n0.0.0.0 (all IPv4 interfaces), or both IPv4 and IPv6. Loopback is\nsufficient when audio is forwarded over an SSH tunnel; choose an\nAll-interfaces option only for LAN clients.");
     combobox_option(ctx, "Authentication", audio_auth_items, AUDIO_AUTH_COUNT,
         &opt->auth_sel,
         "How remote clients authenticate. Cookie requires the shared\npulse-cookie (default); Anonymous accepts any client; IP allow-list\naccepts only the addresses listed below. Note that some client\napplications like FireFox do not support cookies.");
@@ -1710,6 +2058,9 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .maxclients_sel = 4,      /* 1024 (LIMITCLIENTS) */
         .maxbigreqsize = 4,       /* 4 MB (MAX_BIG_REQUEST_SIZE) */
         .listeningport_sel = 0,   /* :0 (default) */
+        .vmid = {0},
+        .vsockport = "106000",
+        .hyperv_registry_enabled = 0,
     };
     *xdmcp_opt = (struct options_xdmcp) {
         .xdmcp_enabled = 0,
@@ -1725,7 +2076,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .display_id = {0},
     };
     *screen_opt = (struct options_screen_windowing) {
-        .screen_geometry = {0},
+        .screens = {0},
         .fullscreen_enabled = 0,
         .rootless_enabled = 0,
         .multiwindow_enabled = 0,
@@ -1829,8 +2180,6 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .schedInterval = "2",      /* SMART_SCHEDULE_DEFAULT_INTERVAL */
         .schedMax = "10",          /* SMART_SCHEDULE_MAX_SLICE */
         .tst_enabled = 0,
-        .vmid = {0},
-        .vsockport = "106000",
         .extension_enabled = {
             1, 1, 1, 0,  /* SHAPE, XTEST, SECURITY, XINERAMA(off by default) */
             1, 1, 1, 1,  /* XFIXES, XFree86-Bigfont, RENDER, RANDR */
@@ -1916,6 +2265,9 @@ cf_build(struct cfentry *e,
     e[n++] = CF_INT("networkingaccesscontrol", "maxclients", net->maxclients_sel, 0, (int)MAXCLIENTS_COUNT - 1);
     e[n++] = CF_INT("networkingaccesscontrol", "maxbigreqsize", net->maxbigreqsize, 1, 127);
     e[n++] = CF_INT("networkingaccesscontrol", "listeningport", net->listeningport_sel, 0, (int)LISTENINGPORT_COUNT - 1);
+    e[n++] = CF_STR("networkingaccesscontrol", "hypervvmguid", net->vmid);
+    e[n++] = CF_STR("networkingaccesscontrol", "vsocklistenport", net->vsockport);
+    e[n++] = CF_BOOL("networkingaccesscontrol", "updateregistrywithhypervguid", net->hyperv_registry_enabled);
 
     e[n++] = CF_BOOL("xdmcp", "enablexdmcp", xdmcp->xdmcp_enabled);
     e[n++] = CF_STR("xdmcp", "queryhost", xdmcp->query_host);
@@ -1929,7 +2281,21 @@ cf_build(struct cfentry *e,
     e[n++] = CF_STR("xdmcp", "magiccookie", xdmcp->cookie);
     e[n++] = CF_STR("xdmcp", "displayid", xdmcp->display_id);
 
-    e[n++] = CF_STR("screenwindowingmodes", "screengeometry", screen->screen_geometry);
+    e[n++] = CF_STR("screenwindowingmodes", "screen1width", screen->screens[0].width);
+    e[n++] = CF_STR("screenwindowingmodes", "screen1height", screen->screens[0].height);
+    e[n++] = CF_STR("screenwindowingmodes", "screen1xoffset", screen->screens[0].x);
+    e[n++] = CF_STR("screenwindowingmodes", "screen1yoffset", screen->screens[0].y);
+    e[n++] = CF_STR("screenwindowingmodes", "screen1monitor", screen->screens[0].monitor);
+    e[n++] = CF_STR("screenwindowingmodes", "screen2width", screen->screens[1].width);
+    e[n++] = CF_STR("screenwindowingmodes", "screen2height", screen->screens[1].height);
+    e[n++] = CF_STR("screenwindowingmodes", "screen2xoffset", screen->screens[1].x);
+    e[n++] = CF_STR("screenwindowingmodes", "screen2yoffset", screen->screens[1].y);
+    e[n++] = CF_STR("screenwindowingmodes", "screen2monitor", screen->screens[1].monitor);
+    e[n++] = CF_STR("screenwindowingmodes", "screen3width", screen->screens[2].width);
+    e[n++] = CF_STR("screenwindowingmodes", "screen3height", screen->screens[2].height);
+    e[n++] = CF_STR("screenwindowingmodes", "screen3xoffset", screen->screens[2].x);
+    e[n++] = CF_STR("screenwindowingmodes", "screen3yoffset", screen->screens[2].y);
+    e[n++] = CF_STR("screenwindowingmodes", "screen3monitor", screen->screens[2].monitor);
     e[n++] = CF_BOOL("screenwindowingmodes", "runinfullscreenmode", screen->fullscreen_enabled);
     e[n++] = CF_BOOL("screenwindowingmodes", "transparentrootwindow", screen->rootless_enabled);
     e[n++] = CF_BOOL("screenwindowingmodes", "runinmultiwindowmode", screen->multiwindow_enabled);
@@ -2005,8 +2371,6 @@ cf_build(struct cfentry *e,
     e[n++] = CF_STR("loggingschedulingextensions", "schedulerinterval", logging->schedInterval);
     e[n++] = CF_STR("loggingschedulingextensions", "schedulermaxslice", logging->schedMax);
     e[n++] = CF_BOOL("loggingschedulingextensions", "disabletestingextensions", logging->tst_enabled);
-    e[n++] = CF_STR("loggingschedulingextensions", "hypervvmguid", logging->vmid);
-    e[n++] = CF_STR("loggingschedulingextensions", "vsocklistenport", logging->vsockport);
     for (i = 0; i < NUM_EXTENSIONS; ++i)
         e[n++] = CF_BOOL("loggingschedulingextensions", extension_keys[i], logging->extension_enabled[i]);
 
@@ -2294,6 +2658,14 @@ sanitize_options(struct options_xdmcp *xdmcp,
 {
     int changed = 0;
 
+    /* -screen geometry is mutually exclusive with the screen modes. */
+    if (screen_geometry_set(screen)) {
+        if (screen->multiwindow_enabled) { screen->multiwindow_enabled = 0; changed = 1; }
+        if (screen->rootless_enabled) { screen->rootless_enabled = 0; changed = 1; }
+        if (screen->fullscreen_enabled) { screen->fullscreen_enabled = 0; changed = 1; }
+        if (screen->multimonitors_enabled) { screen->multimonitors_enabled = 0; changed = 1; }
+    }
+
     /* -multiwindow, -rootless and -fullscreen are mutually exclusive. */
     if (screen->multiwindow_enabled && screen->rootless_enabled) {
         screen->rootless_enabled = 0;
@@ -2507,6 +2879,8 @@ build_server_cmdline(struct cmdline *c,
         cl_arg(c, "-maxbigreqsize");
         cl_arg(c, tmp);
     }
+    cl_opt(c, "-vmid", net->vmid, NULL);
+    cl_opt(c, "-vsockport", net->vsockport, "106000");
 
     /* XDMCP */
     if (xdmcp->xdmcp_enabled) {
@@ -2525,34 +2899,62 @@ build_server_cmdline(struct cmdline *c,
     }
 
     /* Screen & windowing modes */
-    if (screen->screen_geometry[0] && !screen->multiwindow_enabled) {
-        char geo[256];
-        char *p;
-        strcpy(geo, screen->screen_geometry);
-        cl_arg(c, "-screen");
-        p = geo;
-        while (*p) {
-            char *s, save;
-            while (*p == ' ' || *p == '\t')
-                ++p;
-            if (!*p)
-                break;
-            s = p;
-            while (*p && *p != ' ' && *p != '\t')
-                ++p;
-            save = *p;
-            *p = '\0';
-            cl_arg(c, s);
-            *p = save;
-            if (save)
-                ++p;
+    {
+        int scr = screen_geometry_set(screen);
+        int counter = 0;
+
+        if (scr && !screen->fullscreen_enabled &&
+            !screen->rootless_enabled && !screen->multiwindow_enabled &&
+            !screen->multimonitors_enabled) {
+            int si;
+            for (si = 0; si < 3; ++si) {
+                struct screen_geometry_entry *g = &screen->screens[si];
+                int w = g->width[0]   ? atoi(g->width)   : 0;
+                int h = g->height[0]  ? atoi(g->height)  : 0;
+                int x = g->x[0]       ? atoi(g->x)       : 0;
+                int y = g->y[0]       ? atoi(g->y)       : 0;
+                int m = g->monitor[0] ? atoi(g->monitor) : 0;
+                int has_w = g->width[0]   != '\0';
+                int has_h = g->height[0]  != '\0';
+                int has_x = g->x[0]       != '\0';
+                int has_y = g->y[0]       != '\0';
+                int has_m = g->monitor[0] != '\0';
+                char geo[64];
+                char num[2];
+                int off = 0;
+
+                if (!has_w && has_h) { w = h * 3 / 2; has_w = 1; }
+                if (!has_h && has_w) { h = w * 2 / 3; has_h = 1; }
+                if (!has_x && has_y) { x = 0; has_x = 1; }
+                if (!has_y && has_x) { y = 0; has_y = 1; }
+                if ((has_x || has_y) && !has_w && !has_h) { has_x = 0; has_y = 0; }
+
+                if (!has_w && !has_h && !has_x && !has_y && !has_m)
+                    continue;
+
+                geo[0] = '\0';
+                if (has_w && has_h)
+                    off += snprintf(geo + off, sizeof(geo) - off, "%dx%d", w, h);
+                if (has_x && has_y)
+                    off += snprintf(geo + off, sizeof(geo) - off, "+%d+%d", x, y);
+                if (has_m)
+                    off += snprintf(geo + off, sizeof(geo) - off, "@%d", m);
+
+                num[0] = (char)('0' + counter);
+                num[1] = '\0';
+                cl_arg(c, "-screen");
+                cl_arg(c, num);
+                cl_arg(c, geo);
+                counter++;
+            }
         }
+
+        cl_if(c, screen->fullscreen_enabled && !scr, "-fullscreen");
+        cl_if(c, screen->rootless_enabled && !scr, "-rootless");
+        cl_if(c, screen->multiwindow_enabled && !scr, "-multiwindow");
+        cl_if(c, screen->nodecoration_enabled, "-nodecoration");
+        cl_if(c, screen->multimonitors_enabled && !scr, "-multimonitors");
     }
-    cl_if(c, screen->fullscreen_enabled, "-fullscreen");
-    cl_if(c, screen->rootless_enabled, "-rootless");
-    cl_if(c, screen->multiwindow_enabled, "-multiwindow");
-    cl_if(c, screen->nodecoration_enabled, "-nodecoration");
-    cl_if(c, screen->multimonitors_enabled, "-multimonitors");
     if (screen->resize_sel == 0)
         cl_arg(c, "-resize=none");
     else if (screen->resize_sel == 1)
@@ -2707,8 +3109,6 @@ build_server_cmdline(struct cmdline *c,
     cl_opt(c, "-schedInterval", logging->schedInterval, "2");
     cl_opt(c, "-schedMax", logging->schedMax, "10");
     cl_if(c, logging->tst_enabled, "-tst");
-    cl_opt(c, "-vmid", logging->vmid, NULL);
-    cl_opt(c, "-vsockport", logging->vsockport, "106000");
     {
         static const int ext_default[NUM_EXTENSIONS] = {
             1, 1, 1, 0,  /* SHAPE, XTEST, SECURITY, XINERAMA(off by default) */
@@ -2753,7 +3153,6 @@ write_default_pa(struct options_audio *a)
     FILE *f;
     const char *s;
     char *d;
-    const char *listen;
 
     if (config_dir(dir, sizeof dir))
         return;
@@ -2801,17 +3200,33 @@ write_default_pa(struct options_audio *a)
     if (a->loopback_enabled)
         fputs("load-module module-loopback\r\n", f);
 
-    listen = a->listen_sel == 1 ? "0.0.0.0" : "127.0.0.1";
-    fputs("load-module module-native-protocol-tcp", f);
-    fprintf(f, " port=%s listen=%s",
-        a->pulseport[0] ? a->pulseport : "4713", listen);
-    if (a->auth_sel == 1)
-        fputs(" auth-anonymous=1", f);
-    else if (a->auth_sel == 2 && a->auth_acl[0])
-        fprintf(f, " auth-ip-acl=%s auth-cookie-enabled=0", a->auth_acl);
-    else
-        fprintf(f, " auth-cookie=%s", cookie_esc);
-    fputs("\r\n", f);
+    {
+        const char *port = a->pulseport[0] ? a->pulseport : "4713";
+        const char *listens[2];
+        int nlisten = 0;
+        int i;
+
+        if (a->listen_sel == 0)
+            listens[nlisten++] = "127.0.0.1";
+        else if (a->listen_sel == 1)
+            listens[nlisten++] = "0.0.0.0";
+        else {
+            listens[nlisten++] = "0.0.0.0";
+            listens[nlisten++] = "::";
+        }
+
+        for (i = 0; i < nlisten; i++) {
+            fputs("load-module module-native-protocol-tcp", f);
+            fprintf(f, " port=%s listen=%s", port, listens[i]);
+            if (a->auth_sel == 1)
+                fputs(" auth-anonymous=1", f);
+            else if (a->auth_sel == 2 && a->auth_acl[0])
+                fprintf(f, " auth-ip-acl=%s auth-cookie-enabled=0", a->auth_acl);
+            else
+                fprintf(f, " auth-cookie=%s", cookie_esc);
+            fputs("\r\n", f);
+        }
+    }
 
     fclose(f);
 }
@@ -2961,7 +3376,7 @@ validate_acl_inputs(struct options_network_and_access_control *net,
     return 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     GdiFont *font;
     struct nk_context *ctx;
@@ -2989,6 +3404,15 @@ int main(void)
     terminal term;
     ssh_session ssh;
     struct nk_image logo;
+
+    /* Elevated helper mode: write the Hyper-V registry key and exit. */
+    if (argc >= 3 && strcmp(argv[1], "--write-hyperv-reg") == 0) {
+        struct options_network_and_access_control net;
+
+        memset(&net, 0, sizeof(net));
+        snprintf(net.vsockport, sizeof(net.vsockport), "%s", argv[2]);
+        return hyperv_update_registry(&net);
+    }
 
     reset_all_options(&ssh_opt, &net_opt, &xdmcp_opt, &screen_opt, &pointer_opt,
         &xkb_opt, &accessx_opt, &desktop_opt, &glx_opt, &fonts_opt, &logging_opt,
@@ -3184,7 +3608,7 @@ int main(void)
             if (nk_begin(ctx, "LaunchX",
                 nk_rect(0, 0, (float)client.right, (float)client.bottom),
                 NK_WINDOW_NO_SCROLLBAR |
-                ((g_confirm_reset || g_notice[0] || g_confirm_exit || g_acl_error[0]) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
+                ((g_confirm_reset || g_notice[0] || g_confirm_exit || g_acl_error[0] || g_hyperv_error[0]) ? (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT) : 0)))
             {
                 cr = nk_window_get_content_region(ctx);
                 W = cr.w;
@@ -3312,7 +3736,9 @@ int main(void)
                                 if (audio_opt.audio_enabled) {
                                     write_default_pa(&audio_opt);
                                 }
-                                launch_ming64x(c.buf);
+                                if (!net_opt.hyperv_registry_enabled ||
+                                    hyperv_registry_apply(&net_opt) == 0)
+                                    launch_ming64x(c.buf);
                             }
                         }
                     }
@@ -3437,47 +3863,14 @@ int main(void)
             nk_end(ctx);
         }
 
-        if (g_notice[0]) {
-            RECT rc;
-            struct nk_rect pr;
+        if (g_notice[0])
+            ok_dialog(ctx, wnd, "Invalid option combination", g_notice, 190.0f, 55.0f);
 
-            GetClientRect(wnd, &rc);
-            pr = nk_rect((rc.right - 640.0f) / 2.0f,
-                         (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
+        if (g_acl_error[0])
+            ok_dialog(ctx, wnd, "Invalid IP list", g_acl_error, 190.0f, 55.0f);
 
-            if (nk_begin(ctx, "Invalid option combination", pr,
-                    NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-                nk_layout_row_dynamic(ctx, 15, 1);
-                nk_label_wrap(ctx, " ");
-                nk_layout_row_dynamic(ctx, 55, 1);
-                nk_label_wrap(ctx, g_notice);
-                nk_layout_row_dynamic(ctx, 34, 1);
-                if (dialog_button(ctx, "OK"))
-                    g_notice[0] = '\0';
-            }
-            nk_end(ctx);
-        }
-
-        if (g_acl_error[0]) {
-            RECT rc;
-            struct nk_rect pr;
-
-            GetClientRect(wnd, &rc);
-            pr = nk_rect((rc.right - 640.0f) / 2.0f,
-                         (rc.bottom - 150.0f) / 2.0f, 640.0f, 190.0f);
-
-            if (nk_begin(ctx, "Invalid IP list", pr,
-                    NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
-                nk_layout_row_dynamic(ctx, 15, 1);
-                nk_label_wrap(ctx, " ");
-                nk_layout_row_dynamic(ctx, 55, 1);
-                nk_label_wrap(ctx, g_acl_error);
-                nk_layout_row_dynamic(ctx, 34, 1);
-                if (dialog_button(ctx, "OK"))
-                    g_acl_error[0] = '\0';
-            }
-            nk_end(ctx);
-        }
+        if (g_hyperv_error[0])
+            ok_dialog(ctx, wnd, "Registry write failed", g_hyperv_error, 240.0f, 130.0f);
 
         if (g_field_menu_owner != NULL && !g_field_menu_seen)
             g_field_menu_owner = NULL;

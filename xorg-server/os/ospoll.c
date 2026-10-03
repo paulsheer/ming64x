@@ -171,9 +171,18 @@ struct overlapped_connect {
     struct sockaddr_storage connect_addr;
 };
 
+#ifdef HYPERV
+struct overlapped_hyperv {
+    struct sockbuf *listener;
+};
+#endif
+
 union overlapped_par {
     struct overlapped_accept ua;
     struct overlapped_connect uc;
+#ifdef HYPERV
+    struct overlapped_hyperv uh;
+#endif
 };
 
 struct overlapped {
@@ -892,6 +901,25 @@ ospoll_sockbuf_free(struct sockbuf *sb)
 {
     if (!sb)
         return;
+#ifdef HYPERV
+    if (sb->accept_thread) {
+        HANDLE th = sb->accept_thread;
+        int s = sb->s;
+
+        sb->accept_thread = NULL;
+        sb->s = (int) INVALID_SOCKET;
+        __sync_synchronize();
+
+        if (s != INVALID_SOCKET)
+            closesocket((SOCKET) s);
+        WaitForSingleObject(th, INFINITE);
+        CloseHandle(th);
+        /* There could be IO completions pending so deliberately
+         * leak the listener -- this is ok as a hack since only
+         * one is ever created */
+        return;
+    }
+#endif
     while (sb->accept_head) {
         struct sockbuf *next = sb->accept_head->accept_next;
 
@@ -1014,6 +1042,94 @@ ospoll_write(struct ospoll *ospoll, struct sockbuf *s)
     s->bufwr->writing = 1;
 }
 
+#ifdef HYPERV
+#ifndef AF_HYPERV
+#define AF_HYPERV 34
+#endif
+
+struct hyperv_accept_ctx {
+    struct ospoll *ospoll;
+    struct sockbuf *listener;
+};
+
+/* Hyper-V sockets do not support AcceptEx, so accept() runs on a dedicated
+ * thread. Each accepted connection gets its own overlapped_hyperv completion,
+ * posted to the IOCP; process_overlapped then appends it to the listener's
+ * accept_head on the main poll loop, delivering it through the normal
+ * SocketHyperVAccept path. */
+static DWORD WINAPI
+hyperv_accept_thread(LPVOID arg)
+{
+    struct hyperv_accept_ctx *ctx = arg;
+    struct ospoll *ospoll = ctx->ospoll;
+    struct sockbuf *listener = ctx->listener;
+    SOCKET ls = (SOCKET) listener->s;
+
+    for (;;) {
+        fd_set rfd;
+        struct timeval tv;
+        SOCKET n;
+        int r;
+
+        /* Teardown clears listener->s to INVALID_SOCKET before closing the
+         * socket; poll here so shutdown does not depend on closesocket()
+         * unblocking a blocked accept(), which is undefined on Windows. */
+        __sync_synchronize();
+        if (listener->s == (int) INVALID_SOCKET)
+            break;
+
+        FD_ZERO(&rfd);
+        FD_SET(ls, &rfd);
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;
+
+        r = select(0, &rfd, NULL, NULL, &tv);
+        if (r == SOCKET_ERROR) {
+            ErrorF("[hyperv] accept thread: select() failed err=%d, exiting\n",
+                   WSAGetLastError());
+            break;
+        }
+        if (r == 0)
+            continue;
+
+        n = accept(ls, NULL, NULL);
+        if (n == INVALID_SOCKET) {
+            if (WSAGetLastError() == WSAECONNABORTED)
+                continue;
+            ErrorF("[hyperv] accept thread: accept() failed err=%d, exiting\n",
+                   WSAGetLastError());
+            break;
+        }
+
+        {
+            struct sockbuf *nsb = ospoll_sockbuf_alloc((int) n);
+            struct overlapped *u;
+
+            if (!nsb) {
+                closesocket(n);
+                continue;
+            }
+            nsb->family = AF_HYPERV;
+            nsb->accept_next = NULL;
+            nsb->overlapped_hyperv = ospoll_overlapped_alloc(nsb);
+            if (!nsb->overlapped_hyperv) {
+                closesocket(n);
+                ospoll_sockbuf_free(nsb);
+                continue;
+            }
+            u = nsb->overlapped_hyperv;
+            u->u.uh.listener = listener;
+            u->ref++;
+            PostQueuedCompletionStatus(ospoll->iocp_handle, 0, 0,
+                                       &u->w.overlapped);
+        }
+    }
+
+    free(ctx);
+    return 0;
+}
+#endif
+
 static void
 ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
 {
@@ -1030,6 +1146,28 @@ ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
         getsockname(s->s, (struct sockaddr *) &a, &al);
         s->family = a.ss_family;
     }
+
+#ifdef HYPERV
+    if (s->family == AF_HYPERV) {
+        struct hyperv_accept_ctx *ctx = malloc(sizeof(*ctx));
+
+        if (!ctx)
+            return;
+        ctx->ospoll = ospoll;
+        ctx->listener = s;
+        s->accept_thread = CreateThread(NULL, 0, hyperv_accept_thread, ctx, 0,
+                                        NULL);
+        if (!s->accept_thread) {
+            ErrorF("[hyperv] ospoll_accept: CreateThread failed err=%ld\n",
+                   (long) GetLastError());
+            free(ctx);
+            return;
+        }
+        s->accepting = 1;
+        return;
+    }
+#endif
+
     if (!s->overlapped_accept) {
         s->overlapped_accept = ospoll_overlapped_alloc(s);
         if (!s->overlapped_accept)
@@ -1120,6 +1258,27 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
                 tail = tail->accept_next;
             tail->accept_next = new_sb;
         }
+#ifdef HYPERV
+    } else if (s->overlapped_hyperv == u) {
+        struct sockbuf *listener = u->u.uh.listener;
+
+        s->overlapped_hyperv = NULL;
+        if (listener) {
+            s->accept_next = NULL;
+            if (!listener->accept_head)
+                listener->accept_head = s;
+            else {
+                struct sockbuf *tail = listener->accept_head;
+
+                while (tail->accept_next)
+                    tail = tail->accept_next;
+                tail->accept_next = s;
+            }
+        } else {
+            ospoll_sockbuf_free(s);
+        }
+        ospoll_overlapped_deref(u, 0);
+#endif
     } else if (s->overlapped_connect == u) {
         setsockopt(s->s, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
         s->connecting = 0;

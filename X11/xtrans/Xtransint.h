@@ -156,6 +156,10 @@ struct sockbuf {
     struct overlapped *overlapped_recv;
     struct overlapped *overlapped_connect;
     struct overlapped *overlapped_accept;
+#ifdef HYPERV
+    struct overlapped *overlapped_hyperv;
+    HANDLE accept_thread;
+#endif
     struct overlapped *overlapped_disconnect;
     int family;
     char accepting;

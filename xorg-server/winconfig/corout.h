@@ -134,6 +134,7 @@ enum corout_socket_type {
 
 int inaddr_cmp(union sockaddr_in4in6 *a, union sockaddr_in4in6 *b);
 char *inaddr_str(union sockaddr_in4in6 *a, char *str, int *port);
+int inaddr_validate(const char *s, int *family);
 void inaddr_from_text(union sockaddr_in4in6 *r, const char *s, long port,
                       int family);
 void corout_init(void);

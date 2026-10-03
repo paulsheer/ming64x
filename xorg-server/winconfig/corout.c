@@ -31,6 +31,13 @@
 #define COROUT_C
 #include "corout.h"
 
+#ifdef _WIN32
+#include <iphlpapi.h>
+#include <wchar.h>
+#else
+#include <net/if.h>
+#endif
+
 #ifdef MSWIN_OVLPIO
 struct overlapped;
 #endif
@@ -878,16 +885,120 @@ static int inaddr_len(union sockaddr_in4in6 *r)
     return sizeof(r->sain4);
 }
 
+/* Resolve a "%zone" suffix to an IPv6 scope id (interface index). A decimal
+   string is taken as an index directly; otherwise the zone is matched against
+   the adapter's GUID (AdapterName), friendly name, or description. Returns 0
+   if the zone cannot be resolved. */
+static unsigned long
+inaddr_scope_id(const char *zone)
+{
+    if (*zone && strspn(zone, "0123456789") == strlen(zone))
+        return strtoul(zone, NULL, 10);
+
+#ifdef _WIN32
+    {
+        wchar_t *wzone = NULL;
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, zone, -1, NULL, 0);
+        ULONG buflen = 0;
+        IP_ADAPTER_ADDRESSES *list = NULL, *a;
+        unsigned long idx = 0;
+
+        if (wlen > 0)
+            wzone = (wchar_t *) malloc((size_t) wlen * sizeof(wchar_t));
+        if (wzone)
+            MultiByteToWideChar(CP_UTF8, 0, zone, -1, wzone, wlen);
+
+        if (GetAdaptersAddresses(AF_INET6, 0, NULL, NULL, &buflen) ==
+                ERROR_BUFFER_OVERFLOW) {
+            list = (IP_ADAPTER_ADDRESSES *) malloc(buflen);
+            if (list &&
+                GetAdaptersAddresses(AF_INET6, 0, NULL, list, &buflen) ==
+                    NO_ERROR) {
+                for (a = list; a; a = a->Next) {
+                    if ((a->AdapterName &&
+                         _stricmp(a->AdapterName, zone) == 0) ||
+                        (wzone &&
+                         ((a->FriendlyName &&
+                           _wcsicmp(a->FriendlyName, wzone) == 0) ||
+                          (a->Description &&
+                           _wcsicmp(a->Description, wzone) == 0)))) {
+                        idx = a->Ipv6IfIndex;
+                        break;
+                    }
+                }
+            }
+        }
+
+        free(wzone);
+        free(list);
+        return idx;
+    }
+#else
+    return (unsigned long) if_nametoindex(zone);
+#endif
+}
+
+/* Parse "addr" or "addr%zone" into an IPv6 address, resolving any zone suffix
+   to a scope id. Returns 0 on success. */
+static int
+inaddr_parse_ipv6(const char *s, struct in6_addr *out, unsigned long *scope)
+{
+    const char *pct = strchr(s, '%');
+    unsigned long sc = 0;
+
+    if (pct) {
+        char addr[64];
+        size_t n = (size_t) (pct - s);
+
+        if (n >= sizeof(addr))
+            return 1;
+        memcpy(addr, s, n);
+        addr[n] = '\0';
+        if (!inet_pton(AF_INET6, addr, out))
+            return 1;
+        sc = inaddr_scope_id(pct + 1);
+        if (!sc)
+            return 1;
+    } else if (!inet_pton(AF_INET6, s, out)) {
+        return 1;
+    }
+
+    if (scope)
+        *scope = sc;
+    return 0;
+}
+
+/* returns 0 on success */
+int inaddr_validate(const char *s, int *family)
+{
+    if (strchr(s, ':')) {
+        struct in6_addr tmp;
+        if (inaddr_parse_ipv6(s, &tmp, NULL))
+            return 1;
+        if (family)
+            *family = AF_INET6;
+    } else {
+        struct in_addr tmp;
+        if (!inet_pton(AF_INET, s, &tmp))
+            return 1;
+        if (family)
+            *family = AF_INET;
+    }
+    return 0;
+}
+
 void inaddr_from_text(union sockaddr_in4in6 *r, const char *s, const long port, const int family)
 {
     if (port > 65535)
         fatal(1, "invalid port %ld", port);
     memset(r, '\0', sizeof(*r));
     if ((!s && family == AF_INET6) || (s && strchr(s, ':'))) {
+        unsigned long sc = 0;
         r->sain6.sin6_family = AF_INET6;
         r->sain6.sin6_port = htons((unsigned short) port);
-        if (s && !inet_pton(AF_INET6, s, &r->sain6.sin6_addr))
+        if (s && inaddr_parse_ipv6(s, &r->sain6.sin6_addr, &sc))
             fatal(1, "invalid ip %s", s);
+        r->sain6.sin6_scope_id = sc;
     } else {
         r->sain4.sin_family = AF_INET;
         r->sain4.sin_port = htons((unsigned short) port);

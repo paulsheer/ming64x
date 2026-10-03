@@ -244,6 +244,17 @@ hostspec_matches(const char *spec, const char *host)
     return 0;
 }
 
+static const char *host_space_to_underscore(const char *host)
+{
+    char *p;
+    static char h[512];
+    snprintf(h, sizeof(h), "%s", host);
+    for (p = h; *p; p++)
+        if (*p == ' ')
+            *p = '_';
+    return h;
+}
+
 /* returns 1 = known & matching, 2 = known but changed, 0 = not found */
 static int
 known_hosts_check(const char *host, const char *ktype, const char *b64)
@@ -258,6 +269,8 @@ known_hosts_check(const char *host, const char *ktype, const char *b64)
     f = fopen(path, "rb");
     if (!f)
         return 0;
+
+    host = host_space_to_underscore(host);
 
     while (fgets(line, sizeof line, f)) {
         char *hostspec, *kt, *key, *p;
@@ -314,7 +327,7 @@ known_hosts_add(const char *host, const char *ktype, const char *b64)
     f = fopen(path, "ab");
     if (!f)
         return 0;
-    fprintf(f, "%s %s %s\n", host, ktype, b64);
+    fprintf(f, "%s %s %s\n", host_space_to_underscore(host), ktype, b64);
     fclose(f);
     return 1;
 }
@@ -360,11 +373,13 @@ hostkey_verify(ssh_session *s, LIBSSH2_SESSION *session)
 
     if (status == 2) {
         char line[512];
+        char kh[256] = "%%USERPROFILE%%\\.ssh\\known_hosts";
+        known_hosts_path(kh, sizeof(kh));
         snprintf(line, sizeof line,
-            "host key verification failed: the %s key for %s has changed\r\n"
-            "(possible man-in-the-middle). Remove the old entry from\r\n"
-            "%%USERPROFILE%%\\.ssh\\known_hosts if the server was reinstalled.\r\n",
-            ktype, s->host);
+            "\r\n\r\nHost key verification FAILED: the %s key for %s\r\n"
+            "does not match. Either someone is trying to spoof your\r\n"
+            "connection, or the server %s was reinstalled.\r\n"
+            "Remove by editing  %s\r\n\r\n", ktype, s->host, s->host, kh);
         ssh_report(s, line);
         set_display_error(s, "Host key for \"%s\" has changed "
             "(possible man-in-the-middle)", s->host);
@@ -855,20 +870,45 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
     }
 
     if (s->audio_enabled) {
-        /* Ask the server to listen on its own loopback for PulseAudio and
-           forward those connections back here; the relay connects them to the
-           local daemon at 127.0.0.1:audio_port. */
-        ctx->stage = "audio forward";
-        libssh2_session_set_last_error(ctx->session, 0, NULL);
-        CALL_SOFT(libssh2_channel_forward_listen_ex(ctx->session,
-                    "127.0.0.1", s->audio_port, NULL, 16));
-        ctx->audio_listener = ctx->session->fwdLstn_listener;
-        if (!ctx->audio_listener) {
-            set_display_error(s, "Could not set up PulseAudio forwarding");
-        } else {
-            char ps[64];
+        char ps[128];
+        int have_ps = 0;
 
-            snprintf(ps, sizeof ps, "tcp:127.0.0.1:%d", s->audio_port);
+        if (s->x11_forwarding) {
+            /* Ask the server to listen on its own loopback for PulseAudio and
+               forward those connections back here; the relay connects them to
+               the local daemon at 127.0.0.1:audio_port. */
+            ctx->stage = "audio forward";
+            libssh2_session_set_last_error(ctx->session, 0, NULL);
+            CALL_SOFT(libssh2_channel_forward_listen_ex(ctx->session,
+                        "127.0.0.1", s->audio_port, NULL, 16));
+            ctx->audio_listener = ctx->session->fwdLstn_listener;
+            if (!ctx->audio_listener) {
+                set_display_error(s, "Could not set up PulseAudio forwarding");
+            } else {
+                snprintf(ps, sizeof ps, "tcp:127.0.0.1:%d", s->audio_port);
+                have_ps = 1;
+            }
+        } else {
+            /* No X11 forwarding: point the remote directly at this machine's
+               address (mirrors the DISPLAY fallback) instead of a
+               reverse-forwarded loopback. */
+            union sockaddr_in4in6 la;
+            char lip[64];
+
+            if (corout_socket_local_addr(ctx->sock, &la) != 0) {
+                set_display_error(s, "Could not determine local IP address");
+            } else {
+                inaddr_str(&la, lip, NULL);
+                if (la.sa.sa_family == AF_INET6) {
+                    snprintf(ps, sizeof ps, "tcp6:[%s]:%d", lip, s->audio_port);
+                } else {
+                    snprintf(ps, sizeof ps, "tcp:%s:%d", lip, s->audio_port);
+                }
+                have_ps = 1;
+            }
+        }
+
+        if (have_ps) {
             libssh2_session_set_last_error(ctx->session, 0, NULL);
             ctx->stage = "setenv PULSE_SERVER";
             snprintf(ctx->fail_hint, sizeof ctx->fail_hint,

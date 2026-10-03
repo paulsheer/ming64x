@@ -329,6 +329,15 @@ IPS_STATIC struct iprange_list *iprange_parse (const char *text, int *consumed__
             goto errout;
         text += consumed;
         consumed_ += consumed;
+        if (*text == '%') {
+            /* Skip an IPv6 scope/zone suffix (e.g. %13, %eth0, %{GUID}).
+               The zone ID is a local routing hint, not part of the address
+               used for -allow matching. */
+            while (*text && *text != ',' && *text != ';') {
+                text++;
+                consumed_++;
+            }
+        }
         if (*text == '-') {
             text++;
             consumed_++;
