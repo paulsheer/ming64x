@@ -424,6 +424,23 @@ ssh_report_error(ssh_session *s, LIBSSH2_SESSION *session, const char *stage)
         stage, err, errlen, errmsg ? errmsg : "");
 }
 
+/* Report a non-fatal setenv failure to the terminal as a single explanatory
+   line and clear the session error so subsequent steps don't mistake it for
+   their own failure. */
+static void
+ssh_report_soft_error(ssh_session *s, LIBSSH2_SESSION *session,
+                      const char *hint)
+{
+    if (!libssh2_session_last_errno(session))
+        return;
+
+    if (hint && *hint) {
+        ssh_report(s, hint);
+        ssh_report(s, "\r\n");
+    }
+    libssh2_session_set_last_error(session, 0, NULL);
+}
+
 struct ssh_ctx;
 
 /* One forwarded X11 connection. The VcXsrv socket is owned by x11_runner (a
@@ -847,6 +864,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
             "server's sshd_config and restart sshd");
         CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
             ctx->disp, (unsigned int)strlen(ctx->disp)));
+        ssh_report_soft_error(s, ctx->session, ctx->fail_hint);
         ctx->fail_hint[0] = '\0';
     } else {
         union sockaddr_in4in6 la;
@@ -863,6 +881,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
                 "server's sshd_config and restart sshd");
             CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "DISPLAY", 7,
                 ctx->disp, (unsigned int)strlen(ctx->disp)));
+            ssh_report_soft_error(s, ctx->session, ctx->fail_hint);
             ctx->fail_hint[0] = '\0';
         } else {
             set_display_error(s, "Could not determine local IP address");
@@ -917,6 +936,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
                 "and restart sshd");
             CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel, "PULSE_SERVER", 12,
                 ps, (unsigned int)strlen(ps)));
+            ssh_report_soft_error(s, ctx->session, ctx->fail_hint);
             ctx->fail_hint[0] = '\0';
 
             /* One-shot exec channel: install the cookie on the remote and
@@ -968,6 +988,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
                     CALL_SOFT(libssh2_channel_setenv_ex(ctx->channel,
                         "PULSE_COOKIE", 12, ctx->audio_path,
                         (unsigned int)ctx->audio_path_len));
+                    ssh_report_soft_error(s, ctx->session, ctx->fail_hint);
                     ctx->fail_hint[0] = '\0';
                 }
             }

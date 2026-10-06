@@ -817,11 +817,11 @@ static void channel_setenv(LIBSSH2_CHANNEL *channel,
             COROUT_EXIT();
         }
 
+        /* A denied env request (the server's AcceptEnv didn't cover this
+           variable) is not fatal: record the error and carry on without it. */
         if(data[0] != SSH_MSG_CHANNEL_SUCCESS) {
-            SSH2_FREE(session, data);
             ssh2_err(session, LIBSSH2_ERROR_CHANNEL_REQUEST_DENIED,
                      "Unable to complete request for channel-setenv");
-            COROUT_EXIT();
         }
 
         SSH2_FREE(session, data);
