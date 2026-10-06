@@ -3,6 +3,7 @@
 #include <winreg.h>
 #include <mmsystem.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2408,8 +2409,15 @@ cf_build(struct cfentry *e,
 static int
 config_dir(char *out, const size_t outsz)
 {
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0])
+    char appdata[MAX_PATH];
+
+    /* SHGetFolderPathA is package-aware: for a Store/MSIX build it returns
+       the virtualized roaming path (...\LocalCache\Roaming), matching where
+       Windows actually redirects writes.  getenv("APPDATA") returns the
+       un-virtualized C:\Users\...\AppData\Roaming, so the UI would display a
+       directory that does not match the physical file location. */
+    if (FAILED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL,
+                                SHGFP_TYPE_CURRENT, appdata)))
         return -1;
     snprintf(out, outsz, "%s\\Ming64X", appdata);
     return 0;
