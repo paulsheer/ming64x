@@ -1,7 +1,8 @@
 https://apps.microsoft.com/detail/9N4VVR1BD0Z5
 
-1.22.3.0 Fix exit when ssh IP is invalid. IPv6, HyperV support added.
-1.22.2.0 Fixed excessive logging into AppData\Local\Temp\
-1.22.1.0 Public release
+Oct 5 2026   1.22.4.0 Environment error on ssh login. Cursor size. Logging cleanup.
+Oct 3 2026   1.22.3.0 Fix exit when ssh IP is invalid. IPv6, HyperV support added.
+Oct 2 2026   1.22.2.0 Fixed excessive logging into AppData\Local\Temp\
+Oct 2 2026   1.22.1.0 Public release
 
 

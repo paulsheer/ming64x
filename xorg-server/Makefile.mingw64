@@ -671,7 +671,10 @@ $(ASAN_DLLS): $(ASAN_INSTALL_DIR)/%: $(ASAN_RT_BIN)/%
 	@cp $< $@
 endif
 
-$(ALL_OBJS): | $(FIXUP_HEADERS)
+version-stamp: ../MICROSOFT-STORE ../MICROSOFT-STORE-CURRENT-VERSION ver-check.sh
+	bash ./ver-check.sh > version-stamp
+
+$(ALL_OBJS): version-stamp | $(FIXUP_HEADERS)
 
 $(TARGET): $(ALL_OBJS) $(OBJDIR)/xdmcp_stub.o $(OBJDIR)/all_stubs.o $(OBJDIR)/extensions.o
 	@echo "  LINK    $@"
@@ -1266,6 +1269,9 @@ $(OBJDIR)/%.o: $(OBJDIR)/%.c
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
+
+$(XWIN_RC): $(XWIN_RC).in
+	cat $(XWIN_RC).in | bash ../MICROSOFT-STORE-CURRENT-VERSION > $(XWIN_RC)
 
 # ---------------------------------------------------------------------------
 # Windows resource: .rc -> .o (via windres)

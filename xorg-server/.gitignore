@@ -1,3 +1,5 @@
+hw/xwin/XWin.rc
+version-stamp
 fonts
 locale
 protocol.txt
