@@ -793,7 +793,7 @@ ssh_run(struct corout_item *state, void *user_data, const struct sockevent *ev)
     s->iocp_handle = corout_iocp_handle(state->o);
     {
         int timeout = 0, cerr = 0;
-        WAIT_CONNECT(CONNECT_DEFAULT_TIME, &timeout, &cerr, ctx->sock, 22,
+        WAIT_CONNECT(CONNECT_DEFAULT_TIME, &timeout, &cerr, ctx->sock, s->port,
                      s->host);
         if (timeout) {
             ssh_report(s, "connect: connection timed out\r\n");
@@ -1374,7 +1374,7 @@ ssh_session_free(ssh_session *s)
 
 void
 ssh_session_start(ssh_session *s, const char *host,
-    const char *username, const char *password, const int display_number,
+    const char *username, const char *password, const int port, const int display_number,
     const int x11_forwarding, const int audio_enabled, const int audio_port,
     const unsigned char *audio_cookie)
 {
@@ -1391,6 +1391,7 @@ ssh_session_start(ssh_session *s, const char *host,
     snprintf(s->host, sizeof s->host, "%s", host);
     snprintf(s->username, sizeof s->username, "%s", username);
     snprintf(s->password, sizeof s->password, "%s", password);
+    s->port = port;
     s->display_number = display_number;
     s->x11_forwarding = x11_forwarding;
     s->audio_enabled = audio_enabled;

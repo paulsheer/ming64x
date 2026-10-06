@@ -858,7 +858,7 @@ hyperv_registry_apply(const struct options_network_and_access_control *net)
 }
 
 static void
-password_option(struct nk_context *ctx, const char *label, char *password,
+password_option_cell(struct nk_context *ctx, const char *label, char *password,
     char *mask, const int size, const char *tooltip)
 {
     struct nk_rect b;
@@ -881,7 +881,6 @@ password_option(struct nk_context *ctx, const char *label, char *password,
     }
     old_len = (int)strlen(mask);
 
-    nk_layout_row_dynamic(ctx, 30, 2);
     b = nk_widget_bounds(ctx);
     nk_label(ctx, label, NK_TEXT_LEFT);
     option_tooltip(ctx, b, tooltip);
@@ -1030,6 +1029,7 @@ static int config_dir(char *out, const size_t outsz);
 
 struct options_ssh_login {
     char host[128];
+    char port[16];
     char username[128];
     char password[128];
     char password_mask[128];
@@ -1048,11 +1048,17 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
     struct nk_rect b;
 
     heading(ctx, "SSH login");
-    text_option(ctx, "SSH Connect IP", opt->host, sizeof(opt->host),
-        "Hostname or IP address of the SSH server to connect to");
-    text_option(ctx, "Login username", opt->username, sizeof(opt->username),
-        "Username to authenticate with on the SSH server");
-    password_option(ctx, "Login password", opt->password, opt->password_mask,
+
+    nk_layout_row_dynamic(ctx, 30, 4);
+    text_option_cell(ctx, "SSH Connect IP", opt->host, sizeof(opt->host),
+        "Hostname or IP address of the SSH server to connect to", NK_TEXT_LEFT);
+    text_option_cell(ctx, "SSH Connect port", opt->port, sizeof(opt->port),
+        "TCP port of the SSH server (default 22)", NK_TEXT_LEFT);
+
+    nk_layout_row_dynamic(ctx, 30, 4);
+    text_option_cell(ctx, "Login username", opt->username, sizeof(opt->username),
+        "Username to authenticate with on the SSH server", NK_TEXT_LEFT);
+    password_option_cell(ctx, "Login password", opt->password, opt->password_mask,
         sizeof(opt->password),
         "Password to authenticate with on the SSH server");
 
@@ -1091,10 +1097,14 @@ tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
                      "Invalid IP address \"%s\"", opt->host);
             InterlockedExchange(&ssh->display_error_pending, 1);
         } else {
+            int port = atoi(opt->port);
+            if (port < 1 || port > 65535)
+                port = 22;
+
             have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
 
             ssh_session_start(ssh, opt->host, opt->username, opt->password,
-                net->listeningport_sel, opt->x11_forwarding,
+                port, net->listeningport_sel, opt->x11_forwarding,
                 have_cookie, atoi(audio->pulseport),
                 have_cookie ? cookie : NULL);
             ssh_request_resize(ssh, term->ncols, term->nrows);
@@ -2046,6 +2056,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
     struct options_audio *audio_opt)
 {
     *ssh_opt = (struct options_ssh_login) {
+        .port = "22",
         .x11_forwarding = 1,
         .save_password = 0,
     };
@@ -2254,6 +2265,7 @@ cf_build(struct cfentry *e,
     int n = 0, i;
 
     e[n++] = CF_STR("sshlogin", "sshconnectip", ssh->host);
+    e[n++] = CF_STR("sshlogin", "sshconnectport", ssh->port);
     e[n++] = CF_STR("sshlogin", "loginusername", ssh->username);
     e[n++] = CF_BOOL("sshlogin", "x11forwarding", ssh->x11_forwarding);
     e[n++] = CF_BOOL("sshlogin", "savepassword", ssh->save_password);
@@ -3431,9 +3443,9 @@ int main(int argc, char **argv)
     if (ssh_opt.host[0] == '\0')
         g_focus_idx = 0;
     else if (ssh_opt.username[0] == '\0')
-        g_focus_idx = 1;
-    else if (ssh_opt.password[0] == '\0')
         g_focus_idx = 2;
+    else if (ssh_opt.password[0] == '\0')
+        g_focus_idx = 3;
     else
         g_focus_idx = 0;
     terminal_init(&term);

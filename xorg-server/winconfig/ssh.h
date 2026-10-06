@@ -24,6 +24,7 @@ typedef struct ssh_session {
     char host[128];
     char username[128];
     char password[128];
+    int port;                        /* SSH server TCP port (default 22) */
     int display_number;              /* :0 .. :12, set before start */
     int x11_forwarding;              /* 1 = request X11 forwarding on start */
     int audio_enabled;               /* 1 = set up PulseAudio reverse-forward */
@@ -62,7 +63,7 @@ typedef struct ssh_session {
 void ssh_session_init(ssh_session *s);
 void ssh_session_free(ssh_session *s);
 void ssh_session_start(ssh_session *s, const char *host,
-    const char *username, const char *password, int display_number,
+    const char *username, const char *password, int port, int display_number,
     int x11_forwarding, int audio_enabled, int audio_port,
     const unsigned char *audio_cookie);
 void ssh_session_stop(ssh_session *s);
