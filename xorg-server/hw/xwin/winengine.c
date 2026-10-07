@@ -52,6 +52,59 @@ LPDIRECTDRAW4 g_pdd4Detected = NULL;
 */
 static HMODULE g_hmodDirectDraw = NULL;
 
+/* Probe whether a real IDirectDrawSurface4::Blt from a system-memory
+   surface to the primary surface works.  The ddraw.dll compatibility
+   shim on modern Windows still exposes DirectDraw4 (QueryInterface
+   succeeds) but returns E_NOTIMPL for this Blt, so a successful
+   interface query alone is not enough to enable ShadowDDNL. */
+static Bool
+winDDNLBltProbe(LPDIRECTDRAW4 lpdd4)
+{
+    HRESULT ddrval;
+    LPDIRECTDRAWSURFACE4 pddsPrimary = NULL;
+    LPDIRECTDRAWSURFACE4 pddsSrc = NULL;
+    DDSURFACEDESC2 ddsdPrimary = (DDSURFACEDESC2) {
+        .dwSize = sizeof(DDSURFACEDESC2),
+        .dwFlags = DDSD_CAPS,
+        .ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE
+    };
+    DDSURFACEDESC2 ddsdSrc = (DDSURFACEDESC2) {
+        .dwSize = sizeof(DDSURFACEDESC2),
+        .dwFlags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH,
+        .ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY,
+        .dwHeight = 1,
+        .dwWidth = 1
+    };
+    RECT rc = { 0, 0, 1, 1 };
+    Bool ok = FALSE;
+
+    ddrval = IDirectDraw4_SetCooperativeLevel(lpdd4, NULL, DDSCL_NORMAL);
+    if (FAILED(ddrval))
+        goto out;
+
+    ddrval = IDirectDraw4_CreateSurface(lpdd4, &ddsdPrimary,
+                                        &pddsPrimary, NULL);
+    if (FAILED(ddrval))
+        goto out;
+
+    ddrval = IDirectDraw4_CreateSurface(lpdd4, &ddsdSrc, &pddsSrc, NULL);
+    if (FAILED(ddrval))
+        goto out;
+
+    ddrval = IDirectDrawSurface4_Blt(pddsPrimary, &rc, pddsSrc, &rc,
+                                     DDBLT_WAIT, NULL);
+    ok = SUCCEEDED(ddrval);
+    if (FAILED(ddrval))
+        winDebug ("winDDNLBltProbe - Blt failed: %08x\n", (unsigned) ddrval);
+
+  out:
+    if (pddsSrc)
+        IDirectDrawSurface4_Release(pddsSrc);
+    if (pddsPrimary)
+        IDirectDrawSurface4_Release(pddsPrimary);
+    return ok;
+}
+
 /*
  * Detect engines supported by current Windows version
  * DirectDraw version and hardware
@@ -90,17 +143,28 @@ winDetectSupportedEngines(void)
                                             &IID_IDirectDraw4,
                                             (LPVOID *) &lpdd4);
         if (SUCCEEDED(ddrval)) {
-            /* We have DirectDraw4 */
-            winDebug (
-                      "winDetectSupportedEngines - DirectDraw4 installed, allowing ShadowDDNL\n");
-            g_dwEnginesSupported |= WIN_SERVER_SHADOW_DDNL;
+            /* DirectDraw4 is present, but the ddraw.dll shim on modern
+               Windows reports it while the primary-surface Blt returns
+               E_NOTIMPL.  Only allow ShadowDDNL when a real Blt works, so
+               that winSetEngine falls back to ShadowGDI otherwise. */
+            if (winDDNLBltProbe(lpdd4)) {
+                winDebug (
+                          "winDetectSupportedEngines - DirectDraw4 Blt works, allowing ShadowDDNL\n");
+                g_dwEnginesSupported |= WIN_SERVER_SHADOW_DDNL;
 
-            /* Cache the objects so the engine can reuse them instead of
-               calling the slow DirectDrawCreate a second time. */
-            g_pddDetected = lpdd;
-            g_pdd4Detected = lpdd4;
-            lpdd = NULL;
-            lpdd4 = NULL;
+                /* Cache the objects so the engine can reuse them instead of
+                   calling the slow DirectDrawCreate a second time. */
+                g_pddDetected = lpdd;
+                g_pdd4Detected = lpdd4;
+                lpdd = NULL;
+                lpdd4 = NULL;
+            }
+            else {
+                winDebug (
+                          "winDetectSupportedEngines - DirectDraw4 Blt failed, disabling ShadowDDNL\n");
+                g_pddDetected = NULL;
+                g_pdd4Detected = NULL;
+            }
         }
         else {
             g_pddDetected = NULL;
