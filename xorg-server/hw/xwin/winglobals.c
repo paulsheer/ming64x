@@ -56,6 +56,7 @@ HINSTANCE g_hInstance = 0;
 HWND g_hDlgDepthChange = NULL;
 HWND g_hDlgExit = NULL;
 HWND g_hDlgAbout = NULL;
+HWND g_hDlgHistory = NULL;
 const char *g_pszQueryHost = NULL;
 Bool g_fXdmcpEnabled = FALSE;
 Bool g_fAuthEnabled = FALSE;

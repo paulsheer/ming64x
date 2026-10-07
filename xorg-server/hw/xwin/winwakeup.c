@@ -47,7 +47,8 @@ winWakeupHandler(ScreenPtr pScreen, int iResult)
         if ((g_hDlgDepthChange == 0
              || !IsDialogMessage(g_hDlgDepthChange, &msg))
             && (g_hDlgExit == 0 || !IsDialogMessage(g_hDlgExit, &msg))
-            && (g_hDlgAbout == 0 || !IsDialogMessage(g_hDlgAbout, &msg))) {
+            && (g_hDlgAbout == 0 || !IsDialogMessage(g_hDlgAbout, &msg))
+            && (g_hDlgHistory == 0 || !IsDialogMessage(g_hDlgHistory, &msg))) {
             DispatchMessage(&msg);
         }
     }

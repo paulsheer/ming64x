@@ -671,10 +671,11 @@ $(ASAN_DLLS): $(ASAN_INSTALL_DIR)/%: $(ASAN_RT_BIN)/%
 	@cp $< $@
 endif
 
-version-stamp: ../MICROSOFT-STORE ../MICROSOFT-STORE-CURRENT-VERSION ver-check.sh
+version-stamp history-text.h: ../MICROSOFT-STORE ../MICROSOFT-STORE-CURRENT-VERSION ver-check.sh
 	bash ./ver-check.sh > version-stamp
+	bash ./changes-to-history-include.sh > history-text.h
 
-$(ALL_OBJS): version-stamp | $(FIXUP_HEADERS)
+$(ALL_OBJS): version-stamp history-text.h | $(FIXUP_HEADERS)
 
 $(TARGET): $(ALL_OBJS) $(OBJDIR)/xdmcp_stub.o $(OBJDIR)/all_stubs.o $(OBJDIR)/extensions.o
 	@echo "  LINK    $@"

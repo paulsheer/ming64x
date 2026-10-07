@@ -1213,6 +1213,11 @@ winWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             winDisplayAboutDialog(s_pScreenPriv);
             return 0;
 
+        case ID_APP_HISTORY:
+            /* Display the History box */
+            winDisplayHistoryDialog(s_pScreenPriv);
+            return 0;
+
         default:
             /* It's probably one of the custom menus... */
             if (HandleCustomWM_COMMAND(0, LOWORD(wParam), s_pScreenPriv))

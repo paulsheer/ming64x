@@ -49,6 +49,9 @@ winChangeDepthDlgProc(HWND hDialog, UINT message, WPARAM wParam, LPARAM lParam);
 static INT_PTR CALLBACK
 winAboutDlgProc(HWND hDialog, UINT message, WPARAM wParam, LPARAM lParam);
 
+static INT_PTR CALLBACK
+winHistoryDlgProc(HWND hDialog, UINT message, WPARAM wParam, LPARAM lParam);
+
 static void
  winDrawURLWindow(LPARAM lParam);
 
@@ -618,6 +621,122 @@ winAboutDlgProc(HWND hwndDialog, UINT message, WPARAM wParam, LPARAM lParam)
 
         /* Restore window procedures for URL buttons */
         winUnoverrideURLButton(hwndDialog, ID_ABOUT_WEBSITE);
+
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/*
+ * Display the History dialog box
+ */
+
+void
+winDisplayHistoryDialog(winPrivScreenPtr pScreenPriv)
+{
+    /* Check if dialog already exists */
+    if (g_hDlgHistory != NULL) {
+        /* Dialog box already exists, display it */
+        ShowWindow(g_hDlgHistory, SW_SHOWDEFAULT);
+
+        /* User has lost the dialog.  Show them where it is. */
+        SetForegroundWindow(g_hDlgHistory);
+
+        return;
+    }
+
+    g_hDlgHistory = CreateDialogParam(g_hInstance,
+                                      "HISTORY_BOX",
+                                      pScreenPriv->hwndScreen,
+                                      winHistoryDlgProc, (LPARAM) pScreenPriv);
+
+    /* Show the dialog box */
+    ShowWindow(g_hDlgHistory, SW_SHOW);
+
+    /* Needed to get keyboard controls (tab, arrows, enter, esc) to work */
+    SetForegroundWindow(g_hDlgHistory);
+
+    /* Set focus to the OK button */
+    PostMessage(g_hDlgHistory, WM_NEXTDLGCTL,
+                (WPARAM) GetDlgItem(g_hDlgHistory, IDOK), TRUE);
+}
+
+/*
+ * Process messages for the history dialog.
+ */
+
+#include "../../history-text.h"
+
+static INT_PTR CALLBACK
+winHistoryDlgProc(HWND hwndDialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    static winPrivScreenPtr s_pScreenPriv = NULL;
+
+    winDebug("winHistoryDlgProc\n");
+
+    /* Branch on message type */
+    switch (message) {
+    case WM_INITDIALOG:
+        winDebug("winHistoryDlgProc - WM_INITDIALOG\n");
+
+        /* Store pointer to private structure for future use */
+        s_pScreenPriv = (winPrivScreenPtr) lParam;
+
+        winInitDialog(hwndDialog);
+
+        /* Put the sample text into the scrollable box in a fixed-width font */
+        {
+            HWND hwndEdit = GetDlgItem(hwndDialog, IDC_HISTORY_TEXT);
+            static HFONT hFont = NULL;
+
+            if (hFont == NULL) {
+                hFont = CreateFont(-9, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                   ANSI_CHARSET, OUT_DEFAULT_PRECIS,
+                                   CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                   FIXED_PITCH | FF_MODERN, "Courier New");
+            }
+            if (hFont != NULL)
+                SendMessage(hwndEdit, WM_SETFONT, (WPARAM) hFont, FALSE);
+
+            SetDlgItemText(hwndDialog, IDC_HISTORY_TEXT, szHistoryText);
+        }
+
+        return TRUE;
+
+    case WM_MOUSEMOVE:
+    case WM_NCMOUSEMOVE:
+        /* Show the cursor if it is hidden */
+        if (g_fSoftwareCursor && !g_fCursor) {
+            g_fCursor = TRUE;
+            ShowCursor(TRUE);
+        }
+        return TRUE;
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDOK:
+        case IDCANCEL:
+            winDebug("winHistoryDlgProc - WM_COMMAND - IDOK or IDCANCEL\n");
+
+            DestroyWindow(g_hDlgHistory);
+            g_hDlgHistory = NULL;
+
+            /* Fix to make sure keyboard focus isn't trapped */
+            PostMessage(s_pScreenPriv->hwndScreen, WM_NULL, 0, 0);
+
+            return TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        winDebug("winHistoryDlgProc - WM_CLOSE\n");
+
+        DestroyWindow(g_hDlgHistory);
+        g_hDlgHistory = NULL;
+
+        /* Fix to make sure keyboard focus isn't trapped */
+        PostMessage(s_pScreenPriv->hwndScreen, WM_NULL, 0, 0);
 
         return TRUE;
     }

@@ -64,6 +64,7 @@ extern Bool g_fAudioEnabled;
 extern HWND g_hDlgDepthChange;
 extern HWND g_hDlgExit;
 extern HWND g_hDlgAbout;
+extern HWND g_hDlgHistory;
 
 extern Bool g_fSoftwareCursor;
 extern Bool g_fCursor;
