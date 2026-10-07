@@ -693,6 +693,9 @@ void
 void
  winDisplayAboutDialog(winPrivScreenPtr pScreenPriv);
 
+void
+ winDisplayHistoryDialog(winPrivScreenPtr pScreenPriv);
+
 /*
  * winengine.c
  */
