@@ -1,7 +1,16 @@
 https://apps.microsoft.com/detail/9N4VVR1BD0Z5
 
-Oct 5 2026   1.22.4.0 Environment error on ssh login. Cursor size. Logging cleanup. Ssh port option.
-Oct 3 2026   1.22.3.0 Fix exit when ssh IP is invalid. IPv6, HyperV support added.
+Oct 7 2026   1.22.5.0 Fix DGI vs DirectDraw auto-detection for newer Windows builds.
+                      Fix clipboard connect failure with some machines.
+                      Fix incorrect pulse cookie path.
+                      Fix crash on Windows 10.
+Oct 5 2026   1.22.4.0 Environment error on ssh login.
+                      Cursor size fixed on scaled displays.
+                      Logging cleanup.
+                      Ssh port option.
+Oct 3 2026   1.22.3.0 Fix exit when ssh IP is invalid.
+                      Fix IPv6 connections.
+                      HyperV support added.
 Oct 2 2026   1.22.2.0 Fixed excessive logging into AppData\Local\Temp\
 Oct 2 2026   1.22.1.0 Public release
 
