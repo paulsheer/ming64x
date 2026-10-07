@@ -141,7 +141,7 @@ static const char *resize_items[] = {"none", "scrollbars", "randr"};
 static const char *depth_items[] = {"Auto", "8", "15", "16", "24", "32"};
 #define DEPTH_COUNT (sizeof(depth_items) / sizeof(depth_items[0]))
 
-static const char *engine_items[] = {"Auto", "Shadow GDI (1)", "Shadow DirectDraw4 (4)"};
+static const char *engine_items[] = {"Auto detect", "Shadow GDI (1)", "Shadow DirectDraw4 (4)"};
 #define ENGINE_COUNT (sizeof(engine_items) / sizeof(engine_items[0]))
 
 static const char *xinerama_items[] = {"Disabled", "Enabled"};
