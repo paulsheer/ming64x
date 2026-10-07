@@ -185,6 +185,11 @@ union overlapped_par {
 #endif
 };
 
+static int socket_count = 0;
+static int overlapped_count = 0;
+static int sockbuf_count = 0;
+static int buffer_count = 0;
+
 struct overlapped {
     struct overlapped_ w;
     unsigned int magic;
@@ -200,7 +205,7 @@ struct overlapped {
  * startup via ospoll_disconnect_init, exactly as winconfig/corout.c does. */
 typedef BOOL (WINAPI * ospoll_lp_disconnectex_t) (SOCKET, LPOVERLAPPED, DWORD,
                                                   DWORD);
-static ospoll_lp_disconnectex_t ospoll_dcfn;
+static ospoll_lp_disconnectex_t ospoll_dcfn = NULL;
 
 static void
 ospoll_disconnect_init(void)
@@ -219,6 +224,8 @@ ospoll_disconnect_init(void)
         closesocket(probe);
         return;
     }
+    if (!ospoll_dcfn)
+        ErrorF("SIO_GET_EXTENSION_FUNCTION_POINTER failed\n");
     closesocket(probe);
 }
 
@@ -771,11 +778,13 @@ ospoll_buffer_alloc(int n)
 
     if (!p)
         return NULL;
+    buffer_count++;
     memset(p, 0, sizeof(struct buffer));
     p->ref = 1;
     p->data = malloc(n);
     if (!p->data) {
         free(p);
+        buffer_count--;
         return NULL;
     }
     p->alloced = n;
@@ -790,6 +799,7 @@ ospoll_buffer_free(struct buffer *p)
     if (--p->ref == 0) {
         free(p->data);
         free(p);
+        buffer_count--;
     }
 }
 
@@ -800,6 +810,7 @@ ospoll_overlapped_alloc(struct sockbuf *s)
 
     if (!u)
         return NULL;
+    overlapped_count++;
     memset(u, 0, sizeof(*u));
     u->magic = OVERLAPPED_MAGIC;
     u->ref = 1;
@@ -818,14 +829,17 @@ ospoll_overlapped_deref(struct overlapped *u, int clean)
         u->s = NULL;
     assert(u->ref >= 0);
     if (!--u->ref) {
-        if (u->closable != INVALID_SOCKET)
+        if (u->closable != INVALID_SOCKET) {
+            socket_count--;
             closesocket(u->closable);
+        }
         if (u->refbuf) {
             ospoll_buffer_free(u->refbuf);
             u->refbuf = NULL;
         }
         u->magic = 0;
         free(u);
+        overlapped_count--;
         return 1;
     }
     return 0;
@@ -834,10 +848,12 @@ ospoll_overlapped_deref(struct overlapped *u, int clean)
 struct sockbuf *
 ospoll_sockbuf_alloc(int s)
 {
-    struct sockbuf *p = calloc(1, sizeof(struct sockbuf));
+    struct sockbuf *p = malloc(sizeof(struct sockbuf));
 
     if (!p)
         return NULL;
+    sockbuf_count++;
+    memset(p, '\0', sizeof(struct sockbuf));
     p->s = s;
     p->bufrd = ospoll_buffer_alloc(OSPOLL_BUFFER_SIZE);
     p->bufwr = ospoll_buffer_alloc(OSPOLL_BUFFER_SIZE);
@@ -845,6 +861,7 @@ ospoll_sockbuf_alloc(int s)
         ospoll_buffer_free(p->bufrd);
         ospoll_buffer_free(p->bufwr);
         free(p);
+        sockbuf_count--;
         return NULL;
     }
     return p;
@@ -855,8 +872,7 @@ ospoll_sockbuf_alloc(int s)
 static BOOL
 ospoll_disconnect_ex(SOCKET s, LPOVERLAPPED ov, DWORD flags, DWORD reserved)
 {
-    if (!ospoll_dcfn)
-        return FALSE;
+    assert(ospoll_dcfn != NULL);
     return ospoll_dcfn(s, ov, flags, reserved);
 }
 
@@ -870,13 +886,13 @@ ospoll_socket_disconnect(struct sockbuf *sb)
 {
     struct overlapped *u;
     BOOL r;
-    int err;
 
     if (sb->disconnecting)
         return;
     assert(!sb->overlapped_disconnect);
     sb->overlapped_disconnect = ospoll_overlapped_alloc(sb);
     if (!sb->overlapped_disconnect) {
+        socket_count--;
         closesocket((SOCKET) sb->s);
         sb->disconnecting = 1;
         return;
@@ -887,11 +903,12 @@ ospoll_socket_disconnect(struct sockbuf *sb)
     u->ref++;
     u->closable = (SOCKET) sb->s;
     r = ospoll_disconnect_ex((SOCKET) sb->s, &u->w.overlapped, 0, 0);
-    if (!r && (err = WSAGetLastError()) != ERROR_IO_PENDING) {
-        ErrorF("IOCP: DisconnectEx failed fd=%d err=%d\n", sb->s, err);
-        u->closable = INVALID_SOCKET;
-        closesocket((SOCKET) sb->s);
-        u->ref--;
+    if (!r)
+        u->w.err = WSAGetLastError();
+    if (r || (!r && u->w.err != ERROR_IO_PENDING)) {
+        assert(!u->completed_next);
+        u->completed_next = server_poll->completed_list;
+        server_poll->completed_list = u;
     }
     sb->disconnecting = 1;
 }
@@ -910,8 +927,10 @@ ospoll_sockbuf_free(struct sockbuf *sb)
         sb->s = (int) INVALID_SOCKET;
         __sync_synchronize();
 
-        if (s != INVALID_SOCKET)
+        if (s != INVALID_SOCKET) {
+            socket_count--;
             closesocket((SOCKET) s);
+        }
         WaitForSingleObject(th, INFINITE);
         CloseHandle(th);
         /* There could be IO completions pending so deliberately
@@ -927,8 +946,10 @@ ospoll_sockbuf_free(struct sockbuf *sb)
         sb->accept_head = next;
     }
     if (sb->overlapped_accept) {
-        if (sb->overlapped_accept->u.ua.accept_sock != INVALID_SOCKET)
+        if (sb->overlapped_accept->u.ua.accept_sock != INVALID_SOCKET) {
+            socket_count--;
             closesocket(sb->overlapped_accept->u.ua.accept_sock);
+        }
         ospoll_overlapped_deref(sb->overlapped_accept, 1);
     }
     ospoll_overlapped_deref(sb->overlapped_send, 1);
@@ -940,6 +961,18 @@ ospoll_sockbuf_free(struct sockbuf *sb)
     ospoll_buffer_free(sb->bufrd);
     ospoll_buffer_free(sb->bufwr);
     free(sb);
+    sockbuf_count--;
+
+#if 0
+{
+/* Yes, this ACTUALLY does NOT leak memory nor file descriptors */
+    FILE *f;
+    f = fopen("C:\\Users\\Paul\\debug-log.txt", "ab");
+    fprintf(f, "socket_count=%d overlapped_count=%d sockbuf_count=%d buffer_count=%d\n", socket_count, overlapped_count, sockbuf_count, buffer_count);
+    fclose(f);
+}
+#endif
+
 }
 
 void
@@ -965,6 +998,8 @@ ospoll_read(struct ospoll *ospoll, struct sockbuf *s)
     struct overlapped *u;
     int r;
 
+    if (s->eof)
+        return;
     if (s->bufrd->reading)
         return;
     if (s->bufrd->written == s->bufrd->avail)
@@ -1012,6 +1047,8 @@ ospoll_write(struct ospoll *ospoll, struct sockbuf *s)
     struct overlapped *u;
     int r;
 
+    if (s->eof)
+        return;
     if (s->bufwr->writing)
         return;
     if (s->bufwr->written >= s->bufwr->avail)
@@ -1100,12 +1137,14 @@ hyperv_accept_thread(LPVOID arg)
                    WSAGetLastError());
             break;
         }
+        socket_count++;
 
         {
             struct sockbuf *nsb = ospoll_sockbuf_alloc((int) n);
             struct overlapped *u;
 
             if (!nsb) {
+                socket_count--;
                 closesocket(n);
                 continue;
             }
@@ -1113,6 +1152,7 @@ hyperv_accept_thread(LPVOID arg)
             nsb->accept_next = NULL;
             nsb->overlapped_hyperv = ospoll_overlapped_alloc(nsb);
             if (!nsb->overlapped_hyperv) {
+                socket_count--;
                 closesocket(n);
                 ospoll_sockbuf_free(nsb);
                 continue;
@@ -1187,8 +1227,10 @@ ospoll_accept(struct ospoll *ospoll, struct sockbuf *s)
         u->u.ua.accept_sock = INVALID_SOCKET;
         return;
     }
+    socket_count++;
     if (!CreateIoCompletionPort((HANDLE) u->u.ua.accept_sock,
                                 ospoll->iocp_handle, (ULONG_PTR) 0, 0)) {
+        socket_count--;
         closesocket(u->u.ua.accept_sock);
         u->u.ua.accept_sock = INVALID_SOCKET;
         u->ref--;
@@ -1233,6 +1275,7 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
             return;
         new_sb = ospoll_sockbuf_alloc(u->u.ua.accept_sock);
         if (!new_sb) {
+            socket_count--;
             closesocket(u->u.ua.accept_sock);
             u->u.ua.accept_sock = INVALID_SOCKET;
             return;
@@ -1325,7 +1368,11 @@ process_overlapped(struct ospoll *ospoll, struct overlapped *u, int l)
                 s->bufwr->written = s->bufwr->avail = 0;
         s->bufwr->writing = 0;
     } else if (s->overlapped_disconnect == u) {
-        /* socket teardown handled by ospoll_sockbuf_free */
+        if (s->s != INVALID_SOCKET) {
+            closesocket(s->s);
+            s->s = (int) INVALID_SOCKET;
+        }
+        ospoll_sockbuf_free(s);
     } else {
         assert(!"unknown overlapped");
     }
@@ -1342,6 +1389,18 @@ ospoll_drain(struct ospoll *ospoll, DWORD ms_timeout)
     BOOL ok;
     ULONG j;
 
+    for (j = 0; j < 256; j += 4) {
+/* if we don't zero these members, we get an unitialized-access warning with DrMemory */
+        entries[j + 0].lpOverlapped = NULL;
+        entries[j + 0].dwNumberOfBytesTransferred = 0;
+        entries[j + 1].lpOverlapped = NULL;
+        entries[j + 1].dwNumberOfBytesTransferred = 0;
+        entries[j + 2].lpOverlapped = NULL;
+        entries[j + 2].dwNumberOfBytesTransferred = 0;
+        entries[j + 3].lpOverlapped = NULL;
+        entries[j + 3].dwNumberOfBytesTransferred = 0;
+    }
+
     u = ospoll->completed_list;
     ospoll->completed_list = NULL;
     for (; u; u = next) {
@@ -1355,6 +1414,8 @@ ospoll_drain(struct ospoll *ospoll, DWORD ms_timeout)
     if (!ok && GetLastError() != WAIT_TIMEOUT)
         ErrorF("GetQueuedCompletionStatusEx failed: %ld\n",
                 (long) GetLastError());
+    if (!ok)
+        n = 0;    /* Essential on Windows 10 which happens to return n from the previous call */
 
     for (j = 0; j < n; j++) {
         if (!entries[j].lpOverlapped)
