@@ -58,6 +58,17 @@
 
 #define WIN_POLL_TIMEOUT_DATA	30
 
+/* Retry the Win32->X11 clipboard sync shortly after OpenClipboard fails
+   with transient contention (ERROR_ACCESS_DENIED), instead of relying on
+   the next WM_CLIPBOARDUPDATE which may never arrive. */
+#define WIN_CLIPBOARD_RETRY_TIMER_ID	1
+#define WIN_CLIPBOARD_RETRY_MS		100
+#define WIN_CLIPBOARD_RETRY_MAX		20
+
+/* Result codes for winClipboardSyncFromWin32() */
+#define WIN_CBUPDATE_DONE		0
+#define WIN_CBUPDATE_RETRY		1
+
 /*
  * References to external symbols
  */
@@ -129,6 +140,140 @@ winProcessXEventsTimeout(HWND hwnd, xcb_window_t iWindow, xcb_connection_t *conn
 }
 
 /*
+ * Synchronize the X11 PRIMARY/CLIPBOARD selections with the current Win32
+ * clipboard contents.  Returns WIN_CBUPDATE_RETRY when the Win32 clipboard
+ * could not be opened because another process holds it (transient
+ * ERROR_ACCESS_DENIED); the caller should retry shortly, since waiting for
+ * the next WM_CLIPBOARDUPDATE would drop the update if no further clipboard
+ * change occurs.
+ */
+static int
+winClipboardSyncFromWin32(HWND hwnd, xcb_connection_t *conn,
+                          xcb_window_t iWindow, ClipboardAtoms *atoms,
+                          BOOL fRunning)
+{
+    xcb_generic_error_t *error;
+    xcb_void_cookie_t cookie_set;
+
+    /*
+     * NOTE: We cannot bail out when NULL == GetClipboardOwner ()
+     * because some applications deal with the clipboard in a manner
+     * that causes the clipboard owner to be NULL when they are in
+     * fact taking ownership.  One example of this is the Win32
+     * native compile of emacs.
+     */
+
+    /* Bail when we still own the clipboard */
+    {
+        HWND owner = GetClipboardOwner();
+        dbg_write("WM_CBUPDATE: GetClipboardOwner=0x%p hwnd=0x%p", owner, hwnd);
+        if (hwnd == owner) {
+            dbg_write("WM_CBUPDATE: we own clipboard, returning");
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - We own the clipboard, returning.\n");
+            return WIN_CBUPDATE_DONE;
+        }
+    }
+
+    /* Bail when shutting down */
+    if (!fRunning)
+        return WIN_CBUPDATE_DONE;
+
+    {
+        const UINT regPNG = atoms->cfPng, regJFIF = atoms->cfJfif, regGIF = atoms->cfGif;
+        BOOL bOneOfOurs = FALSE;
+        BOOL fCheckedClipboard = FALSE;
+
+        dbg_write("WM_CBUPDATE: opening clipboard...");
+        if (OpenClipboard(hwnd)) {
+            fCheckedClipboard = TRUE;
+            UINT fmt = 0;
+            dbg_write("WM_CBUPDATE: OpenClipboard OK, enumerating...");
+            while ((fmt = EnumClipboardFormats(fmt)) != 0) {
+                dbg_write("WM_CBUPDATE:   fmt=%u (0x%x)", (unsigned)fmt, (unsigned)fmt);
+                if (fmt == CF_UNICODETEXT || fmt == CF_TEXT || fmt == CF_HDROP ||
+                    fmt == CF_DIB || fmt == CF_DIBV5 || fmt == regPNG || fmt == regJFIF || fmt == regGIF) {
+                    bOneOfOurs = TRUE;
+                    dbg_write("WM_CBUPDATE:   -> bOneOfOurs=TRUE");
+                }
+            }
+            dbg_write("WM_CBUPDATE: enum done, bOneOfOurs=%d", (int)bOneOfOurs);
+            CloseClipboard();
+        } else {
+            dbg_write("WM_CBUPDATE: OpenClipboard FAILED: %lu", GetLastError());
+            ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
+            return WIN_CBUPDATE_RETRY;
+        }
+
+        if (fCheckedClipboard && !bOneOfOurs) {
+            dbg_write("WM_CBUPDATE: not ours, releasing X11 selections");
+            xcb_get_selection_owner_cookie_t cookie_get;
+            xcb_get_selection_owner_reply_t *reply;
+
+            /*
+             * We need to make sure that the X Server has processed
+             * previous XSetSelectionOwner messages.
+             */
+            xcb_aux_sync(conn);
+
+            winDebug("winClipboardWindowProc - XSync done.\n");
+
+            /* Release PRIMARY selection if owned */
+            cookie_get = xcb_get_selection_owner(conn, XCB_ATOM_PRIMARY);
+            reply = xcb_get_selection_owner_reply(conn, cookie_get, NULL);
+            if (reply) {
+                if (reply->owner == iWindow) {
+                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - PRIMARY selection is owned by us, releasing.\n");
+                    xcb_set_selection_owner(conn, XCB_NONE, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
+                }
+                free(reply);
+            }
+
+            /* Release CLIPBOARD selection if owned */
+            cookie_get = xcb_get_selection_owner(conn, atoms->atomClipboard);
+            reply = xcb_get_selection_owner_reply(conn, cookie_get, NULL);
+            if (reply) {
+                if (reply->owner == iWindow) {
+                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
+                             "CLIPBOARD selection is owned by us, releasing\n");
+                    xcb_set_selection_owner(conn, XCB_NONE, atoms->atomClipboard, XCB_CURRENT_TIME);
+                }
+                free(reply);
+            }
+
+            return WIN_CBUPDATE_DONE;
+        }
+
+        dbg_write("WM_CBUPDATE: reasserting X11 selections (bOneOfOurs=%d)", (int)bOneOfOurs);
+        /* Reassert ownership of PRIMARY */
+        cookie_set = xcb_set_selection_owner_checked(conn, iWindow, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
+        error = xcb_request_check(conn, cookie_set);
+        if (error) {
+            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of PRIMARY\n");
+            free(error);
+        } else {
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
+                     "Reasserted ownership of PRIMARY\n");
+        }
+
+        /* Reassert ownership of the CLIPBOARD */
+        cookie_set = xcb_set_selection_owner_checked(conn, iWindow, atoms->atomClipboard, XCB_CURRENT_TIME);
+        error = xcb_request_check(conn, cookie_set);
+        if (error) {
+            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of CLIPBOARD\n");
+            free(error);
+        }
+        else {
+            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Reasserted ownership of CLIPBOARD\n");
+        }
+
+        /* Flush the pending SetSelectionOwner event now */
+        xcb_flush(conn);
+    }
+
+    return WIN_CBUPDATE_DONE;
+}
+
+/*
  * Process a given Windows message
  */
 
@@ -139,6 +284,7 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static xcb_window_t iWindow;
     static ClipboardAtoms *atoms;
     static BOOL fRunning;
+    static int nClipRetry = 0;
 
     /* Branch on message type */
     switch (message) {
@@ -181,9 +327,6 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_CLIPBOARDUPDATE:
     {
-        xcb_generic_error_t *error;
-        xcb_void_cookie_t cookie_set;
-
         winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Enter\n");
 
 #if 0
@@ -274,131 +417,34 @@ winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
 #endif
 
-        /*
-         * NOTE: We cannot bail out when NULL == GetClipboardOwner ()
-         * because some applications deal with the clipboard in a manner
-         * that causes the clipboard owner to be NULL when they are in
-         * fact taking ownership.  One example of this is the Win32
-         * native compile of emacs.
-         */
-
-        /* Bail when we still own the clipboard */
-        {
-            HWND owner = GetClipboardOwner();
-            dbg_write("WM_CBUPDATE: GetClipboardOwner=0x%p hwnd=0x%p", owner, hwnd);
-            if (hwnd == owner) {
-                dbg_write("WM_CBUPDATE: we own clipboard, returning");
-                winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - We own the clipboard, returning.\n");
-                winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
-                return 0;
-            }
+        KillTimer(hwnd, WIN_CLIPBOARD_RETRY_TIMER_ID);
+        nClipRetry = 0;
+        if (winClipboardSyncFromWin32(hwnd, conn, iWindow, atoms, fRunning)
+                == WIN_CBUPDATE_RETRY) {
+            SetTimer(hwnd, WIN_CLIPBOARD_RETRY_TIMER_ID,
+                     WIN_CLIPBOARD_RETRY_MS, NULL);
         }
-
-        /* Bail when shutting down */
-        if (!fRunning)
-            return 0;
-
-        const UINT regPNG = atoms->cfPng, regJFIF = atoms->cfJfif, regGIF = atoms->cfGif;
-        BOOL bOneOfOurs = FALSE;
-        BOOL fCheckedClipboard = FALSE;
-
-        dbg_write("WM_CBUPDATE: opening clipboard...");
-        if (OpenClipboard(hwnd)) {
-            fCheckedClipboard = TRUE;
-            UINT fmt = 0;
-            dbg_write("WM_CBUPDATE: OpenClipboard OK, enumerating...");
-            while ((fmt = EnumClipboardFormats(fmt)) != 0) {
-                dbg_write("WM_CBUPDATE:   fmt=%u (0x%x)", (unsigned)fmt, (unsigned)fmt);
-                if (fmt == CF_UNICODETEXT || fmt == CF_TEXT || fmt == CF_HDROP ||
-                    fmt == CF_DIB || fmt == CF_DIBV5 || fmt == regPNG || fmt == regJFIF || fmt == regGIF) {
-                    bOneOfOurs = TRUE;
-                    dbg_write("WM_CBUPDATE:   -> bOneOfOurs=TRUE");
-                }
-            }
-            dbg_write("WM_CBUPDATE: enum done, bOneOfOurs=%d", (int)bOneOfOurs);
-            CloseClipboard();
-        } else {
-            dbg_write("WM_CBUPDATE: OpenClipboard FAILED: %lu", GetLastError());
-            ErrorF("  (could not open clipboard: %lu)\n", GetLastError());
-
-            /* Transient contention (ERROR_ACCESS_DENIED) on the clipboard:
-               reasserting X11 selection ownership here would fight whatever
-               app currently holds the clipboard and trigger the
-               reassert/churn loop.  Wait for the next WM_CLIPBOARDUPDATE
-               instead of reasserting blindly. */
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
-            return 0;
-        }
-
-        if (fCheckedClipboard && !bOneOfOurs) {
-            dbg_write("WM_CBUPDATE: not ours, releasing X11 selections");
-            xcb_get_selection_owner_cookie_t cookie_get;
-            xcb_get_selection_owner_reply_t *reply;
-
-            /*
-             * We need to make sure that the X Server has processed
-             * previous XSetSelectionOwner messages.
-             */
-            xcb_aux_sync(conn);
-
-            winDebug("winClipboardWindowProc - XSync done.\n");
-
-            /* Release PRIMARY selection if owned */
-            cookie_get = xcb_get_selection_owner(conn, XCB_ATOM_PRIMARY);
-            reply = xcb_get_selection_owner_reply(conn, cookie_get, NULL);
-            if (reply) {
-                if (reply->owner == iWindow) {
-                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - PRIMARY selection is owned by us, releasing.\n");
-                    xcb_set_selection_owner(conn, XCB_NONE, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
-                }
-                free(reply);
-            }
-
-            /* Release CLIPBOARD selection if owned */
-            cookie_get = xcb_get_selection_owner(conn, atoms->atomClipboard);
-            reply = xcb_get_selection_owner_reply(conn, cookie_get, NULL);
-            if (reply) {
-                if (reply->owner == iWindow) {
-                    winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                             "CLIPBOARD selection is owned by us, releasing\n");
-                    xcb_set_selection_owner(conn, XCB_NONE, atoms->atomClipboard, XCB_CURRENT_TIME);
-                }
-                free(reply);
-            }
-
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
-
-            return 0;
-        }
-
-        dbg_write("WM_CBUPDATE: reasserting X11 selections (bOneOfOurs=%d)", (int)bOneOfOurs);
-        /* Reassert ownership of PRIMARY */
-        cookie_set = xcb_set_selection_owner_checked(conn, iWindow, XCB_ATOM_PRIMARY, XCB_CURRENT_TIME);
-        error = xcb_request_check(conn, cookie_set);
-        if (error) {
-            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of PRIMARY\n");
-            free(error);
-        } else {
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - "
-                     "Reasserted ownership of PRIMARY\n");
-        }
-
-        /* Reassert ownership of the CLIPBOARD */
-        cookie_set = xcb_set_selection_owner_checked(conn, iWindow, atoms->atomClipboard, XCB_CURRENT_TIME);
-        error = xcb_request_check(conn, cookie_set);
-        if (error) {
-            ErrorF("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Could not reassert ownership of CLIPBOARD\n");
-            free(error);
-        }
-        else {
-            winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE - Reasserted ownership of CLIPBOARD\n");
-        }
-
-        /* Flush the pending SetSelectionOwner event now */
-        xcb_flush(conn);
     }
         winDebug("winClipboardWindowProc - WM_CLIPBOARDUPDATE: Exit\n");
         return 0;
+
+    case WM_TIMER:
+    {
+        if (wParam != WIN_CLIPBOARD_RETRY_TIMER_ID)
+            return 0;
+
+        nClipRetry++;
+        if (nClipRetry > WIN_CLIPBOARD_RETRY_MAX) {
+            KillTimer(hwnd, WIN_CLIPBOARD_RETRY_TIMER_ID);
+            nClipRetry = 0;
+        }
+        else if (winClipboardSyncFromWin32(hwnd, conn, iWindow, atoms, fRunning)
+                 != WIN_CBUPDATE_RETRY) {
+            KillTimer(hwnd, WIN_CLIPBOARD_RETRY_TIMER_ID);
+            nClipRetry = 0;
+        }
+        return 0;
+    }
 
     case WM_DESTROYCLIPBOARD:
         /*
