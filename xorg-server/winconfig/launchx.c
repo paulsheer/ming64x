@@ -1027,6 +1027,7 @@ struct options_audio {
 static void ensure_pulse_cookie(void);
 static int read_pulse_cookie(unsigned char out[256]);
 static int config_dir(char *out, const size_t outsz);
+static int config_dir_real(char *out, size_t outsz);
 
 struct options_ssh_login {
     char host[128];
@@ -1986,8 +1987,8 @@ tab_audio(struct nk_context *ctx, struct options_audio *opt)
     }
 
     {
-        char dir[512], path[512] = "";
-        if (!config_dir(dir, sizeof dir))
+        char dir[512] = "", path[512] = "";
+        if (!config_dir_real(dir, sizeof dir))
             snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
         readonly_option(ctx, "Data for PULSE_COOKIE file", path,
             "On Linux, run:  export PULSE_COOKIE=~/.ming64x-pulse-cookie\n"
@@ -2404,6 +2405,35 @@ cf_build(struct cfentry *e,
     e[n++] = CF_BOOL("audio", "loopback", audio->loopback_enabled);
 
     return n;
+}
+
+static int config_dir_real(char *out, size_t outsz)
+{
+    char dir[MAX_PATH], logical[MAX_PATH];
+    HANDLE h;
+    DWORD n;
+
+    if (config_dir(dir, sizeof dir))
+        return -1;
+    snprintf(logical, sizeof logical, "%s\\test.txt", dir);
+
+    h = CreateFileA(logical, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        n = GetFinalPathNameByHandleA(h, out, (DWORD) outsz, FILE_NAME_NORMALIZED);
+        CloseHandle(h);
+        if (n > 0 && n < outsz) {
+            /* GetFinalPathNameByHandleA prefixes "\\?\" to a local DOS path */
+            char *p = strrchr(out, '\\');
+            if (p)
+                *p = '\0';   /*  strip trailing  \test.txt   */
+            if (!strncmp(out, "\\\\?\\", 4))  /* might have prefix    \\?\   */
+                memmove(out, out + 4, strlen(out + 4) + 1);
+            return 0;
+        }
+    }
+
+    snprintf(out, outsz, "%s", dir);
+    return 0;
 }
 
 static int
