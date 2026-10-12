@@ -83,8 +83,7 @@ winW32ErrorEx(const char *msg, DWORD errorcode)
                        errorcode,
                        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                        (LPTSTR) &buffer, 0, NULL)) {
-        ErrorF(msg); 
-        ErrorF("Unknown error in FormatMessage!\n"); 
+        ErrorF("Unknown error %u [%s]\n", (unsigned int) errorcode, msg);
     }
     else {
         ErrorF("%s %s", msg, (char *)buffer); 
