@@ -35,6 +35,11 @@ nk_bool readonly_filter(const struct nk_text_edit *box, nk_rune unicode);
 void readonly_option(struct nk_context *ctx, const char *label, const char *value, const char *tooltip);
 void combobox_option(struct nk_context *ctx, const char *label, const char *const *items,
     const int count, int *selected, const char *tooltip);
+void combobox_option_right(struct nk_context *ctx, const char *label, const char *const *items,
+    const int count, int *selected, const char *tooltip);
+void combobox_2options(struct nk_context *ctx, const char *label, nk_bool label_right_justified,
+    const char *const *items1, const int count1, int *selected1,
+    const char *const *items2, const int count2, int *selected2, const char *tooltip);
 void heading(struct nk_context *ctx, const char *text);
 
 /* Bold font accessor for tabs that need the bold UI font.  GdiFont is opaque

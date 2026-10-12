@@ -13,9 +13,13 @@ tab_pointer_keyboard(struct nk_context *ctx, struct options_pointer_keyboard *op
 
     checkbox_option(ctx, "Alt+F4 exits server (-winkill)", &opt->winkill_enabled, "Allow Alt+F4 to exit the X server.");
 
-    checkbox_option(ctx, "Ctrl+Alt+Backspace exits server (-unixkill)", &opt->unixkill_enabled, "Allow Ctrl+Alt+Backspace to exit the X server.");
+    checkbox_option(ctx, "Grab Alt+Tab (-grab-alt-tab)", &opt->grab_alt_tab, "Grab Alt+Tab and pass it to the X server.");
 
-    checkbox_option(ctx, "Grab special Windows keys (-keyhook)", &opt->keyhook_enabled, "Install a low-level keyboard hook to send keys such as Alt+Tab and the\nMenu key to the X server.");
+    checkbox_option(ctx, "Grab left Windows key (-grab-left-win-key)", &opt->grab_left_win_key, "Grab the left Windows key and pass it to the X server.");
+
+    checkbox_option(ctx, "Grab right Windows key (-grab-right-win-key)", &opt->grab_right_win_key, "Grab the right Windows key and pass it to the X server.");
+
+    checkbox_option(ctx, "Ctrl+Alt+Backspace exits server (-unixkill)", &opt->unixkill_enabled, "Allow Ctrl+Alt+Backspace to exit the X server.");
 
     checkbox_option(ctx, "Ignore keyboard and mouse input (-ignoreinput)", &opt->ignoreinput_enabled, "Ignore all keyboard and mouse input (for testing and debugging).");
 

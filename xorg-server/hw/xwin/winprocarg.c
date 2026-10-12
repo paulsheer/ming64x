@@ -1098,6 +1098,21 @@ ddxProcessArgument(int argc, char *argv[], int i)
         return 1;
     }
 
+    if (IS_OPTION("-grab-alt-tab")) {
+        g_fGrabAltTab = TRUE;
+        return 1;
+    }
+
+    if (IS_OPTION("-grab-left-win-key")) {
+        g_fGrabLeftWinKey = TRUE;
+        return 1;
+    }
+
+    if (IS_OPTION("-grab-right-win-key")) {
+        g_fGrabRightWinKey = TRUE;
+        return 1;
+    }
+
     if (IS_OPTION("-swcursor")) {
         g_fSoftwareCursor = TRUE;
         return 1;

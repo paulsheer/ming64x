@@ -120,7 +120,7 @@ launchx_free_logo_image(struct nk_image *img)
 static const char *tab_names[12] = {
     "SSH login",
     "Networking & access control", "XDMCP", "Screen & windowing modes",
-    "Pointer & keyboard input", "XKB keyboard layout", "AccessX key sequences",
+    "Pointer & keyboard input", "International keyboard layout", "AccessX key sequences",
     "Windows desktop integration", "OpenGL / GLX",
     "Fonts, rendering & appearance", "Logging, scheduling & extensions",
     "Audio"
@@ -612,17 +612,47 @@ readonly_option(struct nk_context *ctx, const char *label, const char *value, co
     field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, label);
 }
 
-void
-combobox_option(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip)
+static void
+combobox_option_align(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip, nk_flags align)
 {
     struct nk_rect b;
     nk_layout_row_dynamic(ctx, 30, 2);
     b = nk_widget_bounds(ctx);
-    nk_label(ctx, label, NK_TEXT_LEFT);
+    nk_label(ctx, label, align);
     option_tooltip(ctx, b, tooltip);
     b = nk_widget_bounds(ctx);
     nk_combobox(ctx, items, count, selected, 25, nk_vec2(nk_widget_width(ctx), 200));
     option_tooltip(ctx, b, tooltip);
+}
+
+void
+combobox_2options(struct nk_context *ctx, const char *label, nk_bool label_right_justified, const char *const *items1, const int count1, int *selected1, const char *const *items2, const int count2, int *selected2, const char *tooltip)
+{
+    struct nk_rect b;
+    nk_flags align = label_right_justified ? NK_TEXT_RIGHT : NK_TEXT_LEFT;
+
+    nk_layout_row_dynamic(ctx, 30, 3);
+    b = nk_widget_bounds(ctx);
+    nk_label(ctx, label, align);
+    option_tooltip(ctx, b, tooltip);
+    b = nk_widget_bounds(ctx);
+    nk_combobox(ctx, items1, count1, selected1, 25, nk_vec2(nk_widget_width(ctx), 200));
+    option_tooltip(ctx, b, tooltip);
+    b = nk_widget_bounds(ctx);
+    nk_combobox(ctx, items2, count2, selected2, 25, nk_vec2(nk_widget_width(ctx), 200));
+    option_tooltip(ctx, b, tooltip);
+}
+
+void
+combobox_option(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip)
+{
+    combobox_option_align(ctx, label, items, count, selected, tooltip, NK_TEXT_LEFT);
+}
+
+void
+combobox_option_right(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip)
+{
+    combobox_option_align(ctx, label, items, count, selected, tooltip, NK_TEXT_RIGHT);
 }
 
 static GdiFont *g_bold_font;
@@ -710,7 +740,9 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .emulate3buttons_timeout = "50",   /* WIN_DEFAULT_E3B_TIME */
         .winkill_enabled = 1,              /* WIN_DEFAULT_WIN_KILL */
         .unixkill_enabled = 0,
-        .keyhook_enabled = 0,
+        .grab_alt_tab = 0,
+        .grab_left_win_key = 0,
+        .grab_right_win_key = 0,
         .ignoreinput_enabled = 0,
         .autorepeat_enabled = 1,           /* DEFAULT_AUTOREPEAT */
         .pointer_acceleration = "2",       /* DEFAULT_PTR_NUMERATOR */
@@ -720,9 +752,10 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .autorepeat_interval = "40",       /* XkbDfltRepeatInterval */
     };
     *xkb_opt = (struct options_xkb) {
-        .xkblayout = {0},
+        .layout_sel = {0},
         .xkbmodel = "pc105",
-        .xkbvariant = {0},
+        .xkbvariant = {{0}},
+        .opt_sel = {0},
         .xkboptions = {0},
         .xkbrules = "xorg",
         .xkbdir = {0},
@@ -921,8 +954,10 @@ cf_build(struct cfentry *e,
     e[n++] = CF_BOOL("pointerkeyboardinput", "emulate3buttonmouse", pointer->emulate3buttons_enabled);
     e[n++] = CF_STR("pointerkeyboardinput", "emulatetimeout", pointer->emulate3buttons_timeout);
     e[n++] = CF_BOOL("pointerkeyboardinput", "altf4exitsserver", pointer->winkill_enabled);
+    e[n++] = CF_BOOL("pointerkeyboardinput", "grabalttab", pointer->grab_alt_tab);
+    e[n++] = CF_BOOL("pointerkeyboardinput", "grableftwindowskey", pointer->grab_left_win_key);
+    e[n++] = CF_BOOL("pointerkeyboardinput", "grabrightwindowskey", pointer->grab_right_win_key);
     e[n++] = CF_BOOL("pointerkeyboardinput", "ctrlaltbackspaceexitsserver", pointer->unixkill_enabled);
-    e[n++] = CF_BOOL("pointerkeyboardinput", "grabspecialwindowskeys", pointer->keyhook_enabled);
     e[n++] = CF_BOOL("pointerkeyboardinput", "ignorekeyboardandmouseinput", pointer->ignoreinput_enabled);
     e[n++] = CF_BOOL("pointerkeyboardinput", "enableautorepeat", pointer->autorepeat_enabled);
     e[n++] = CF_STR("pointerkeyboardinput", "pointeracceleration", pointer->pointer_acceleration);
@@ -931,9 +966,13 @@ cf_build(struct cfentry *e,
     e[n++] = CF_STR("pointerkeyboardinput", "autorepeatdelay", pointer->autorepeat_delay);
     e[n++] = CF_STR("pointerkeyboardinput", "autorepeatinterval", pointer->autorepeat_interval);
 
-    e[n++] = CF_STR("xkbkeyboardlayout", "layout", xkb->xkblayout);
+    e[n++] = CF_INT("xkbkeyboardlayout", "layout", xkb->layout_sel[0], 0, (int)LAYOUT_COUNT - 1);
+    e[n++] = CF_INT("xkbkeyboardlayout", "layout2", xkb->layout_sel[1], 0, (int)LAYOUT_COUNT - 1);
+    e[n++] = CF_INT("xkbkeyboardlayout", "layout3", xkb->layout_sel[2], 0, (int)LAYOUT_COUNT - 1);
     e[n++] = CF_STR("xkbkeyboardlayout", "model", xkb->xkbmodel);
-    e[n++] = CF_STR("xkbkeyboardlayout", "variant", xkb->xkbvariant);
+    e[n++] = CF_STR("xkbkeyboardlayout", "variant", xkb->xkbvariant[0]);
+    e[n++] = CF_STR("xkbkeyboardlayout", "variant2", xkb->xkbvariant[1]);
+    e[n++] = CF_STR("xkbkeyboardlayout", "variant3", xkb->xkbvariant[2]);
     e[n++] = CF_STR("xkbkeyboardlayout", "options", xkb->xkboptions);
     e[n++] = CF_STR("xkbkeyboardlayout", "rules", xkb->xkbrules);
     e[n++] = CF_STR("xkbkeyboardlayout", "basedirectory", xkb->xkbdir);
@@ -1183,11 +1222,14 @@ save_config(struct options_ssh_login *ssh,
     struct options_logging_extensions *logging,
     struct options_audio *audio)
 {
-    struct cfentry e[160];
-    int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging, audio);
+    struct cfentry e[200];
+    int n;
     char dir[512], path[512], tmp[512];
     FILE *f;
     int i;
+
+    xkb_options_build(xkb->xkboptions, sizeof(xkb->xkboptions), xkb);
+    n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging, audio);
 
     if (config_dir(dir, sizeof dir))
         return;
@@ -1230,7 +1272,7 @@ load_config(struct options_ssh_login *ssh,
     struct options_logging_extensions *logging,
     struct options_audio *audio)
 {
-    struct cfentry e[160];
+    struct cfentry e[200];
     int n = cf_build(e, ssh, net, xdmcp, screen, pointer, xkb, accessx, desktop, glx, fonts, logging, audio);
     char dir[512], path[512], line[4096];
     FILE *f;
@@ -1284,6 +1326,7 @@ load_config(struct options_ssh_login *ssh,
             }
         }
     }
+    xkb_options_parse(xkb, xkb->xkboptions);
     fclose(f);
 }
 
@@ -1631,7 +1674,9 @@ build_server_cmdline(struct cmdline *c,
     if (!pointer->winkill_enabled)
         cl_arg(c, "-nowinkill");
     cl_if(c, pointer->unixkill_enabled, "-unixkill");
-    cl_if(c, pointer->keyhook_enabled, "-keyhook");
+    cl_if(c, pointer->grab_alt_tab, "-grab-alt-tab");
+    cl_if(c, pointer->grab_left_win_key, "-grab-left-win-key");
+    cl_if(c, pointer->grab_right_win_key, "-grab-right-win-key");
     cl_if(c, pointer->ignoreinput_enabled, "-ignoreinput");
     if (!pointer->autorepeat_enabled)
         cl_arg(c, "-r");
@@ -1680,10 +1725,43 @@ build_server_cmdline(struct cmdline *c,
         }
     }
 
-    /* XKB keyboard layout */
-    cl_opt(c, "-xkblayout", xkb->xkblayout, NULL);
+    /* International keyboard layout + variants */
+    {
+        char layout_joined[64], variant_joined[192];
+        int i, nlayouts = 0, anyvariant = 0;
+        size_t llen = 0, vlen = 0;
+
+        for (i = 0; i < 3; i++)
+            if (xkb->layout_sel[i] != 0)
+                nlayouts = i + 1;
+
+        if (nlayouts > 0) {
+            layout_joined[0] = variant_joined[0] = '\0';
+            for (i = 0; i < nlayouts; i++) {
+                if (i > 0) {
+                    layout_joined[llen++] = ',';
+                    variant_joined[vlen++] = ',';
+                }
+                llen += (size_t)snprintf(layout_joined + llen,
+                                         sizeof(layout_joined) - llen, "%s",
+                                         layout_codes[xkb->layout_sel[i]]);
+                if (xkb->xkbvariant[i][0]) {
+                    vlen += (size_t)snprintf(variant_joined + vlen,
+                                             sizeof(variant_joined) - vlen, "%s",
+                                             xkb->xkbvariant[i]);
+                    anyvariant = 1;
+                }
+            }
+            cl_arg(c, "-xkblayout");
+            cl_arg(c, layout_joined);
+            if (anyvariant) {
+                cl_arg(c, "-xkbvariant");
+                cl_arg(c, variant_joined);
+            }
+        }
+    }
     cl_opt(c, "-xkbmodel", xkb->xkbmodel, "pc105");
-    cl_opt(c, "-xkbvariant", xkb->xkbvariant, NULL);
+    xkb_options_build(xkb->xkboptions, sizeof(xkb->xkboptions), xkb);
     cl_opt(c, "-xkboptions", xkb->xkboptions, NULL);
     cl_opt(c, "-xkbrules", xkb->xkbrules, "xorg");
     cl_opt(c, "-xkbdir", xkb->xkbdir, NULL);

@@ -814,6 +814,15 @@ winUseMsg(void)
            "\tGrab special Windows keypresses like Alt-Tab or the Menu "
            "key.\n");
 
+    ErrorF("-grab-alt-tab\n"
+           "\tGrab Alt-Tab and pass it to the X server.\n");
+
+    ErrorF("-grab-left-win-key\n"
+           "\tGrab the left Windows key and pass it to the X server.\n");
+
+    ErrorF("-grab-right-win-key\n"
+           "\tGrab the right Windows key and pass it to the X server.\n");
+
     ErrorF("-lesspointer\n"
            "\tHide the windows mouse pointer when it is over any\n"
            "\t" EXECUTABLE_NAME

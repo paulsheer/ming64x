@@ -868,8 +868,9 @@ winTopLevelWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         winRestoreModeKeyStates();
 
         /* Add the keyboard hook if possible */
-        if (g_fKeyboardHookLL)
-            g_fKeyboardHookLL = winInstallKeyboardHookLL();
+        if (g_fKeyboardHookLL || g_fGrabAltTab ||
+            g_fGrabLeftWinKey || g_fGrabRightWinKey)
+            winInstallKeyboardHookLL();
 
         /* Tell our Window Manager thread to activate the window */
         if (pWin)

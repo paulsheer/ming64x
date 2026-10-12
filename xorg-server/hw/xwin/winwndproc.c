@@ -1018,8 +1018,9 @@ winWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         winRestoreModeKeyStates();
 
         /* Add the keyboard hook if possible */
-        if (g_fKeyboardHookLL)
-            g_fKeyboardHookLL = winInstallKeyboardHookLL();
+        if (g_fKeyboardHookLL || g_fGrabAltTab ||
+            g_fGrabLeftWinKey || g_fGrabRightWinKey)
+            winInstallKeyboardHookLL();
         return 0;
 
     case WM_KILLFOCUS:

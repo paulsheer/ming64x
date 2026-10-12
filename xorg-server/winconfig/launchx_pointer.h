@@ -8,7 +8,9 @@ struct options_pointer_keyboard {
     char emulate3buttons_timeout[16];
     int winkill_enabled;
     int unixkill_enabled;
-    int keyhook_enabled;
+    int grab_alt_tab;
+    int grab_left_win_key;
+    int grab_right_win_key;
     int ignoreinput_enabled;
     int autorepeat_enabled;
     char pointer_acceleration[16];

@@ -1497,7 +1497,8 @@ CheckUserParameters(int argc, char **argv, char **envp)
     {
         /* Check each argv[] */
         for (i = 1; i < argc; i++) {
-            if (strcmp(argv[i], "-fp") == 0) {
+            if (strcmp(argv[i], "-fp") == 0 ||
+                strcmp(argv[i], "-xkboptions") == 0) {
                 i++;            /* continue with next argument. skip the length check */
                 if (i >= argc)
                     break;

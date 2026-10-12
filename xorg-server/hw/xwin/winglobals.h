@@ -91,6 +91,9 @@ extern HICON g_hSmallIconX;
 extern DWORD g_dwCurrentThreadID;
 
 extern Bool g_fKeyboardHookLL;
+extern Bool g_fGrabAltTab;
+extern Bool g_fGrabLeftWinKey;
+extern Bool g_fGrabRightWinKey;
 extern Bool g_fButton[3];
 
 extern pthread_mutex_t g_pmTerminating;
