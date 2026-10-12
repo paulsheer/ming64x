@@ -140,6 +140,36 @@ winKeybdBell(int iPercent, DeviceIntPtr pDeviceInt, void *pCtrl, int iClass)
 static void
 winKeybdCtrl(DeviceIntPtr pDevice, KeybdCtrl * pCtrl)
 {
+    static const struct {
+        Leds bit;
+        BYTE vk;
+        BYTE sc;
+        BOOL extended;
+    } leds[] = {
+        { 0x01, VK_CAPITAL, 0x3A, FALSE },
+        { 0x02, VK_NUMLOCK, 0x45, TRUE },
+        { 0x04, VK_SCROLL, 0x46, TRUE },
+    };
+    int i;
+
+    /*
+     * Windows has no direct "set LED" API.  The lock LEDs are driven
+     * by toggling the corresponding lock key with a synthetic key
+     * press/release.  Only synthesize an event when the physical LED
+     * differs from the state X requests, so we neither bounce the
+     * logical lock state unnecessarily nor feed key events back to X.
+     */
+    for (i = 0; i < (int) (sizeof(leds) / sizeof(leds[0])); ++i) {
+        int xLedOn = (pCtrl->leds & leds[i].bit) != 0;
+        int winLedOn = (GetKeyState(leds[i].vk) & 0x0001) != 0;
+
+        if (xLedOn != winLedOn) {
+            DWORD flags = leds[i].extended ? KEYEVENTF_EXTENDEDKEY : 0;
+
+            keybd_event(leds[i].vk, leds[i].sc, flags, 0);
+            keybd_event(leds[i].vk, leds[i].sc, flags | KEYEVENTF_KEYUP, 0);
+        }
+    }
 }
 
 /*
