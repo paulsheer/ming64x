@@ -830,6 +830,20 @@ $(NUKLEAR_LIB): $(NUKLEAR_OBJ)
 # ---------------------------------------------------------------------------
 LAUNCHX_SRC := winconfig/launchx.c
 LAUNCHX_OBJ := $(OBJDIR)/winconfig/launchx.o
+LAUNCHX_TAB_SRCS := \
+	winconfig/launchx_sshlogin.c \
+	winconfig/launchx_network.c \
+	winconfig/launchx_xdmcp.c \
+	winconfig/launchx_screen.c \
+	winconfig/launchx_pointer.c \
+	winconfig/launchx_xkb.c \
+	winconfig/launchx_accessx.c \
+	winconfig/launchx_desktop.c \
+	winconfig/launchx_glx.c \
+	winconfig/launchx_fonts.c \
+	winconfig/launchx_logging.c \
+	winconfig/launchx_audio.c
+LAUNCHX_TAB_OBJS := $(LAUNCHX_TAB_SRCS:winconfig/%.c=$(OBJDIR)/winconfig/%.o)
 LAUNCHX_RC  := winconfig/launchx.rc
 LAUNCHX_RES := $(OBJDIR)/winconfig/launchx-res.o
 TERMINAL_SRC := winconfig/terminal.c
@@ -849,7 +863,7 @@ USERTIME_SRC := winconfig/usertime.c
 USERTIME_OBJ := $(OBJDIR)/winconfig/usertime.o
 COROUT_OBJS := $(COROUT_OBJ) $(RANKTREE_OBJ) $(PAIRHEAP_OBJ) $(USERTIME_OBJ)
 
-$(LAUNCHX_OBJ): $(LAUNCHX_SRC) winconfig/terminal.h winconfig/ssh.h winconfig/x_logo_rgb.h
+$(LAUNCHX_OBJ) $(LAUNCHX_TAB_OBJS): $(OBJDIR)/winconfig/%.o: winconfig/%.c winconfig/terminal.h winconfig/ssh.h winconfig/launchx_common.h winconfig/x_logo_rgb.h
 	@mkdir -p $(dir $@)
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) -c -o $@ $<
@@ -913,9 +927,9 @@ $(LIBSSH2_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 $(COROUT_OBJS): DEFINES := -DMSWIN_OVLPIO -DMINGWIN64 -DHAVE_SETJMP
 $(COROUT_OBJS): INCLUDES := -I$(TOPSRCDIR)/winconfig
 
-$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
+$(LAUNCHX_TARGET): $(LAUNCHX_OBJ) $(LAUNCHX_TAB_OBJS) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES)
 	@echo "  LINK    $@"
-	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lmswsock -liphlpapi -lbcrypt -lcrypt32 -lwinmm
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(LAUNCHX_OBJ) $(LAUNCHX_TAB_OBJS) $(TERMINAL_OBJ) $(SSH_OBJ) $(COROUT_OBJS) $(NUKLEAR_LIB) $(LIBSSH2_OBJS) $(LAUNCHX_RES) -lmsimg32 -lgdi32 -luser32 -lws2_32 -lmswsock -liphlpapi -lbcrypt -lcrypt32 -lwinmm
 
 # ---------------------------------------------------------------------------
 # libltdl (GNU libtool's dlopen wrapper) — static library for pulseaudio

@@ -41,7 +41,19 @@ static float nk_sin(const float x) { return sinf(x); }
 #define NK_GDI_IMPLEMENTATION
 #include "../Nuklear/demo/gdi/nuklear_gdi.h"
 
-int inaddr_validate(const char *s, int *family);
+#include "launchx_common.h"
+#include "launchx_sshlogin.h"
+#include "launchx_network.h"
+#include "launchx_xdmcp.h"
+#include "launchx_screen.h"
+#include "launchx_pointer.h"
+#include "launchx_xkb.h"
+#include "launchx_accessx.h"
+#include "launchx_desktop.h"
+#include "launchx_glx.h"
+#include "launchx_fonts.h"
+#include "launchx_logging.h"
+#include "launchx_audio.h"
 
 /* Build an HBITMAP-backed nk_image from the embedded RGB logo. The GDI
    backend draws whatever HBITMAP is in handle.ptr, so this is the only
@@ -114,119 +126,20 @@ static const char *tab_names[12] = {
     "Audio"
 };
 
-static const char *maxclients_items[] = {"64", "128", "256", "512", "1024", "2048"};
-
-#define MAXCLIENTS_COUNT (sizeof(maxclients_items) / sizeof(maxclients_items[0]))
-
-static const char *listeningport_items[] = {
-    "Display :0 on tcp port 6000",
-    "Display :1 on tcp port 6001",
-    "Display :2 on tcp port 6002",
-    "Display :3 on tcp port 6003",
-    "Display :4 on tcp port 6004",
-    "Display :5 on tcp port 6005",
-    "Display :6 on tcp port 6006",
-    "Display :7 on tcp port 6007",
-    "Display :8 on tcp port 6008",
-    "Display :9 on tcp port 6009",
-    "Display :10 on tcp port 6010",
-    "Display :11 on tcp port 6011",
-    "Display :12 on tcp port 6012"
-};
-#define LISTENINGPORT_COUNT (sizeof(listeningport_items) / sizeof(listeningport_items[0]))
-
-static const char *resize_items[] = {"none", "scrollbars", "randr"};
-#define RESIZE_COUNT (sizeof(resize_items) / sizeof(resize_items[0]))
-
-static const char *depth_items[] = {"Auto", "8", "15", "16", "24", "32"};
-#define DEPTH_COUNT (sizeof(depth_items) / sizeof(depth_items[0]))
-
-static const char *engine_items[] = {"Auto detect", "Shadow GDI (1)", "Shadow DirectDraw4 (4)"};
-#define ENGINE_COUNT (sizeof(engine_items) / sizeof(engine_items[0]))
-
-static const char *xinerama_items[] = {"Disabled", "Enabled"};
-#define XINERAMA_COUNT (sizeof(xinerama_items) / sizeof(xinerama_items[0]))
-
-static const char *render_items[] = {"default", "mono", "gray", "color"};
-#define RENDER_COUNT (sizeof(render_items) / sizeof(render_items[0]))
-
-static const char *deferglyphs_items[] = {"none", "all", "16"};
-#define DEFERGLYPHS_COUNT (sizeof(deferglyphs_items) / sizeof(deferglyphs_items[0]))
-
-static const char *backingstore_items[] = {"Default", "Enable (+bs)", "Disable (-bs)"};
-#define BACKINGSTORE_COUNT (sizeof(backingstore_items) / sizeof(backingstore_items[0]))
-
-#define NUM_EXTENSIONS 16
-static const char *extension_names[NUM_EXTENSIONS] = {
-    "SHAPE", "XTEST", "SECURITY", "XINERAMA", "XFIXES",
-    "XFree86-Bigfont", "RENDER", "RANDR", "COMPOSITE", "DAMAGE",
-    "MIT-SCREEN-SAVER", "DOUBLE-BUFFER", "RECORD", "DPMS",
-    "X-Resource", "GLX"
-};
-
-static const char *audio_listen_items[] = {
-    "Loopback only (127.0.0.1)",
-    "All interfaces (0.0.0.0)",
-    "All interfaces (IPv4 + IPv6)"
-};
-#define AUDIO_LISTEN_COUNT (sizeof(audio_listen_items) / sizeof(audio_listen_items[0]))
-
-static const char *audio_auth_items[] = {
-    "Cookie (shared pulse-cookie)",
-    "Anonymous",
-    "IP allow-list"
-};
-#define AUDIO_AUTH_COUNT (sizeof(audio_auth_items) / sizeof(audio_auth_items[0]))
-
-static const char *audio_rate_items[] = {
-    "Auto (44100 Hz)", "44100 Hz", "48000 Hz", "96000 Hz", "192000 Hz"
-};
-#define AUDIO_RATE_COUNT (sizeof(audio_rate_items) / sizeof(audio_rate_items[0]))
-
-static const int audio_rate_values[] = { 0, 44100, 48000, 96000, 192000 };
-
-static const char *audio_format_items[] = {
-    "Auto (s16le)", "s16le (16-bit)", "s24le (24-bit)", "s32le (32-bit)"
-};
-#define AUDIO_FORMAT_COUNT (sizeof(audio_format_items) / sizeof(audio_format_items[0]))
-
-static const char *audio_format_values[] = { "", "s16le", "s24le", "s32le" };
-
-static const char *audio_channels_items[] = {
-    "Auto (stereo)", "Mono (1)", "Stereo (2)"
-};
-#define AUDIO_CHANNELS_COUNT (sizeof(audio_channels_items) / sizeof(audio_channels_items[0]))
-
-static const int audio_channels_values[] = { 0, 1, 2 };
-
-static const char *audio_latency_items[] = {
-    "Default", "Low", "Medium", "High"
-};
-#define AUDIO_LATENCY_COUNT (sizeof(audio_latency_items) / sizeof(audio_latency_items[0]))
-
-static const int audio_latency_fragments[] = { 0, 3, 5, 8 };
-static const int audio_latency_fragment_size[] = { 0, 4096, 8192, 16384 };
-
-#define MAX_AUDIO_DEVICES 16
-static char audio_output_devices[MAX_AUDIO_DEVICES][MAXPNAMELEN];
-static int audio_output_device_count;
-static char audio_input_devices[MAX_AUDIO_DEVICES][MAXPNAMELEN];
-static int audio_input_device_count;
-
 static ssh_session *g_ssh;
 static int *g_current_tab;
 
-static int g_focus_idx = -1;        /* focused widget in tab order, -1 = none */
+int g_focus_idx = -1;        /* focused widget in tab order, -1 = none */
 static int g_focus_count = 0;       /* focusable widgets drawn last frame */
-static int g_focus_seq = 0;         /* running counter while drawing this frame */
+int g_focus_seq = 0;         /* running counter while drawing this frame */
 static int g_focus_on = 0;          /* focus nav active (SSH login tab, not connected) */
 static int g_unfocus_edits = 0;     /* Tab pressed: clear edit focus this frame */
 static int g_activate_pressed = 0;  /* Enter/Space pressed: activate focused button */
-static int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal) */
+int g_confirm_reset = 0;     /* Reset confirmation dialog is open (modal) */
 static int g_confirm_exit = 0;      /* Exit-with-live-connections dialog is open (modal) */
 static char g_notice[512];          /* cross-tab conflict explanation (modal) */
 static char g_acl_error[512];       /* ACL validation error (modal) */
-static char g_hyperv_error[1024];   /* Hyper-V registry write error (modal) */
+char g_hyperv_error[1024];   /* Hyper-V registry write error (modal) */
 
 static const void *g_field_menu_owner; /* unique key of the field whose context menu is open */
 static int g_field_menu_copy;       /* menu shows Copy (frozen for the menu lifetime) */
@@ -342,27 +255,14 @@ WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
     return DefWindowProcW(wnd, msg, wparam, lparam);
 }
 
-struct options_network_and_access_control {
-    int ac_enabled;
-    char allow_string[1024];
-    char auth_file[1024];
-    int byteswap_enabled;
-    int maxclients_sel;
-    int maxbigreqsize;
-    int listeningport_sel;
-    char vmid[256];
-    char vsockport[16];
-    int hyperv_registry_enabled;
-};
-
-static void
+void
 option_tooltip(struct nk_context *ctx, const struct nk_rect bounds, const char *text)
 {
     static float timer = 0.0f;
     nk_do_tooltip_delay(ctx, text, bounds, &timer);
 }
 
-static int
+int
 focus_pick(struct nk_context *ctx, struct nk_rect *b)
 {
     int focused = 0;
@@ -375,7 +275,7 @@ focus_pick(struct nk_context *ctx, struct nk_rect *b)
     return focused;
 }
 
-static void
+void
 focus_ring(struct nk_context *ctx, const struct nk_rect b)
 {
     nk_stroke_rect(nk_window_get_canvas(ctx),
@@ -383,7 +283,7 @@ focus_ring(struct nk_context *ctx, const struct nk_rect b)
         0, 2.0f, nk_rgb(70, 140, 240));
 }
 
-static int
+int
 button_option(struct nk_context *ctx, const char *label)
 {
     struct nk_rect b;
@@ -429,7 +329,7 @@ ok_dialog(struct nk_context *ctx, HWND wnd, const char *title,
     nk_end(ctx);
 }
 
-static void
+void
 checkbox_option(struct nk_context *ctx, const char *label, int *value, const char *tooltip)
 {
     struct nk_rect b;
@@ -589,7 +489,7 @@ field_paste(struct nk_context *ctx, char *buffer, int buffer_size)
 
 /* Right-click context menu for a text field, mirroring the terminal's
    Copy/Paste menu. copy_ok/paste_ok select which items may appear. */
-static void
+void
 field_context_menu(struct nk_context *ctx, struct nk_rect bounds,
     char *buffer, int buffer_size, int copy_ok, int paste_ok,
     const void *owner)
@@ -655,7 +555,7 @@ field_context_menu(struct nk_context *ctx, struct nk_rect bounds,
     }
 }
 
-static nk_flags
+nk_flags
 text_option_cell(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip, nk_flags align)
 {
     struct nk_rect b;
@@ -677,14 +577,14 @@ text_option_cell(struct nk_context *ctx, const char *label, char *buffer, const 
     return ret;
 }
 
-static nk_flags
+nk_flags
 text_option(struct nk_context *ctx, const char *label, char *buffer, const int buffer_size, const char *tooltip)
 {
     nk_layout_row_dynamic(ctx, 30, 2);
     return text_option_cell(ctx, label, buffer, buffer_size, tooltip, NK_TEXT_LEFT);
 }
 
-static nk_bool
+nk_bool
 readonly_filter(const struct nk_text_edit *box, nk_rune unicode)
 {
     (void)box;
@@ -692,7 +592,7 @@ readonly_filter(const struct nk_text_edit *box, nk_rune unicode)
     return 0;
 }
 
-static void
+void
 readonly_option(struct nk_context *ctx, const char *label, const char *value, const char *tooltip)
 {
     struct nk_rect b;
@@ -712,219 +612,7 @@ readonly_option(struct nk_context *ctx, const char *label, const char *value, co
     field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, label);
 }
 
-/* Full-row read-only text field: no label, selectable but not editable.
-   Used for the Hyper-V registry path, which mirrors the vsock port. */
-static void
-readonly_option_fullrow(struct nk_context *ctx, const char *value, const char *tooltip)
-{
-    struct nk_rect eb;
-    static char buf[512];
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    eb = nk_widget_bounds(ctx);
-    snprintf(buf, sizeof(buf), "%s", value);
-    nk_edit_string_zero_terminated(ctx,
-        NK_EDIT_SELECTABLE | NK_EDIT_CLIPBOARD | NK_EDIT_AUTO_SELECT,
-        buf, (int)sizeof(buf), readonly_filter);
-    option_tooltip(ctx, eb, tooltip);
-    field_context_menu(ctx, eb, buf, (int)sizeof(buf), 1, 0, "hyperv_registry_path");
-}
-
-/* Compute the GuestCommunicationServices registry key name from the VSock
-   port. The service GUID is HV_GUID_VSOCK_TEMPLATE with the port encoded in
-   Data1 (the first eight hex digits). */
-static void
-hyperv_registry_path(const char *vsockport, char *out, size_t outsz)
-{
-    unsigned int port = (unsigned int)strtoul(vsockport, NULL, 10);
-
-    snprintf(out, outsz,
-        "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Virtualization\\GuestCommunicationServices\\%08X-FACB-11E6-BD58-64006A7986D3",
-        port);
-}
-
-/* Create/update the GuestCommunicationServices registry key for the current
-   VSock port so the Hyper-V host will route incoming guest connections to
-   the listener.  Requires elevation (HKLM).  Returns 0 on success, else the
-   Win32 error code. */
-static int
-hyperv_update_registry(const struct options_network_and_access_control *net)
-{
-    char full[512];
-    char element[64];
-    unsigned int port;
-    const char *subkey;
-    HKEY hk = NULL;
-    LONG rc;
-    DWORD disp;
-
-    port = (unsigned int)strtoul(net->vsockport, NULL, 10);
-    hyperv_registry_path(net->vsockport, full, sizeof(full));
-    subkey = full + 5;                  /* skip the "HKLM\" prefix */
-
-    snprintf(element, sizeof(element), "ming64x Hyper-V VSock port %u", port);
-
-    rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, subkey, 0, NULL, 0,
-        KEY_SET_VALUE | KEY_WOW64_64KEY, NULL, &hk, &disp);
-    if (rc != ERROR_SUCCESS)
-        return (int)rc;
-
-    rc = RegSetValueExA(hk, "ElementName", 0, REG_SZ,
-        (const BYTE *)element, (DWORD)(strlen(element) + 1));
-    RegCloseKey(hk);
-    return (rc == ERROR_SUCCESS) ? 0 : (int)rc;
-}
-
-/* Relaunch launchx.exe elevated (UAC) to write the Hyper-V registry key,
-   then wait for it to finish.  Returns the helper's exit code (0 on success,
-   else a Win32 error code). */
-static int
-hyperv_self_elevate_write(const char *vsockport)
-{
-    char self[MAX_PATH];
-    char args[160];
-    SHELLEXECUTEINFOA sei;
-    DWORD exit_code = ERROR_ACCESS_DENIED;
-
-    if (GetModuleFileNameA(NULL, self, sizeof(self)) == 0)
-        return ERROR_FILE_NOT_FOUND;
-
-    snprintf(args, sizeof(args), "--write-hyperv-reg \"%s\"", vsockport);
-
-    ZeroMemory(&sei, sizeof(sei));
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-    sei.lpVerb = "runas";
-    sei.lpFile = self;
-    sei.lpParameters = args;
-    sei.nShow = SW_HIDE;
-
-    if (!ShellExecuteExA(&sei))
-        return (int)GetLastError();
-
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    if (!GetExitCodeProcess(sei.hProcess, &exit_code))
-        exit_code = GetLastError();
-    CloseHandle(sei.hProcess);
-    return (int)exit_code;
-}
-
-/* Write the Hyper-V registry key, self-elevating via UAC when the direct
-   write is denied.  Returns 0 on success, else a Win32 error code. */
-static int
-hyperv_registry_write_elevated(const char *vsockport)
-{
-    struct options_network_and_access_control net;
-    int rc;
-
-    memset(&net, 0, sizeof(net));
-    snprintf(net.vsockport, sizeof(net.vsockport), "%s", vsockport);
-
-    rc = hyperv_update_registry(&net);
-    if (rc == 0 || rc != ERROR_ACCESS_DENIED)
-        return rc;
-
-    return hyperv_self_elevate_write(vsockport);
-}
-
-/* Write the Hyper-V service GUID to the registry (elevating if necessary),
-   surfacing any failure via the shared error modal.  Returns 0 on success,
-   else the Win32 error code.  Skips a rewrite of the same port so the Start
-   handler does not prompt for UAC again after the checkbox already wrote it. */
-static int
-hyperv_registry_apply(const struct options_network_and_access_control *net)
-{
-    static char written_port[16];
-    int rc;
-
-    if (strcmp(written_port, net->vsockport) == 0)
-        return 0;
-
-    rc = hyperv_registry_write_elevated(net->vsockport);
-    if (rc != 0) {
-        char path[512];
-
-        hyperv_registry_path(net->vsockport, path, sizeof(path));
-        snprintf(g_hyperv_error, sizeof(g_hyperv_error),
-            "Could not write the Hyper-V service GUID to the registry:\n"
-            "%s\n\n"
-            "Incoming Hyper-V connections will be rejected.\n"
-            "Approve the administrator prompt, or create the key manually.\n"
-            "(Registry error %d)",
-            path, rc);
-    } else {
-        snprintf(written_port, sizeof(written_port), "%s", net->vsockport);
-    }
-    return rc;
-}
-
-static void
-password_option_cell(struct nk_context *ctx, const char *label, char *password,
-    char *mask, const int size, const char *tooltip)
-{
-    struct nk_rect b;
-    int old_len, new_len, i, s;
-    int focused;
-    nk_flags ret;
-    char rebuilt[128];
-
-    /* A password loaded from launchx.cnf arrives with the mask still empty;
-       fill it with asterisks so the field shows instead of appearing blank.
-       After any edit the mask stays in lockstep with the password, so an
-       empty mask with a non-empty password only occurs right after load. */
-    if (mask[0] == '\0' && password[0] != '\0') {
-        int plen = (int)strlen(password);
-        if (plen > size - 1)
-            plen = size - 1;
-        for (i = 0; i < plen; ++i)
-            mask[i] = '*';
-        mask[plen] = '\0';
-    }
-    old_len = (int)strlen(mask);
-
-    b = nk_widget_bounds(ctx);
-    nk_label(ctx, label, NK_TEXT_LEFT);
-    option_tooltip(ctx, b, tooltip);
-    focused = focus_pick(ctx, &b);
-    if (focused)
-        nk_edit_focus(ctx, NK_EDIT_FIELD);
-    ret = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, mask, size, nk_filter_default);
-    if (ret & NK_EDIT_ACTIVATED)
-        g_focus_idx = g_focus_seq - 1;
-    if (focused)
-        focus_ring(ctx, b);
-    option_tooltip(ctx, b, tooltip);
-    field_context_menu(ctx, b, mask, size, 0, 1, mask);
-
-    new_len = (int)strlen(mask);
-    if (new_len == old_len)
-        return;
-
-    /* Reconstruct the real password from the edited mask.  '*' chars are
-       inherited (in order) from the old password; any other char was typed
-       this frame.  A length increase means insertion (the typed char does not
-       consume an old char); an equal/shorter length means replacement or
-       deletion (each position consumes one old char). */
-    s = 0;
-    for (i = 0; i < new_len; ++i) {
-        if (mask[i] != '*') {
-            rebuilt[i] = mask[i];
-            if (new_len <= old_len)
-                s++;
-        }
-        else {
-            rebuilt[i] = password[s++];
-        }
-    }
-    rebuilt[new_len] = '\0';
-    strcpy(password, rebuilt);
-
-    for (i = 0; i < new_len; ++i)
-        mask[i] = '*';
-    mask[new_len] = '\0';
-}
-
-static void
+void
 combobox_option(struct nk_context *ctx, const char *label, const char *const *items, const int count, int *selected, const char *tooltip)
 {
     struct nk_rect b;
@@ -937,1110 +625,21 @@ combobox_option(struct nk_context *ctx, const char *label, const char *const *it
     option_tooltip(ctx, b, tooltip);
 }
 
-static int
-is_hex_color(const char *s)
-{
-    int i;
-
-    if (!s || strlen(s) != 6)
-        return 0;
-    for (i = 0; i < 6; ++i) {
-        char c = s[i];
-        if (!((c >= '0' && c <= '9') ||
-              (c >= 'A' && c <= 'F') ||
-              (c >= 'a' && c <= 'f')))
-            return 0;
-    }
-    return 1;
-}
-
-static int
-color_option(struct nk_context *ctx, const char *label, char *hex,
-    const int hex_size, const char *tooltip)
-{
-    struct nk_rect b;
-    struct nk_colorf cf;
-    struct nk_color col;
-    char tmp[12];
-    char old[12];
-    int changed;
-
-    if (!is_hex_color(hex)) {
-        strncpy(hex, "0F0F1E", hex_size - 1);
-        hex[hex_size - 1] = '\0';
-    }
-
-    nk_layout_row_dynamic(ctx, 25, 1);
-    nk_label(ctx, label, NK_TEXT_LEFT);
-
-    nk_layout_row_dynamic(ctx, 120, 1);
-    b = nk_widget_bounds(ctx);
-    option_tooltip(ctx, b, tooltip);
-
-    strncpy(old, hex, sizeof(old) - 1);
-    old[sizeof(old) - 1] = '\0';
-
-    col = nk_rgb_hex(hex);
-    cf = nk_color_picker(ctx, nk_color_cf(col), NK_RGB);
-    col = nk_rgb_cf(cf);
-    nk_color_hex_rgb(tmp, col);
-
-    changed = (strcmp(old, tmp) != 0);
-    strncpy(hex, tmp, hex_size - 1);
-    hex[hex_size - 1] = '\0';
-    return changed;
-}
-
 static GdiFont *g_bold_font;
 
-static void
+struct nk_user_font *
+launchx_bold_font(void)
+{
+    return &g_bold_font->nk;
+}
+
+void
 heading(struct nk_context *ctx, const char *text)
 {
     nk_style_push_font(ctx, &g_bold_font->nk);
     nk_layout_row_dynamic(ctx, 30, 1);
     nk_label(ctx, text, NK_TEXT_CENTERED);
     nk_style_pop_font(ctx);
-}
-
-struct options_audio {
-    int audio_enabled;
-    char pulseport[16];
-    int mic_enabled;
-    int speaker_enabled;
-
-    int listen_sel;          /* 0 = loopback, 1 = all IPv4, 2 = IPv4 + IPv6 */
-    int auth_sel;            /* 0 = cookie, 1 = anonymous, 2 = IP allow-list */
-    char auth_acl[256];      /* semicolon-separated IPs for auth_sel == 2 */
-
-    char output_device[128]; /* "" = system default (WAVE_MAPPER) */
-    char input_device[128];
-
-    int rate_sel;            /* 0 = auto, else index into audio_rate_values */
-    int format_sel;          /* 0 = auto, else index into audio_format_values */
-    int channels_sel;        /* 0 = auto, else index into audio_channels_values */
-    int latency_sel;         /* 0 = default, else fragments/fragment_size preset */
-
-    int null_sink_enabled;
-    int loopback_enabled;
-};
-
-static void ensure_pulse_cookie(void);
-static int read_pulse_cookie(unsigned char out[256]);
-static int config_dir(char *out, const size_t outsz);
-static int config_dir_real(char *out, size_t outsz);
-
-struct options_ssh_login {
-    char host[128];
-    char port[16];
-    char username[128];
-    char password[128];
-    char password_mask[128];
-    int x11_forwarding;
-    int save_password;
-};
-
-static void
-tab_ssh_login(struct nk_context *ctx, struct options_ssh_login *opt,
-    terminal *term, ssh_session *ssh,
-    struct options_network_and_access_control *net,
-    struct options_audio *audio)
-{
-    int cols_before = term->ncols;
-    int rows_before = term->nrows;
-    struct nk_rect b;
-
-    heading(ctx, "SSH login");
-
-    nk_layout_row_dynamic(ctx, 30, 4);
-    text_option_cell(ctx, "SSH Connect IP", opt->host, sizeof(opt->host),
-        "Hostname or IP address of the SSH server to connect to", NK_TEXT_LEFT);
-    text_option_cell(ctx, "SSH Connect port", opt->port, sizeof(opt->port),
-        "TCP port of the SSH server (default 22)", NK_TEXT_LEFT);
-
-    nk_layout_row_dynamic(ctx, 30, 4);
-    text_option_cell(ctx, "Login username", opt->username, sizeof(opt->username),
-        "Username to authenticate with on the SSH server", NK_TEXT_LEFT);
-    password_option_cell(ctx, "Login password", opt->password, opt->password_mask,
-        sizeof(opt->password),
-        "Password to authenticate with on the SSH server");
-
-    nk_layout_row_dynamic(ctx, 30, 2);
-    if (ssh_session_is_active(ssh))
-        nk_widget_disable_begin(ctx);
-    b = nk_widget_bounds(ctx);
-    nk_checkbox_label(ctx, "X11 forwarding", &opt->x11_forwarding);
-    option_tooltip(ctx, b, "Enable X11 forwarding over the SSH connection so X11 clients on the\nremote host can connect back to this X server");
-    if (ssh_session_is_active(ssh))
-        nk_widget_disable_end(ctx);
-    b = nk_widget_bounds(ctx);
-    nk_checkbox_label(ctx, "Save password", &opt->save_password);
-    option_tooltip(ctx, b, "Save the login password (encrypted) in launchx.cnf.\nWhen off, the password is not written to the config file.");
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    if (ssh->display_error_pending) {
-        nk_style_push_color(ctx, &ctx->style.text.color, nk_rgb(255, 0, 0));
-        nk_label(ctx, ssh->display_error, NK_TEXT_LEFT);
-        nk_style_pop_color(ctx);
-    } else {
-        nk_label(ctx, "", NK_TEXT_LEFT);
-    }
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    if (ssh_session_is_active(ssh)) {
-        if (button_option(ctx, "Disconnect"))
-            ssh_session_stop(ssh);
-    }
-    else if (button_option(ctx, "Connect")) {
-        unsigned char cookie[256];
-        int have_cookie;
-
-        if (inaddr_validate(opt->host, NULL)) {
-            snprintf(ssh->display_error, sizeof ssh->display_error,
-                     "Invalid IP address \"%s\"", opt->host);
-            InterlockedExchange(&ssh->display_error_pending, 1);
-        } else {
-            int port = atoi(opt->port);
-            if (port < 1 || port > 65535)
-                port = 22;
-
-            have_cookie = audio->audio_enabled && read_pulse_cookie(cookie);
-
-            ssh_session_start(ssh, opt->host, opt->username, opt->password,
-                port, net->listeningport_sel, opt->x11_forwarding,
-                have_cookie, atoi(audio->pulseport),
-                have_cookie ? cookie : NULL);
-            ssh_request_resize(ssh, term->ncols, term->nrows);
-        }
-    }
-
-    terminal_draw(ctx, term);
-    if (!ssh_hostkey_pending(ssh) && !g_confirm_reset) {
-        terminal_mouse(ctx, term);
-        if (terminal_menu(ctx, term))
-            ssh_paste_clipboard(ssh);
-    }
-
-    if (term->ncols != cols_before || term->nrows != rows_before)
-        ssh_request_resize(ssh, term->ncols, term->nrows);
-}
-
-static void
-tab_network_and_access_control(struct nk_context *ctx,
-    struct options_network_and_access_control *opt)
-{
-    struct nk_rect b;
-    nk_flags vsockport_flags;
-    int port_committed;
-    static char prev_vsockport[16];
-    static int prev_hyperv_enabled;
-    static int hyperv_seen;
-
-    heading(ctx, "Networking & access control");
-
-    combobox_option(ctx, "Listening port", listeningport_items, (int)LISTENINGPORT_COUNT, &opt->listeningport_sel, "Display number the server runs as. Clients connect on TCP port\n6000 plus this number (default :0).");
-
-    checkbox_option(ctx, "Disable access control (-ac)", &opt->ac_enabled, "Disable host-based access control, so any host may connect and\nchange the access list. Use with caution.");
-
-    if (opt->ac_enabled)
-        nk_widget_disable_begin(ctx);
-    text_option(ctx, "Allowed IP addresses (-allow)", opt->allow_string, (int)sizeof(opt->allow_string), "allow connections whose address matches a ';'-separated IP list\n(e.g. 192.168.1.0/24;10.0.0.5-10.0.0.9;FE80::1). ',' is also accepted.");
-    if (opt->ac_enabled)
-        nk_widget_disable_end(ctx);
-
-    text_option(ctx, "Authorization file (-auth)", opt->auth_file, (int)sizeof(opt->auth_file), "File of authorization records used to authenticate client access.");
-
-    checkbox_option(ctx, "Allow different-endianness clients (+byteswappedclients)", &opt->byteswap_enabled, "Allow connections from clients with a different byte order\n(endianness) than the server.");
-
-    combobox_option(ctx, "Max clients (-maxclients)", maxclients_items, (int)MAXCLIENTS_COUNT, &opt->maxclients_sel, "Maximum number of clients allowed to connect (a power of two).");
-
-    nk_layout_row_dynamic(ctx, 30, 3);
-    b = nk_widget_bounds(ctx);
-    nk_label(ctx, "Max bigreq size (MB)", NK_TEXT_LEFT);
-    option_tooltip(ctx, b, "Largest request the server will accept, in megabytes.");
-    b = nk_widget_bounds(ctx);
-    nk_slider_int(ctx, 1, &opt->maxbigreqsize, 127, 1);
-    option_tooltip(ctx, b, "Largest request the server will accept, in megabytes.");
-    nk_labelf(ctx, NK_TEXT_LEFT, "%d", opt->maxbigreqsize);
-
-    text_option(ctx, "Hyper-V VM GUID (-vmid)", opt->vmid, (int)sizeof(opt->vmid),
-        "Hyper-V virtual machine GUID to accept VSock connections from.");
-
-    vsockport_flags = text_option(ctx, "Hyper-V VSock listen port (-vsockport)", opt->vsockport, (int)sizeof(opt->vsockport),
-        "Port number to listen on for VSock connections. Default 106000.");
-
-    {
-        char path[512];
-        hyperv_registry_path(opt->vsockport, path, sizeof(path));
-        readonly_option_fullrow(ctx, path,
-            "Full registry key under which the Hyper-V service GUID must be\nregistered to accept incoming Hyper-V connections.");
-    }
-
-    checkbox_option(ctx, "Update registry with Hyper-V GUID", &opt->hyperv_registry_enabled,
-        "You need to check this to allow incoming Hyper-V connections");
-
-    /* Write the registry entry when the box is checked, or when the vsockport
-       edit commits (focus leaves the field), rather than on every keystroke. */
-    if (!hyperv_seen) {
-        snprintf(prev_vsockport, sizeof(prev_vsockport), "%s", opt->vsockport);
-        prev_hyperv_enabled = opt->hyperv_registry_enabled;
-        hyperv_seen = 1;
-    } else {
-        port_committed = (vsockport_flags & NK_EDIT_DEACTIVATED) &&
-                         strcmp(prev_vsockport, opt->vsockport) != 0;
-        if (port_committed)
-            snprintf(prev_vsockport, sizeof(prev_vsockport), "%s", opt->vsockport);
-
-        if (opt->hyperv_registry_enabled &&
-            (prev_hyperv_enabled != opt->hyperv_registry_enabled || port_committed))
-            hyperv_registry_apply(opt);
-
-        prev_hyperv_enabled = opt->hyperv_registry_enabled;
-    }
-}
-
-struct options_xdmcp {
-    int xdmcp_enabled;
-    char query_host[256];
-    int broadcast_enabled;
-    char indirect_host[256];
-    int multicast_enabled;
-    char port_string[16];
-    char from_address[256];
-    int once_enabled;
-    char display_class[256];
-    char cookie[256];
-    char display_id[256];
-};
-
-static void
-tab_xdmcp(struct nk_context *ctx, struct options_xdmcp *opt)
-{
-    heading(ctx, "XDMCP");
-
-    checkbox_option(ctx, "Enable XDMCP", &opt->xdmcp_enabled,
-        "Enable the XDMCP protocol so the server contacts a display manager.\nAll XDMCP settings below are disabled while this is off.");
-
-    if (!opt->xdmcp_enabled)
-        nk_widget_disable_begin(ctx);
-
-    if (opt->xdmcp_enabled && opt->broadcast_enabled)
-        nk_widget_disable_begin(ctx);
-    text_option(ctx, "Query host (-query)", opt->query_host, (int)sizeof(opt->query_host), "Enable XDMCP and send Query packets to this host.");
-    if (opt->xdmcp_enabled && opt->broadcast_enabled)
-        nk_widget_disable_end(ctx);
-
-    if (opt->xdmcp_enabled && !opt->broadcast_enabled && opt->query_host[0])
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Broadcast for XDMCP (-broadcast)", &opt->broadcast_enabled, "Enable XDMCP and broadcast a query to the network. The first\ndisplay manager to answer hosts the session.");
-    if (opt->xdmcp_enabled && !opt->broadcast_enabled && opt->query_host[0])
-        nk_widget_disable_end(ctx);
-
-    text_option(ctx, "Indirect host (-indirect)", opt->indirect_host, (int)sizeof(opt->indirect_host), "Enable XDMCP and send IndirectQuery packets to this host.");
-
-    checkbox_option(ctx, "IPv6 multicast (-multicast)", &opt->multicast_enabled, "Enable XDMCP and multicast a query to the network (IPv6 multicast).");
-
-    text_option(ctx, "UDP port (-port)", opt->port_string, (int)sizeof(opt->port_string), "UDP port used for XDMCP packets (default 177).");
-
-    text_option(ctx, "Local address (-from)", opt->from_address, (int)sizeof(opt->from_address), "Local address to connect from, useful when the machine has several\nnetwork interfaces.");
-
-    checkbox_option(ctx, "Terminate after one session (-once)", &opt->once_enabled, "Exit the server when the XDMCP session ends, instead of resetting.");
-
-    text_option(ctx, "Display class (-class)", opt->display_class, (int)sizeof(opt->display_class), "XDMCP display qualifier used when looking up display-specific\noptions (default MIT-unspecified).");
-
-    text_option(ctx, "Magic cookie (-cookie)", opt->cookie, (int)sizeof(opt->cookie), "Private key shared with the display manager for XDM-AUTHORIZATION-1.");
-
-    text_option(ctx, "Display ID (-displayID)", opt->display_id, (int)sizeof(opt->display_id), "Identifier the display manager uses to locate this display's\nshared key.");
-
-    if (!opt->xdmcp_enabled)
-        nk_widget_disable_end(ctx);
-}
-
-struct screen_geometry_entry {
-    char width[16];
-    char height[16];
-    char x[16];
-    char y[16];
-    char monitor[16];
-};
-
-struct options_screen_windowing {
-    struct screen_geometry_entry screens[3];
-    int fullscreen_enabled;
-    int rootless_enabled;
-    int multiwindow_enabled;
-    int nodecoration_enabled;
-    int multimonitors_enabled;
-    int resize_sel;
-    int depth_sel;
-    char refresh[16];
-    int engine_sel;
-    char dpi[16];
-    int xinerama_sel;
-    int disablexinerama_enabled;
-    int lesspointer_enabled;
-    int swcursor_enabled;
-    int nocursor_enabled;
-};
-
-static int
-screen_geometry_set(const struct options_screen_windowing *opt)
-{
-    int i;
-
-    for (i = 0; i < 3; ++i)
-        if (opt->screens[i].width[0] || opt->screens[i].height[0] ||
-            opt->screens[i].x[0] || opt->screens[i].y[0] ||
-            opt->screens[i].monitor[0])
-            return 1;
-    return 0;
-}
-
-static char *
-screen_geometry_field(struct options_screen_windowing *opt, int s, int f)
-{
-    struct screen_geometry_entry *e = &opt->screens[s];
-
-    switch (f) {
-    case 0: return e->width;
-    case 1: return e->height;
-    case 2: return e->x;
-    case 3: return e->y;
-    default: return e->monitor;
-    }
-}
-
-static const char *scr_geom_screen_label[3] = {
-    "Screen 1", "Screen 2", "Screen 3",
-};
-
-static const char *scr_geom_field_label[5] = {
-    "Width", "Height", "X-offset", "Y-offset", "Monitor",
-};
-
-static const char *scr_geom_tip[5] = {
-    "Screen width in pixels. Leave empty to derive it from the height (3:2).",
-    "Screen height in pixels. Leave empty to derive it from the width (3:2).",
-    "Horizontal position of the screen within the virtual desktop.",
-    "Vertical position of the screen within the virtual desktop.",
-    "Windows monitor (1-based) to place this screen on; empty = default.",
-};
-
-static void
-tab_screen_and_windowing(struct nk_context *ctx,
-    struct options_screen_windowing *opt)
-{
-    int fs, rl, mw, nd, lp, resize_scrollbars, scr;
-    int s;
-
-    heading(ctx, "Screen & windowing modes");
-
-    fs = opt->fullscreen_enabled;
-    rl = opt->rootless_enabled;
-    mw = opt->multiwindow_enabled;
-    nd = opt->nodecoration_enabled;
-    lp = opt->lesspointer_enabled;
-    resize_scrollbars = (opt->resize_sel == 1);
-    scr = screen_geometry_set(opt);
-
-    if (mw || fs || rl || opt->multimonitors_enabled)
-        nk_widget_disable_begin(ctx);
-    for (s = 0; s < 3; ++s) {
-        nk_style_push_font(ctx, &g_bold_font->nk);
-        nk_layout_row_dynamic(ctx, 24, 1);
-        nk_label(ctx, scr_geom_screen_label[s], NK_TEXT_LEFT);
-        nk_style_pop_font(ctx);
-
-        nk_layout_row_dynamic(ctx, 30, 4);
-        text_option_cell(ctx, scr_geom_field_label[0], screen_geometry_field(opt, s, 0), 16, scr_geom_tip[0], NK_TEXT_RIGHT);
-        text_option_cell(ctx, scr_geom_field_label[1], screen_geometry_field(opt, s, 1), 16, scr_geom_tip[1], NK_TEXT_RIGHT);
-
-        nk_layout_row_dynamic(ctx, 30, 4);
-        text_option_cell(ctx, scr_geom_field_label[2], screen_geometry_field(opt, s, 2), 16, scr_geom_tip[2], NK_TEXT_RIGHT);
-        text_option_cell(ctx, scr_geom_field_label[3], screen_geometry_field(opt, s, 3), 16, scr_geom_tip[3], NK_TEXT_RIGHT);
-
-        nk_layout_row_dynamic(ctx, 30, 4);
-        text_option_cell(ctx, scr_geom_field_label[4], screen_geometry_field(opt, s, 4), 16, scr_geom_tip[4], NK_TEXT_RIGHT);
-    }
-    if (mw || fs || rl || opt->multimonitors_enabled)
-        nk_widget_disable_end(ctx);
-
-    if (mw || rl || nd || lp || resize_scrollbars || scr)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Run in fullscreen mode (-fullscreen)", &opt->fullscreen_enabled, "Make the X server window fill the entire Windows desktop.");
-    if (mw || rl || nd || lp || resize_scrollbars || scr)
-        nk_widget_disable_end(ctx);
-
-    if (mw || fs || nd || scr)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Transparent root window (-rootless)", &opt->rootless_enabled, "Run rootless: the root window is hidden and only top-level X windows\nshow. Needs an external window manager; not with -multiwindow or\n-fullscreen.");
-    if (mw || fs || nd || scr)
-        nk_widget_disable_end(ctx);
-
-    if (rl || fs || nd || scr)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Run in multiwindow mode (-multiwindow)", &opt->multiwindow_enabled, "Run multiwindow: each top-level X window becomes its own Windows\nwindow with a built-in window manager. Not with -rootless or\n-fullscreen.");
-    if (rl || fs || nd || scr)
-        nk_widget_disable_end(ctx);
-
-    if (mw || rl || fs)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "No window border/titlebar (-nodecoration)", &opt->nodecoration_enabled, "Show the X window with no Windows border or title bar. Ignored when\n-fullscreen is set.");
-    if (mw || rl || fs)
-        nk_widget_disable_end(ctx);
-
-    if (scr)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Use entire virtual screen (-multimonitors)", &opt->multimonitors_enabled, "Create one screen covering all monitors, with fake XINERAMA data\ndescribing each monitor.");
-    if (scr)
-        nk_widget_disable_end(ctx);
-
-    if (fs)
-        nk_widget_disable_begin(ctx);
-    combobox_option(ctx, "Resize mode (-resize)", resize_items, RESIZE_COUNT, &opt->resize_sel, "How the X screen resizes: scrollbars adds window scrollbars, randr\nuses the RANDR extension. Default is randr.");
-    if (fs)
-        nk_widget_disable_end(ctx);
-
-    if (!fs)
-        nk_widget_disable_begin(ctx);
-    combobox_option(ctx, "Bit depth (-depth)", depth_items, DEPTH_COUNT, &opt->depth_sel, "Color depth in bits per pixel for fullscreen mode with a DirectDraw\nengine. Ignored without -fullscreen.");
-    if (!fs)
-        nk_widget_disable_end(ctx);
-
-    if (!fs)
-        nk_widget_disable_begin(ctx);
-    text_option(ctx, "Refresh rate (-refresh)", opt->refresh, (int)sizeof(opt->refresh), "Refresh rate (Hz) for fullscreen mode with a DirectDraw engine.\nIgnored without -fullscreen.");
-    if (!fs)
-        nk_widget_disable_end(ctx);
-
-    combobox_option(ctx, "Engine (-engine)", engine_items, ENGINE_COUNT, &opt->engine_sel, "Override the automatically selected drawing engine: 1 = Shadow GDI,\n4 = Shadow DirectDraw4 Non-Locking.");
-
-    text_option(ctx, "Screen resolution DPI (-dpi)", opt->dpi, (int)sizeof(opt->dpi), "Screen resolution in dots per inch, for all screens.");
-
-    combobox_option(ctx, "XINERAMA (+xinerama/-xinerama)", xinerama_items, XINERAMA_COUNT, &opt->xinerama_sel, "Enable (+) or disable (-) the XINERAMA extension.");
-
-    checkbox_option(ctx, "Disable XINERAMA extension (-disablexineramaextension)", &opt->disablexinerama_enabled, "Disable the XINERAMA extension.");
-
-    if (fs)
-        nk_widget_disable_begin(ctx);
-    checkbox_option(ctx, "Hide Windows pointer (-lesspointer)", &opt->lesspointer_enabled, "Also hide the Windows pointer over inactive X windows, preventing a\nghost cursor. Only applies with -swcursor.");
-    if (fs)
-        nk_widget_disable_end(ctx);
-
-    checkbox_option(ctx, "X11 software cursor (-swcursor)", &opt->swcursor_enabled, "Use the X11 software cursor instead of the Windows cursor.");
-
-    checkbox_option(ctx, "Disable cursor (-nocursor)", &opt->nocursor_enabled, "Disable the X cursor so it is not drawn on any screen.");
-}
-
-struct options_pointer_keyboard {
-    int emulate3buttons_enabled;
-    char emulate3buttons_timeout[16];
-    int winkill_enabled;
-    int unixkill_enabled;
-    int keyhook_enabled;
-    int ignoreinput_enabled;
-    int autorepeat_enabled;
-    char pointer_acceleration[16];
-    char pointer_threshold[16];
-    int bell;
-    char autorepeat_delay[16];
-    char autorepeat_interval[16];
-};
-
-static void
-tab_pointer_keyboard(struct nk_context *ctx, struct options_pointer_keyboard *opt)
-{
-    struct nk_rect b;
-
-    heading(ctx, "Pointer & keyboard input");
-
-    checkbox_option(ctx, "Emulate 3-button mouse (-emulate3buttons)", &opt->emulate3buttons_enabled, "Emulate a middle button when both buttons are pressed together.");
-
-    text_option(ctx, "Emulate timeout (ms)", opt->emulate3buttons_timeout, (int)sizeof(opt->emulate3buttons_timeout), "Timeout (ms) within which pressing both buttons counts as a\nmiddle click.");
-
-    checkbox_option(ctx, "Alt+F4 exits server (-winkill)", &opt->winkill_enabled, "Allow Alt+F4 to exit the X server.");
-
-    checkbox_option(ctx, "Ctrl+Alt+Backspace exits server (-unixkill)", &opt->unixkill_enabled, "Allow Ctrl+Alt+Backspace to exit the X server.");
-
-    checkbox_option(ctx, "Grab special Windows keys (-keyhook)", &opt->keyhook_enabled, "Install a low-level keyboard hook to send keys such as Alt+Tab and the\nMenu key to the X server.");
-
-    checkbox_option(ctx, "Ignore keyboard and mouse input (-ignoreinput)", &opt->ignoreinput_enabled, "Ignore all keyboard and mouse input (for testing and debugging).");
-
-    checkbox_option(ctx, "Enable auto-repeat (r)", &opt->autorepeat_enabled, "Enable (r) or disable (-r) key auto-repeat.");
-
-    text_option(ctx, "Pointer acceleration (-a)", opt->pointer_acceleration, (int)sizeof(opt->pointer_acceleration), "Pointer acceleration: how much the pointer reports relative to how\nfar it actually moved.");
-
-    text_option(ctx, "Pointer threshold (-t)", opt->pointer_threshold, (int)sizeof(opt->pointer_threshold), "Pointer threshold in pixels: how far the pointer must move before\nacceleration takes effect.");
-
-    nk_layout_row_dynamic(ctx, 30, 3);
-    b = nk_widget_bounds(ctx);
-    nk_label(ctx, "Bell base (-f)", NK_TEXT_LEFT);
-    option_tooltip(ctx, b, "Bell (beep) volume, from 0 to 100.");
-    b = nk_widget_bounds(ctx);
-    nk_slider_int(ctx, 0, &opt->bell, 100, 1);
-    option_tooltip(ctx, b, "Bell (beep) volume, from 0 to 100.");
-    nk_labelf(ctx, NK_TEXT_LEFT, "%d", opt->bell);
-
-    text_option(ctx, "Auto-repeat delay (-ardelay)", opt->autorepeat_delay, (int)sizeof(opt->autorepeat_delay), "Autorepeat delay in milliseconds: how long a key must be held before\nit starts repeating.");
-
-    text_option(ctx, "Auto-repeat interval (-arinterval)", opt->autorepeat_interval, (int)sizeof(opt->autorepeat_interval), "Autorepeat interval in milliseconds: time between repeated keystrokes.");
-}
-
-struct options_xkb {
-    char xkblayout[128];
-    char xkbmodel[128];
-    char xkbvariant[128];
-    char xkboptions[128];
-    char xkbrules[128];
-    char xkbdir[256];
-};
-
-static void
-tab_xkb(struct nk_context *ctx, struct options_xkb *opt)
-{
-    heading(ctx, "XKB keyboard layout");
-
-    text_option(ctx, "Layout (-xkblayout)", opt->xkblayout, (int)sizeof(opt->xkblayout), "Keyboard layout to load at startup (e.g. de, us). Defaults to a layout\nmatching your current Windows layout.");
-
-    text_option(ctx, "Model (-xkbmodel)", opt->xkbmodel, (int)sizeof(opt->xkbmodel), "Keyboard model to load (default pc105).");
-
-    text_option(ctx, "Variant (-xkbvariant)", opt->xkbvariant, (int)sizeof(opt->xkbvariant), "Keyboard layout variant (e.g. nodeadkeys). Defaults to unset.");
-
-    text_option(ctx, "Options (-xkboptions)", opt->xkboptions, (int)sizeof(opt->xkboptions), "XKB options to load at startup.");
-
-    text_option(ctx, "Rules (-xkbrules)", opt->xkbrules, (int)sizeof(opt->xkbrules), "XKB rules file to use (default xorg).");
-
-    text_option(ctx, "Base directory (-xkbdir)", opt->xkbdir, (int)sizeof(opt->xkbdir), "Base directory for XKB keyboard layout files.");
-}
-
-#define NUM_AX_CTRL 9
-static const char *ax_ctrl_names[NUM_AX_CTRL] = {
-    "Repeat keys", "Slow keys", "Bounce keys", "Sticky keys", "Mouse keys",
-    "Mouse keys acceleration", "AccessX keys", "AccessX timeout", "AccessX feedback"
-};
-static const unsigned int ax_ctrl_bits[NUM_AX_CTRL] = {
-    0x001, 0x002, 0x004, 0x008, 0x010, 0x020, 0x040, 0x080, 0x100
-};
-static const char *ax_ctrl_keys[NUM_AX_CTRL] = {
-    "accessx.xkbrepeatkeysmask", "accessx.xkbslowkeysmask",
-    "accessx.xkbbouncekeysmask", "accessx.xkbstickykeysmask",
-    "accessx.xkbmousekeysmask", "accessx.xkbmousekeysaccelmask",
-    "accessx.xkbaccessxkeysmask", "accessx.xkbaccessxtimeoutmask",
-    "accessx.xkbaccessxfeedbackmask"
-};
-
-static const char *ax_ctrl_tips[NUM_AX_CTRL] = {
-    "Hold a key down to make it repeat.",
-    "Require a key to be held briefly before it registers.",
-    "Ignore rapid repeated presses of the same key.",
-    "Modifiers stay active for the next key press (one-finger chords).",
-    "Control the pointer using the numeric keypad.",
-    "Speed up pointer movement while Mouse Keys is active.",
-    "Keys that turn AccessX features on and off.",
-    "Automatically turn off AccessX features after a delay.",
-    "Give audible or visual feedback for AccessX actions."
-};
-
-#define NUM_AX_OPT 12
-static const char *ax_opt_names[NUM_AX_OPT] = {
-    "StickyKeys press feedback", "StickyKeys accept feedback",
-    "Feature on/off feedback", "SlowKeys warning feedback",
-    "Indicator feedback", "StickyKeys feedback",
-    "Two keys (disable StickyKeys)", "Latch to lock",
-    "StickyKeys release feedback", "StickyKeys reject feedback",
-    "BounceKeys reject feedback", "Dumb bell feedback"
-};
-static const unsigned int ax_opt_bits[NUM_AX_OPT] = {
-    0x001, 0x002, 0x004, 0x008, 0x010, 0x020, 0x040, 0x080,
-    0x100, 0x200, 0x400, 0x800
-};
-static const char *ax_opt_keys[NUM_AX_OPT] = {
-    "accessx.xkbaxskpressfbmask", "accessx.xkbaxskacceptfbmask",
-    "accessx.xkbaxfeaturefbmask", "accessx.xkbaxslowwarnfbmask",
-    "accessx.xkbaxindicatorfbmask", "accessx.xkbaxstickykeysfbmask",
-    "accessx.xkbaxtwokeysmask", "accessx.xkbaxlatchtolockmask",
-    "accessx.xkbaxskreleasefbmask", "accessx.xkbaxskrejectfbmask",
-    "accessx.xkbaxbkrejectfbmask", "accessx.xkbaxdumbbellfbmask"
-};
-
-static const char *ax_opt_tips[NUM_AX_OPT] = {
-    "Beep when a modifier is pressed in Sticky Keys.",
-    "Beep when a Sticky Keys chord is completed.",
-    "Beep when an AccessX feature is turned on or off.",
-    "Beep when Slow Keys rejects a key press.",
-    "Show feedback using the keyboard indicators.",
-    "Use the full Sticky Keys feedback scheme.",
-    "Press two keys at once to turn Sticky Keys off.",
-    "Pressing a modifier twice locks it on.",
-    "Beep when a Sticky Keys chord is released.",
-    "Beep when Sticky Keys rejects a key press.",
-    "Beep when Bounce Keys rejects a key press.",
-    "Use a simple bell for feedback instead of distinct tones."
-};
-
-struct options_accessx {
-    int enabled;
-    char timeout[16];
-    int timeout_mask[NUM_AX_CTRL];
-    int feedback;
-    int options_mask[NUM_AX_OPT];
-};
-
-/* Soft-dim widgets that are not currently emitted: replicate Nuklear's
-   disabled look (color_factor = 0.5) without actually blocking input, so a
-   trailing parameter can still be edited and thereby "light up". */
-static void
-dim_push(struct nk_context *ctx)
-{
-    nk_style_push_float(ctx, &ctx->style.text.color_factor, 0.5f);
-    nk_style_push_float(ctx, &ctx->style.checkbox.color_factor, 0.5f);
-    nk_style_push_float(ctx, &ctx->style.edit.color_factor, 0.5f);
-}
-
-static void
-dim_pop(struct nk_context *ctx)
-{
-    nk_style_pop_float(ctx);
-    nk_style_pop_float(ctx);
-    nk_style_pop_float(ctx);
-}
-
-static void
-tab_accessx(struct nk_context *ctx, struct options_accessx *opt)
-{
-    int i, timeout, want_t, want_m, want_f, want_o;
-    int sent_t, sent_m, sent_f, sent_o;
-    unsigned int tmask = 0, omask = 0;
-
-    heading(ctx, "AccessX key sequences");
-
-    timeout = opt->timeout[0] ? atoi(opt->timeout) : 120;
-    for (i = 0; i < NUM_AX_CTRL; ++i)
-        if (opt->timeout_mask[i])
-            tmask |= ax_ctrl_bits[i];
-    for (i = 0; i < NUM_AX_OPT; ++i)
-        if (opt->options_mask[i])
-            omask |= ax_opt_bits[i];
-
-    want_t = (timeout != 120);
-    want_m = (tmask != 0x1E);
-    want_f = (!opt->feedback);
-    want_o = (omask != 0xCEF);
-
-    sent_o = want_o;
-    sent_f = want_f || want_o;
-    sent_m = want_m || want_f || want_o;
-    sent_t = want_t || want_m || want_f || want_o;
-    if (!opt->enabled)
-        sent_t = sent_m = sent_f = sent_o = 0;
-
-    checkbox_option(ctx, "Enable AccessX key sequences", &opt->enabled,
-        "Enable (+) or disable (-) AccessX key sequences (sticky keys, slow\nkeys, and related features).");
-
-    if (!sent_t) dim_push(ctx);
-    text_option(ctx, "Timeout (seconds)", opt->timeout, (int)sizeof(opt->timeout),
-        "Seconds before AccessX controls turn off automatically (0 = never).");
-    if (!sent_t) dim_pop(ctx);
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Timeout mask", NK_TEXT_LEFT);
-    if (!sent_m) dim_push(ctx);
-    for (i = 0; i < NUM_AX_CTRL; ++i)
-        checkbox_option(ctx, ax_ctrl_names[i], &opt->timeout_mask[i],
-            ax_ctrl_tips[i]);
-    if (!sent_m) dim_pop(ctx);
-
-    nk_label(ctx, "Feedback", NK_TEXT_LEFT);
-    if (!sent_f) dim_push(ctx);
-    checkbox_option(ctx, "Enable feedback", &opt->feedback,
-        "Give audible or visual feedback for AccessX actions.");
-    if (!sent_f) dim_pop(ctx);
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Options", NK_TEXT_LEFT);
-    if (!sent_o) dim_push(ctx);
-    for (i = 0; i < NUM_AX_OPT; ++i)
-        checkbox_option(ctx, ax_opt_names[i], &opt->options_mask[i],
-            ax_opt_tips[i]);
-    if (!sent_o) dim_pop(ctx);
-}
-
-struct options_desktop_integration {
-    int clipboard_enabled;
-    int primary_enabled;
-    int codepage_enabled;
-    int hostintitle_enabled;
-    int trayicon_enabled;
-    char icon_spec[256];
-    int compositewm_enabled;
-    int compositealpha_enabled;
-    char clipupdates[16];
-};
-
-static void
-tab_desktop_integration(struct nk_context *ctx,
-    struct options_desktop_integration *opt)
-{
-    heading(ctx, "Windows desktop integration");
-
-    checkbox_option(ctx, "Clipboard integration (-clipboard)", &opt->clipboard_enabled, "Enable or disable clipboard integration between the X server and\nWindows. Default is enabled.");
-
-    checkbox_option(ctx, "Map PRIMARY selection to clipboard (-primary)", &opt->primary_enabled, "Map the X11 PRIMARY selection to the Windows clipboard when clipboard\nintegration is enabled. The CLIPBOARD selection is always mapped.\nDefault is enabled.");
-
-    checkbox_option(ctx, "Convert ANSI code page (-codepage)", &opt->codepage_enabled, "Convert text between the Windows ANSI code page and ISO-8859-1 for\nlegacy 8-bit X11 clients.");
-
-    checkbox_option(ctx, "Add host names to window titles (-hostintitle)", &opt->hostintitle_enabled, "In -multiwindow mode, add the remote host name to each X11\nwindow's title.");
-
-    checkbox_option(ctx, "Notification-area icon (-trayicon)", &opt->trayicon_enabled, "Do not create a notification area icon. Default is to create one icon\nper screen. Disable all with -notrayicon, then enable specific screens\nwith -trayicon.");
-
-    text_option(ctx, "Window icon (-icon)", opt->icon_spec, (int)sizeof(opt->icon_spec), "Set the screen window icon in windowed mode from the given icon file.");
-
-    checkbox_option(ctx, "Composite extension (-compositewm)", &opt->compositewm_enabled, "Enable or disable the Composite extension (default: enabled). In\n-multiwindow mode this maintains a bitmap of each top-level window, so\noccluded contents show correctly in Taskbar and Task Switcher previews.");
-
-    checkbox_option(ctx, "Composite per-pixel alpha (-compositealpha)", &opt->compositealpha_enabled, "Composite X windows that have per-pixel alpha into the Windows desktop.");
-
-    text_option(ctx, "Clip update boxes (-clipupdates)", opt->clipupdates, (int)sizeof(opt->clipupdates), "Use a clipping region to constrain shadow update blits when there are\nthis many boxes or more in the updated region. Little effect on current\nWindows versions, which already batch GDI operations.");
-}
-
-struct options_glx {
-    int wgl_enabled;
-    int swrastwgl_enabled;
-    int iglx_enabled;
-};
-
-static void
-tab_glx(struct nk_context *ctx, struct options_glx *opt)
-{
-    heading(ctx, "OpenGL / GLX");
-
-    checkbox_option(ctx, "Native WGL for GLX (-wgl)", &opt->wgl_enabled, "Enable the GLX extension to use the native Windows WGL interface for\nhardware-accelerated OpenGL.");
-
-    checkbox_option(ctx, "WGL swrast for GLX (-swrastwgl)", &opt->swrastwgl_enabled, "Enable the GLX extension to use the native Windows WGL interface with\nthe swrast software renderer.");
-
-    checkbox_option(ctx, "Allow indirect GLX contexts (+iglx)", &opt->iglx_enabled, "+iglx: allow creating indirect GLX contexts (default). -iglx: prohibit\ncreating indirect GLX contexts.");
-}
-
-struct options_fonts_rendering {
-    char font_path[1024];
-    int render_sel;
-    int deferglyphs_sel;
-    char fakescreenfps[16];
-    int backingstore_sel;
-    char root_background[16];
-    int retro_enabled;
-    char color_visual_class[16];
-};
-
-static void
-tab_fonts_rendering(struct nk_context *ctx, struct options_fonts_rendering *opt)
-{
-    heading(ctx, "Fonts, rendering & appearance");
-
-    text_option(ctx, "Font path (-fp)", opt->font_path, (int)sizeof(opt->font_path), "Set the search path for fonts. It should be a comma-separated list of\ndirectories and/or font server addresses.");
-
-    combobox_option(ctx, "Render policy (-render)", render_items, RENDER_COUNT, &opt->render_sel, "Set the color allocation policy used by the Render extension. Valid\nvalues: default, mono, gray, color.");
-
-    combobox_option(ctx, "Defer glyphs (-deferglyphs)", deferglyphs_items, DEFERGLYPHS_COUNT, &opt->deferglyphs_sel, "Defer glyph loading for the given font type: none (never), all (every\nfont), or 16 (16-bit fonts only).");
-
-    text_option(ctx, "Fake screen fps (-fakescreenfps)", opt->fakescreenfps, (int)sizeof(opt->fakescreenfps), "Fake the default screen's frame rate to this many frames per second.\nThe default uses the real refresh rate.");
-
-    combobox_option(ctx, "Backing store (+bs/-bs)", backingstore_items, BACKINGSTORE_COUNT, &opt->backingstore_sel, "+bs: enable backing store support on all screens. -bs: disable backing\nstore support on all screens.");
-
-    if (color_option(ctx, "Root background (-bgcolor)", opt->root_background, (int)sizeof(opt->root_background), "Set the root window background color in hexadecimal RRGGBB format."))
-        opt->retro_enabled = 0;
-
-    checkbox_option(ctx, "Start with classic stipple (-retro)", &opt->retro_enabled, "Start with the classic stipple pattern and visible cursor. The default is\na black root window.");
-
-    text_option(ctx, "Color visual class (-cc)", opt->color_visual_class, (int)sizeof(opt->color_visual_class), "Set the visual class for the root window of color screens, using the X\nprotocol class number.");
-}
-
-struct options_logging_extensions {
-    char logfile[1024];
-    int logverbose;
-    char audit[16];
-    int core_enabled;
-    int dumbSched_enabled;
-    char schedInterval[16];
-    char schedMax[16];
-    int tst_enabled;
-    int extension_enabled[NUM_EXTENSIONS];
-};
-
-static void
-tab_logging_extensions(struct nk_context *ctx,
-    struct options_logging_extensions *opt)
-{
-    struct nk_rect b;
-    int i;
-
-    heading(ctx, "Logging, scheduling & extensions");
-
-    text_option(ctx, "Log file (-logfile)", opt->logfile, (int)sizeof(opt->logfile), "Write log messages to the given file instead of the default log\nlocation.");
-
-    nk_layout_row_dynamic(ctx, 30, 3);
-    b = nk_widget_bounds(ctx);
-    nk_label(ctx, "Log verbosity (-logverbose)", NK_TEXT_LEFT);
-    option_tooltip(ctx, b, "Set log verbosity: 0 - only fatal errors; 1 - add configuration info;\n2 - add runtime info (default); 3 - add debug and tracing.");
-    b = nk_widget_bounds(ctx);
-    nk_slider_int(ctx, 0, &opt->logverbose, 3, 1);
-    option_tooltip(ctx, b, "Set log verbosity: 0 - only fatal errors; 1 - add configuration info;\n2 - add runtime info (default); 3 - add debug and tracing.");
-    nk_labelf(ctx, NK_TEXT_LEFT, "%d", opt->logverbose);
-
-    checkbox_option(ctx, "Abort on fatal error (-core)", &opt->core_enabled, "Abort on a fatal error and generate a core dump for debugging.");
-
-    text_option(ctx, "Audit trail level (-audit)", opt->audit, (int)sizeof(opt->audit), "Set the audit trail level (default 1). Higher levels record more\nconnection and security events.");
-
-    checkbox_option(ctx, "Disable smart scheduling (-dumbSched)", &opt->dumbSched_enabled, "Disable smart scheduling and threaded input, restoring the old scheduler\nbehavior.");
-
-    text_option(ctx, "Scheduler interval (-schedInterval)", opt->schedInterval, (int)sizeof(opt->schedInterval), "Set the smart scheduler interval in milliseconds.");
-
-    text_option(ctx, "Scheduler max slice (-schedMax)", opt->schedMax, (int)sizeof(opt->schedMax), "Set the smart scheduler's maximum time slice in milliseconds.");
-
-    checkbox_option(ctx, "Disable testing extensions (-tst)", &opt->tst_enabled, "Disable all testing extensions, such as XTEST.");
-
-    nk_layout_row_dynamic(ctx, 30, 1);
-    nk_label(ctx, "Extensions", NK_TEXT_LEFT);
-    for (i = 0; i < NUM_EXTENSIONS; ++i) {
-        char tip[128];
-        snprintf(tip, sizeof(tip),
-            "+extension %s: enable this X extension.\n-extension %s: disable it.",
-            extension_names[i], extension_names[i]);
-        checkbox_option(ctx, extension_names[i], &opt->extension_enabled[i], tip);
-    }
-}
-
-static void
-enumerate_audio_devices(void)
-{
-    UINT i, n;
-
-    audio_output_device_count = 0;
-    n = waveOutGetNumDevs();
-    if (n > MAX_AUDIO_DEVICES)
-        n = MAX_AUDIO_DEVICES;
-    for (i = 0; i < n; i++) {
-        WAVEOUTCAPS caps;
-        if (waveOutGetDevCaps(i, &caps, sizeof caps) == MMSYSERR_NOERROR) {
-            strncpy(audio_output_devices[audio_output_device_count], caps.szPname, MAXPNAMELEN - 1);
-            audio_output_devices[audio_output_device_count][MAXPNAMELEN - 1] = '\0';
-            audio_output_device_count++;
-        }
-    }
-
-    audio_input_device_count = 0;
-    n = waveInGetNumDevs();
-    if (n > MAX_AUDIO_DEVICES)
-        n = MAX_AUDIO_DEVICES;
-    for (i = 0; i < n; i++) {
-        WAVEINCAPS caps;
-        if (waveInGetDevCaps(i, &caps, sizeof caps) == MMSYSERR_NOERROR) {
-            strncpy(audio_input_devices[audio_input_device_count], caps.szPname, MAXPNAMELEN - 1);
-            audio_input_devices[audio_input_device_count][MAXPNAMELEN - 1] = '\0';
-            audio_input_device_count++;
-        }
-    }
-}
-
-static void
-device_option(struct nk_context *ctx, const char *label, char *device,
-    char names[][MAXPNAMELEN], int nnames, const char *tooltip)
-{
-    const char *items[MAX_AUDIO_DEVICES + 1];
-    int count = nnames + 1;
-    int sel = 0;
-    int i;
-
-    items[0] = "Auto (system default)";
-    for (i = 0; i < nnames; i++)
-        items[i + 1] = names[i];
-    for (i = 1; i < count; i++) {
-        if (strcmp(device, items[i]) == 0) {
-            sel = i;
-            break;
-        }
-    }
-
-    combobox_option(ctx, label, items, count, &sel, tooltip);
-
-    if (sel <= 0)
-        device[0] = '\0';
-    else
-        strncpy(device, items[sel], 127), device[127] = '\0';
-}
-
-/* Resolve the host's primary IPv4 address for the client env-var hint shown
-   when listening on all interfaces. Cached: the dialog re-renders at 60 Hz. */
-static int
-local_ipv4(char *out, size_t outsize)
-{
-    static char cached[64];
-    static int resolved;            /* 0 = not tried, 1 = ok, -1 = failed */
-    int found = 0;
-
-    if (resolved) {
-        if (resolved < 0)
-            return -1;
-        snprintf(out, outsize, "%s", cached);
-        return 0;
-    }
-
-    /* Preferred: ask the routing table which interface reaches the default
-       gateway (0.0.0.0), then take that adapter's IPv4 unicast address. */
-    {
-        DWORD ifindex = 0;
-        IP_ADAPTER_ADDRESSES *list = NULL, *a;
-
-        if (GetBestInterface(0, &ifindex) == NO_ERROR) {
-            ULONG buflen = 0;
-
-            if (GetAdaptersAddresses(AF_INET, 0, NULL, NULL, &buflen) ==
-                    ERROR_BUFFER_OVERFLOW &&
-                (list = (IP_ADAPTER_ADDRESSES *) malloc(buflen)) != NULL) {
-                if (GetAdaptersAddresses(AF_INET, 0, NULL, list, &buflen) ==
-                        NO_ERROR) {
-                    for (a = list; a; a = a->Next) {
-                        IP_ADAPTER_UNICAST_ADDRESS *u;
-
-                        if (a->IfIndex != ifindex)
-                            continue;
-                        for (u = a->FirstUnicastAddress; u; u = u->Next) {
-                            struct sockaddr_in *sa;
-                            unsigned long addr;
-
-                            if (!u->Address.lpSockaddr ||
-                                u->Address.lpSockaddr->sa_family != AF_INET)
-                                continue;
-                            sa = (struct sockaddr_in *) u->Address.lpSockaddr;
-                            addr = ntohl(sa->sin_addr.s_addr);
-                            if ((addr >> 24) == 127)          /* loopback */
-                                continue;
-                            if ((addr & 0xffff0000UL) == 0xa9fe0000UL) /* 169.254 */
-                                continue;
-                            if (inet_ntop(AF_INET, &sa->sin_addr,
-                                          cached, sizeof(cached))) {
-                                found = 1;
-                                break;
-                            }
-                        }
-                        if (found)
-                            break;
-                    }
-                }
-                free(list);
-            }
-        }
-    }
-
-    /* Fallback: resolve the hostname and take the first usable IPv4 address. */
-    if (!found) {
-        WSADATA wsa;
-        char host[256];
-        struct addrinfo hints, *res = NULL, *p;
-
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0) {
-            if (gethostname(host, sizeof(host)) == 0) {
-                memset(&hints, 0, sizeof(hints));
-                hints.ai_family = AF_INET;
-                hints.ai_socktype = SOCK_STREAM;
-                if (getaddrinfo(host, NULL, &hints, &res) == 0) {
-                    for (p = res; p != NULL; p = p->ai_next) {
-                        struct sockaddr_in *sa = (struct sockaddr_in *)p->ai_addr;
-                        unsigned long a = ntohl(sa->sin_addr.s_addr);
-                        if ((a >> 24) == 127)                   /* loopback */
-                            continue;
-                        if ((a & 0xffff0000UL) == 0xa9fe0000UL) /* link-local 169.254 */
-                            continue;
-                        if (inet_ntop(AF_INET, &sa->sin_addr,
-                                      cached, sizeof(cached))) {
-                            found = 1;
-                            break;
-                        }
-                    }
-                    freeaddrinfo(res);
-                }
-            }
-        }
-    }
-
-    if (found) {
-        resolved = 1;
-        snprintf(out, outsize, "%s", cached);
-        return 0;
-    }
-    resolved = -1;
-    return -1;
-}
-
-static void
-tab_audio(struct nk_context *ctx, struct options_audio *opt)
-{
-    heading(ctx, "Audio");
-
-    {
-        char env[128];
-        char listen[64] = "127.0.0.1";
-        if (opt->listen_sel >= 1)
-            local_ipv4(listen, sizeof(listen));
-        snprintf(env, sizeof(env), "export PULSE_SERVER=tcp:%s:%s",
-            listen, opt->pulseport[0] ? opt->pulseport : "4713");
-        readonly_option(ctx, "Client environment variable", env,
-            "On Linux, run this command to set the Ming64x as your audio device.");
-    }
-
-    {
-        char dir[512] = "", path[512] = "";
-        if (!config_dir_real(dir, sizeof dir))
-            snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
-        readonly_option(ctx, "Data for PULSE_COOKIE file", path,
-            "On Linux, run:  export PULSE_COOKIE=~/.ming64x-pulse-cookie\n"
-            "Then copy the contents of this file to ~/.ming64x-pulse-cookie\n"
-            "This sets up authentication, or set authentication to Anonymous");
-    }
-
-    checkbox_option(ctx, "Enable PulseAudio server", &opt->audio_enabled,
-        "Start the embedded PulseAudio sound server when the X server launches.\nDisable with -noaudio.");
-
-    if (!opt->audio_enabled)
-        nk_widget_disable_begin(ctx);
-    text_option(ctx, "PulseAudio listen port", opt->pulseport, sizeof(opt->pulseport),
-        "TCP port the embedded PulseAudio server listens on (default 4713).");
-    combobox_option(ctx, "Listen address", audio_listen_items, AUDIO_LISTEN_COUNT,
-        &opt->listen_sel,
-        "Bind the PulseAudio TCP server to 127.0.0.1 (loopback only, safest),\n0.0.0.0 (all IPv4 interfaces), or both IPv4 and IPv6. Loopback is\nsufficient when audio is forwarded over an SSH tunnel; choose an\nAll-interfaces option only for LAN clients.");
-    combobox_option(ctx, "Authentication", audio_auth_items, AUDIO_AUTH_COUNT,
-        &opt->auth_sel,
-        "How remote clients authenticate. Cookie requires the shared\npulse-cookie (default); Anonymous accepts any client; IP allow-list\naccepts only the addresses listed below. Note that some client\napplications like FireFox do not support cookies.");
-    if (opt->auth_sel == 2) {
-        text_option(ctx, "Allowed clients", opt->auth_acl, sizeof(opt->auth_acl),
-            "Semicolon-separated IP addresses or CIDR blocks allowed to connect when\nauthentication is set to IP allow-list (e.g. 192.168.1.0/24;10.0.0.5).");
-    }
-    checkbox_option(ctx, "Microphone", &opt->mic_enabled,
-        "Expose the Windows recording device as the PulseAudio source (wavein).");
-    checkbox_option(ctx, "Speaker", &opt->speaker_enabled,
-        "Expose the Windows playback device as the PulseAudio sink (waveout).");
-    device_option(ctx, "Output device", opt->output_device,
-        audio_output_devices, audio_output_device_count,
-        "Windows playback (waveOut) device to use. Auto selects the system default;\notherwise pick a specific device by name.");
-    device_option(ctx, "Input device", opt->input_device,
-        audio_input_devices, audio_input_device_count,
-        "Windows recording (waveIn) device to use. Auto selects the system default;\notherwise pick a specific device by name.");
-    combobox_option(ctx, "Sample rate", audio_rate_items, AUDIO_RATE_COUNT,
-        &opt->rate_sel,
-        "Sample rate for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (44100 Hz).");
-    combobox_option(ctx, "Sample format", audio_format_items, AUDIO_FORMAT_COUNT,
-        &opt->format_sel,
-        "Bit depth for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (16-bit signed little-endian).");
-    combobox_option(ctx, "Channels", audio_channels_items, AUDIO_CHANNELS_COUNT,
-        &opt->channels_sel,
-        "Channel count for the waveOut/waveIn stream. Auto keeps PulseAudio's\ndefault (stereo).");
-    combobox_option(ctx, "Latency", audio_latency_items, AUDIO_LATENCY_COUNT,
-        &opt->latency_sel,
-        "Audio buffering. Lower latency reduces delay but risks underruns and\nglitches; higher latency is more robust. Maps to the waveOut fragment\ncount and size.");
-    checkbox_option(ctx, "Null output", &opt->null_sink_enabled,
-        "Load a null (silent) sink so PulseAudio always has a playback device,\neven when no real audio hardware is present.");
-    checkbox_option(ctx, "Loopback (mic to speaker)", &opt->loopback_enabled,
-        "Route the microphone straight to the speaker (module-loopback) for local\nmonitoring of the recording device.");
-    if (!opt->audio_enabled)
-        nk_widget_disable_end(ctx);
 }
 
 static void
@@ -2242,13 +841,6 @@ struct cfentry {
 #define CF_BOOL(sec, el, f)     (struct cfentry){ (sec), (el), 0, (void *)&(f), 0, 0, 1 }
 #define CF_INT(sec, el, f, lo, hi) (struct cfentry){ (sec), (el), 0, (void *)&(f), 0, (lo), (hi) }
 
-static const char *extension_keys[NUM_EXTENSIONS] = {
-    "shape", "xtest", "security", "xinerama", "xfixes",
-    "xfree86bigfont", "render", "randr", "composite", "damage",
-    "mitscreensaver", "doublebuffer", "record", "dpms",
-    "xresource", "glx"
-};
-
 static int
 cf_build(struct cfentry *e,
     struct options_ssh_login *ssh,
@@ -2407,7 +999,7 @@ cf_build(struct cfentry *e,
     return n;
 }
 
-static int config_dir_real(char *out, size_t outsz)
+int config_dir_real(char *out, size_t outsz)
 {
     char dir[MAX_PATH], logical[MAX_PATH];
     HANDLE h;
@@ -2436,7 +1028,7 @@ static int config_dir_real(char *out, size_t outsz)
     return 0;
 }
 
-static int
+int
 config_dir(char *out, const size_t outsz)
 {
     char appdata[MAX_PATH];
@@ -3194,158 +1786,6 @@ write_commandline_file(const char *cmdline)
         return;
     fprintf(f, "%s\r\n", cmdline);
     fclose(f);
-}
-
-static void
-write_default_pa(struct options_audio *a)
-{
-    char dir[512], path[512], cookie[512], cookie_esc[512];
-    FILE *f;
-    const char *s;
-    char *d;
-
-    if (config_dir(dir, sizeof dir))
-        return;
-    CreateDirectoryA(dir, NULL);
-    snprintf(path, sizeof path, "%s\\default.pa", dir);
-    snprintf(cookie, sizeof cookie, "%s\\pulse-cookie", dir);
-
-    /* load-module args are unescaped by pa_unescape, which drops every
-       backslash, so a Windows path must be written with each one doubled. */
-    d = cookie_esc;
-    for (s = cookie; *s && d < cookie_esc + sizeof cookie_esc - 1; s++) {
-        if (*s == '\\')
-            *d++ = '\\';
-        *d++ = *s;
-    }
-    *d = '\0';
-
-    f = fopen(path, "wb");
-    if (!f)
-        return;
-    if (a->speaker_enabled || a->mic_enabled) {
-        fputs("load-module module-waveout", f);
-        fputs(a->speaker_enabled ? " playback=1" : " playback=0", f);
-        fputs(" sink_name=waveout", f);
-        fputs(a->mic_enabled ? " record=1" : " record=0", f);
-        fputs(" source_name=wavein", f);
-        if (a->output_device[0])
-            fprintf(f, " output_device_name=\"%s\"", a->output_device);
-        if (a->input_device[0])
-            fprintf(f, " input_device_name=\"%s\"", a->input_device);
-        if (a->rate_sel > 0)
-            fprintf(f, " rate=%d", audio_rate_values[a->rate_sel]);
-        if (a->format_sel > 0)
-            fprintf(f, " format=%s", audio_format_values[a->format_sel]);
-        if (a->channels_sel > 0)
-            fprintf(f, " channels=%d", audio_channels_values[a->channels_sel]);
-        if (a->latency_sel > 0)
-            fprintf(f, " fragments=%d fragment_size=%d",
-                audio_latency_fragments[a->latency_sel],
-                audio_latency_fragment_size[a->latency_sel]);
-        fputs("\r\n", f);
-    }
-    if (a->null_sink_enabled)
-        fputs("load-module module-null-sink sink_name=null\r\n", f);
-    if (a->loopback_enabled)
-        fputs("load-module module-loopback\r\n", f);
-
-    {
-        const char *port = a->pulseport[0] ? a->pulseport : "4713";
-        const char *listens[2];
-        int nlisten = 0;
-        int i;
-
-        if (a->listen_sel == 0)
-            listens[nlisten++] = "127.0.0.1";
-        else if (a->listen_sel == 1)
-            listens[nlisten++] = "0.0.0.0";
-        else {
-            listens[nlisten++] = "0.0.0.0";
-            listens[nlisten++] = "::";
-        }
-
-        for (i = 0; i < nlisten; i++) {
-            fputs("load-module module-native-protocol-tcp", f);
-            fprintf(f, " port=%s listen=%s", port, listens[i]);
-            if (a->auth_sel == 1)
-                fputs(" auth-anonymous=1", f);
-            else if (a->auth_sel == 2 && a->auth_acl[0])
-                fprintf(f, " auth-ip-acl=%s auth-cookie-enabled=0", a->auth_acl);
-            else
-                fprintf(f, " auth-cookie=%s", cookie_esc);
-            fputs("\r\n", f);
-        }
-    }
-
-    fclose(f);
-}
-
-/* Generate the PulseAudio auth cookie at %APPDATA%\Ming64X\pulse-cookie.  The
-   daemon reads this exact file (see write_default_pa) and launchx ships the
-   same bytes to the remote over SSH.  The cookie is PA_NATIVE_COOKIE_LENGTH
-   (256) printable [A-Za-z0-9] bytes; it is regenerated if missing or short. */
-static void
-ensure_pulse_cookie(void)
-{
-    static const char charset[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    char dir[512], path[512];
-    FILE *f;
-    unsigned char cookie[256], raw[256];
-    long sz;
-    int i;
-
-    if (config_dir(dir, sizeof dir))
-        return;
-    CreateDirectoryA(dir, NULL);
-    snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
-
-    /* keep it only if a full-length cookie already exists */
-    f = fopen(path, "rb");
-    if (f) {
-        if (fseek(f, 0, SEEK_END) == 0) {
-            sz = ftell(f);
-            if (sz == (long)sizeof cookie) {
-                fclose(f);
-                return;
-            }
-        }
-        fclose(f);
-    }
-
-    if (BCryptGenRandom(NULL, raw, sizeof raw,
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
-        return;
-    for (i = 0; i < (int)sizeof cookie; i++)
-        cookie[i] = (unsigned char)charset[raw[i] % (sizeof charset - 1)];
-
-    f = fopen(path, "wb");
-    if (!f)
-        return;
-    fwrite(cookie, 1, sizeof cookie, f);
-    fclose(f);
-}
-
-/* Read the 256-byte PulseAudio cookie back.  Returns 1 on success. */
-static int
-read_pulse_cookie(unsigned char out[256])
-{
-    char dir[512], path[512];
-    FILE *f;
-
-    if (config_dir(dir, sizeof dir))
-        return 0;
-    snprintf(path, sizeof path, "%s\\pulse-cookie", dir);
-    f = fopen(path, "rb");
-    if (!f)
-        return 0;
-    if (fread(out, 1, 256, f) != 256) {
-        fclose(f);
-        return 0;
-    }
-    fclose(f);
-    return 1;
 }
 
 /* Set the working directory to the launcher's own folder, verify
