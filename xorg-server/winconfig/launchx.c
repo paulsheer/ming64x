@@ -2067,7 +2067,7 @@ reset_all_options(struct options_ssh_login *ssh_opt,
         .ac_enabled = 0,
         .allow_string = {0},
         .auth_file = {0},
-        .byteswap_enabled = 0,
+        .byteswap_enabled = 1,
         .maxclients_sel = 4,      /* 1024 (LIMITCLIENTS) */
         .maxbigreqsize = 4,       /* 4 MB (MAX_BIG_REQUEST_SIZE) */
         .listeningport_sel = 0,   /* :0 (default) */
@@ -2275,7 +2275,7 @@ cf_build(struct cfentry *e,
     e[n++] = CF_BOOL("networkingaccesscontrol", "disableaccesscontrol", net->ac_enabled);
     e[n++] = CF_STR("networkingaccesscontrol", "allowedipaddresses", net->allow_string);
     e[n++] = CF_STR("networkingaccesscontrol", "authorizationfile", net->auth_file);
-    e[n++] = CF_BOOL("networkingaccesscontrol", "allowdifferentendiannessclients", net->byteswap_enabled);
+    e[n++] = CF_BOOL("networkingaccesscontrol", "allowdbigendianclients", net->byteswap_enabled);
     e[n++] = CF_INT("networkingaccesscontrol", "maxclients", net->maxclients_sel, 0, (int)MAXCLIENTS_COUNT - 1);
     e[n++] = CF_INT("networkingaccesscontrol", "maxbigreqsize", net->maxbigreqsize, 1, 127);
     e[n++] = CF_INT("networkingaccesscontrol", "listeningport", net->listeningport_sel, 0, (int)LISTENINGPORT_COUNT - 1);
