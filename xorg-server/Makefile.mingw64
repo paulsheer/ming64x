@@ -1285,7 +1285,7 @@ $(OBJDIR)/%.o: $(OBJDIR)/%.c
 	@echo "  CC      $<"
 	@$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c -o $@ $<
 
-$(XWIN_RC): $(XWIN_RC).in
+$(XWIN_RC): $(XWIN_RC).in ../MICROSOFT-STORE-CURRENT-VERSION
 	cat $(XWIN_RC).in | bash ../MICROSOFT-STORE-CURRENT-VERSION > $(XWIN_RC)
 
 # ---------------------------------------------------------------------------

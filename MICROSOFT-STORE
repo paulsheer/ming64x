@@ -1,5 +1,9 @@
 https://apps.microsoft.com/detail/9N4VVR1BD0Z5
 
+Oct 12 2026  1.22.6.0 Allow big-endian clients.
+                      Add international keyboard layout configuration.
+                      Add keyboard trap/pass options for Alt-F4, Windows Left/Right
+                      keys, and Alt-Tab.
 Oct 7 2026   1.22.5.0 Fix DGI vs DirectDraw auto-detection for newer Windows builds.
                       Fix clipboard connect failure with some machines.
                       Fix incorrect pulse cookie path.
